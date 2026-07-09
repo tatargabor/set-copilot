@@ -1,0 +1,48 @@
+{
+  "name": "set-copilot",
+  "version": "0.1.0",
+  "description": "Voice dictation + real-time meeting copilot for Claude Code — speak into the mic, cross-reference against your project knowledge base.",
+  "keywords": [
+    "claude-code",
+    "dictation",
+    "speech-to-text",
+    "soniox",
+    "meeting-assistant",
+    "voice"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "set-copilot": "dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./knowledge": "./dist/knowledge/types.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "set-copilot.config.example.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.22.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.6"
+  }
+}

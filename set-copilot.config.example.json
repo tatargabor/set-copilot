@@ -1,0 +1,24 @@
+{
+  "language": "hu",
+  "runtimeDir": "/tmp/set-copilot",
+  "sonioxMode": "rt",
+  "audio": {
+    "micSource": "",
+    "monitorSource": "",
+    "sampleRate": 16000
+  },
+  "knowledge": {
+    "adapter": "markdown",
+    "sources": ["docs/knowledge"],
+    "decisions": "docs/knowledge/decisions",
+    "decisionIdPrefix": "DEC",
+    "keywords": {
+      "partners": [
+        { "topic": "Example Partner", "stems": ["example[- ]?partner"] }
+      ],
+      "features": [
+        { "topic": "invoice", "stems": ["invoice", "számla", "számlá"] }
+      ]
+    }
+  }
+}

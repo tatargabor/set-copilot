@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+
+# Generated at digest time by the active knowledge adapter
+keyword-index.json
+knowledge-context.json
+knowledge-digest.md
