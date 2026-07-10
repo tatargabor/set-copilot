@@ -27,6 +27,7 @@ import { dirname, join, resolve } from "node:path";
 import {
   loadConfig, CONFIG_FILENAME, keywordIndexPath, enrichedContextPath, digestMarkdownPath,
 } from "./config.js";
+import { ensureTone } from "./tones.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = resolve(__dirname, "..");
@@ -173,29 +174,22 @@ function cmdPath(name?: string): void {
 // ---- OS-aware feedback -----------------------------------------------------
 
 /**
- * Start = one chime; end = double chime (like a ref calling off the match),
- * so you can tell by ear whether the copilot just started or stopped.
+ * Start = rising sweep, end = falling sweep — direction tells you by ear
+ * whether the session just started or stopped.
  *
- * Playback is fully async (detached player, unref'd): a chime is ~1.3s and a
- * synchronous beep used to block `stop` for seconds. The CLI must never wait
- * for sound.
+ * Playback is fully async (detached player, unref'd): the CLI must never
+ * wait for sound (a sync chime used to block `stop` for seconds).
  */
 function beep(kind: "start" | "end" = "start"): void {
   const os = platform();
-  const sound = os === "darwin"
-    ? "/System/Library/Sounds/Glass.aiff"
-    : "/usr/share/sounds/freedesktop/stereo/complete.oga";
-  const player = os === "darwin" ? "afplay" : "paplay";
-
-  if ((os !== "darwin" && os !== "linux") || !existsSync(sound)) {
+  if (os !== "darwin" && os !== "linux") {
     process.stdout.write(kind === "end" ? "\x07\x07" : "\x07");
     return;
   }
-  const script = kind === "end"
-    ? `${player} '${sound}'; ${player} '${sound}'`
-    : `${player} '${sound}'`;
   try {
-    spawn("sh", ["-c", script], { stdio: "ignore", detached: true }).unref();
+    const sound = ensureTone(kind);
+    const player = os === "darwin" ? "afplay" : "paplay";
+    spawn(player, [sound], { stdio: "ignore", detached: true }).unref();
   } catch {
     process.stdout.write("\x07");
   }
