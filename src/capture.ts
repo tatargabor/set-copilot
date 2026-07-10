@@ -13,12 +13,15 @@ import { startDualCapture, listSources } from "./audio.js";
 import { SonioxRtClient, SonioxChunkClient } from "./soniox-rt.js";
 import { TranscriptWriter } from "./transcript-writer.js";
 import { buildMatcher, loadKeywordIndex } from "./knowledge/keyword-matcher.js";
+import { playTone } from "./tones.js";
 
 export interface CaptureOptions {
   /** Dictation mode: capture mic only, no system audio, no topic analysis */
   micOnly?: boolean;
   /** Override the output JSONL path */
   output?: string;
+  /** Self-stop after this many minutes (built-in timer — no external sleep needed) */
+  maxMinutes?: number;
 }
 
 export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
@@ -86,7 +89,12 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     }
   });
   micClient.on("error", (err) => console.error(`[set-copilot] Mic error: ${err.message}`));
-  micClient.on("connected", () => console.log("[set-copilot] Mic: connected"));
+  micClient.on("connected", () => {
+    console.log("[set-copilot] Mic: connected");
+    // The rising tone marks the moment you can actually start speaking —
+    // played here (mic transcription live), not by the caller.
+    playTone("start");
+  });
   micClient.on("closed", (code: number, reason: string) =>
     console.error(`[set-copilot] Mic transcription connection closed (code=${code}${reason ? `, reason=${reason}` : ""})`));
 
@@ -158,6 +166,14 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+
+  if (opts.maxMinutes && opts.maxMinutes > 0) {
+    setTimeout(() => {
+      console.log(`[set-copilot] Max duration (${opts.maxMinutes} min) reached — stopping`);
+      shutdown();
+    }, opts.maxMinutes * 60_000);
+    console.log(`[set-copilot] Auto-stop after ${opts.maxMinutes} min`);
+  }
 
   void listSources; // available for `set-copilot sources`
   console.log("[set-copilot] Recording — Ctrl+C to stop");

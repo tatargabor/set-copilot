@@ -48,18 +48,10 @@ It contains: `decisions`, `deferred`, `cards` (per-entity quirks), `domainFaq`, 
 
 #### Phase 2: Start Capture
 
-```bash
-npx set-copilot capture      # run_in_background: true
-```
+ONE Bash call with `run_in_background: true` — the capture plays the rising tone by itself when the mic is live, and self-stops after 2 hours (no separate timer or beep step):
 
-Auto-kill timer (2 hours max, prevents a zombie capture):
 ```bash
-sleep 7200 && npx set-copilot stop && echo "Meeting copilot timeout reached"
-```
-
-Beep to signal start:
-```bash
-npx set-copilot beep
+npx set-copilot capture --max-minutes 120
 ```
 
 **After starting: immediately proceed to Phase 3. Do NOT stop.**

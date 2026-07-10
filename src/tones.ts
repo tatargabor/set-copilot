@@ -7,11 +7,27 @@
  * the package.
  */
 
+import { spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const SAMPLE_RATE = 22050;
+
+/** Fire-and-forget playback — never blocks the caller. */
+export function playTone(kind: "start" | "end"): void {
+  const os = platform();
+  if (os !== "darwin" && os !== "linux") {
+    process.stdout.write(kind === "end" ? "\x07\x07" : "\x07");
+    return;
+  }
+  try {
+    const player = os === "darwin" ? "afplay" : "paplay";
+    spawn(player, [ensureTone(kind)], { stdio: "ignore", detached: true }).unref();
+  } catch {
+    process.stdout.write("\x07");
+  }
+}
 
 export function ensureTone(kind: "start" | "end"): string {
   const path = join(tmpdir(), `set-copilot-tone-${kind}.wav`);

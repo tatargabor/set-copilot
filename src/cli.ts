@@ -27,7 +27,7 @@ import { dirname, join, resolve } from "node:path";
 import {
   loadConfig, CONFIG_FILENAME, keywordIndexPath, enrichedContextPath, digestMarkdownPath,
 } from "./config.js";
-import { ensureTone } from "./tones.js";
+import { playTone } from "./tones.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = resolve(__dirname, "..");
@@ -38,7 +38,12 @@ async function main(): Promise<void> {
     case "init": return cmdInit();
     case "capture": {
       const { runCapture } = await import("./capture.js");
-      return runCapture({ micOnly: args.includes("--mic-only"), output: flag(args, "--output") });
+      const maxMinutesRaw = flag(args, "--max-minutes");
+      return runCapture({
+        micOnly: args.includes("--mic-only"),
+        output: flag(args, "--output"),
+        maxMinutes: maxMinutesRaw ? parseFloat(maxMinutesRaw) : undefined,
+      });
     }
     case "stop": return cmdStop();
     case "status": return cmdStatus();
@@ -175,24 +180,10 @@ function cmdPath(name?: string): void {
 
 /**
  * Start = rising sweep, end = falling sweep — direction tells you by ear
- * whether the session just started or stopped.
- *
- * Playback is fully async (detached player, unref'd): the CLI must never
- * wait for sound (a sync chime used to block `stop` for seconds).
+ * whether the session just started or stopped. Playback never blocks.
  */
 function beep(kind: "start" | "end" = "start"): void {
-  const os = platform();
-  if (os !== "darwin" && os !== "linux") {
-    process.stdout.write(kind === "end" ? "\x07\x07" : "\x07");
-    return;
-  }
-  try {
-    const sound = ensureTone(kind);
-    const player = os === "darwin" ? "afplay" : "paplay";
-    spawn(player, [sound], { stdio: "ignore", detached: true }).unref();
-  } catch {
-    process.stdout.write("\x07");
-  }
+  playTone(kind);
 }
 
 /** Synchronous sleep without burning CPU (used while waiting for capture exit). */
@@ -237,7 +228,9 @@ function printHelp(): void {
 set-copilot — voice dictation + meeting copilot for Claude Code
 
   set-copilot init                 scaffold skills + config into this project
-  set-copilot capture [--mic-only] start capture (mic-only = dictation)
+  set-copilot capture [--mic-only] [--max-minutes N]
+                                   start capture (mic-only = dictation; plays the
+                                   rising tone when live, self-stops after N min)
   set-copilot stop                 stop the running capture
   set-copilot status               capture state + transcript line count
   set-copilot digest               (re)build knowledge index/context/digest

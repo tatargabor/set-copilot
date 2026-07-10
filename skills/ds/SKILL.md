@@ -6,9 +6,14 @@ user_invocable: true
 
 # ds — Start Dictation
 
-Shortcut for `/dictate start`. Invoke the `dictate` skill with argument `start` plus any arguments passed here.
+Self-contained fast path for `/dictate start` — do NOT invoke the dictate skill (that would cost an extra round-trip). Optional argument: minutes (default **3**); `/ds 10` = 10 minutes.
 
-When invoked as `/ds` → run `/dictate start` (3 min default).
-When invoked as `/ds 10` → run `/dictate start 10`.
+Run ONE Bash call with `run_in_background: true`:
 
-**Implementation:** Call the Skill tool with `skill: "dictate"` and `args: "start <ARGUMENTS>"`. If no arguments provided, use `args: "start"`.
+```bash
+npx set-copilot capture --mic-only --max-minutes <minutes-or-3>
+```
+
+The capture plays the rising tone by itself when the mic is live, and self-stops at the limit — no separate beep or timer step.
+
+Then tell the user: "🔴 Dictation active (N min limit) — the rising tone means the mic is live. `/dd` to finish." and END YOUR TURN.

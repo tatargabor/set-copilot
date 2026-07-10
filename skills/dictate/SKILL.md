@@ -8,45 +8,32 @@ user_invocable: true
 
 Voice input into Claude Code. You speak into the microphone; the text arrives as if you had typed it. Powered by `set-copilot` (Soniox STT). Language follows `set-copilot.config.json` (`language`).
 
+**Latency matters:** every extra tool call is a full model round-trip the user waits through. Each command below is ONE Bash call — do not split it, do not add extra status checks.
+
 ## Usage
 
 ### `/dictate start [minutes]`
 
-**Execute ALL steps without stopping. Do NOT use forks.**
+Arguments: optional `minutes` — recording limit. Default: **3**. Example: `/dictate start 10`.
 
-Arguments: optional `minutes` — how long to record. Default: **3 minutes**. Example: `/dictate start 10`. Compute `timeout_seconds = minutes * 60`.
+Run ONE Bash call with `run_in_background: true` (capture plays the rising tone by itself when the mic is live, and self-stops at the limit — no separate timer or beep step):
 
-1. Start capture in mic-only (dictation) mode with `run_in_background: true`:
 ```bash
-npx set-copilot capture --mic-only
+npx set-copilot capture --mic-only --max-minutes <minutes>
 ```
 
-2. Start an auto-kill timer in the background that stops capture after the timeout:
-```bash
-sleep <timeout_seconds> && npx set-copilot stop && echo "Dictation timeout reached"
-```
-
-3. Signal that recording started, then tell the user:
-```bash
-npx set-copilot beep
-```
-Tell the user: "🔴 Dictation active (N min limit). Speak — `/dictate stop` to finish."
-
-That's it — NO Monitor needed. The transcript collects in a JSONL file and is read on stop.
+Then tell the user: "🔴 Dictation active (N min limit) — the rising tone means the mic is live. `/dd` to finish." and END YOUR TURN.
 
 ### `/dictate stop`
 
-1. Stop capture (this also plays the stop chime) and kill the auto-kill timer:
+Run ONE Bash call (stop plays the falling tone and waits for the transcript flush):
+
 ```bash
-npx set-copilot stop; pkill -f "slee[p].*set-copilot stop" 2>/dev/null
+npx set-copilot stop; cat "$(npx set-copilot path dictation)"
 ```
 
-2. Read the dictation JSONL:
-```bash
-cat "$(npx set-copilot path dictation)"
-```
+Parse the JSONL lines from the output:
 
-3. Parse the JSONL lines:
 ```json
 {"ts": 12345, "speaker": "mic", "text": "This is the dictated text.", "final": true}
 ```
@@ -71,3 +58,4 @@ npx set-copilot status
 - `set-copilot` installed (`npx set-copilot init` was run in this project).
 - `SONIOX_API_KEY` in `.env`.
 - Linux: `parec` (PipeWire/PulseAudio). macOS: `sox` (`brew install sox`).
+- First-time setup: `npx set-copilot sources` → set `audio.micSource`, then verify with `npx set-copilot doctor`.
