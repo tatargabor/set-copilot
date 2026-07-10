@@ -179,11 +179,17 @@ function cmdPath(name?: string): void {
 // ---- OS-aware feedback -----------------------------------------------------
 
 /**
- * Start = rising sweep, end = falling sweep — direction tells you by ear
+ * Start = rising motif, end = falling motif — direction tells you by ear
  * whether the session just started or stopped. Playback never blocks.
+ * Custom sounds via config audio.toneStart / audio.toneEnd.
  */
 function beep(kind: "start" | "end" = "start"): void {
-  playTone(kind);
+  let custom: string | undefined;
+  try {
+    const cfg = loadConfig();
+    custom = kind === "start" ? cfg.audio.toneStart : cfg.audio.toneEnd;
+  } catch { /* no config — use the built-in tone */ }
+  playTone(kind, custom || undefined);
 }
 
 /** Synchronous sleep without burning CPU (used while waiting for capture exit). */

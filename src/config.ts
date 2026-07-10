@@ -34,6 +34,9 @@ export interface CopilotConfig {
     micSource: string;
     monitorSource: string;
     sampleRate: number;
+    /** Optional custom sound files for the start/stop signal (any format paplay/afplay plays) */
+    toneStart: string;
+    toneEnd: string;
   };
   knowledge: KnowledgeConfig;
   /** Absolute path of the project root the config was loaded from */
@@ -67,7 +70,7 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
   transcriptOutput: "/tmp/set-copilot/transcript.jsonl",
   dictationOutput: "/tmp/set-copilot/dictation.jsonl",
   sonioxMode: "rt",
-  audio: { micSource: "", monitorSource: "", sampleRate: 16000 },
+  audio: { micSource: "", monitorSource: "", sampleRate: 16000, toneStart: "", toneEnd: "" },
   knowledge: {
     adapter: "markdown",
     sources: [],
@@ -110,6 +113,8 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       micSource: process.env.MIC_SOURCE || fileCfg.audio?.micSource || DEFAULTS.audio.micSource,
       monitorSource: process.env.MONITOR_SOURCE || fileCfg.audio?.monitorSource || DEFAULTS.audio.monitorSource,
       sampleRate: fileCfg.audio?.sampleRate ?? DEFAULTS.audio.sampleRate,
+      toneStart: fileCfg.audio?.toneStart || DEFAULTS.audio.toneStart,
+      toneEnd: fileCfg.audio?.toneEnd || DEFAULTS.audio.toneEnd,
     },
     knowledge: {
       adapter: fileCfg.knowledge?.adapter ?? DEFAULTS.knowledge.adapter,

@@ -93,7 +93,7 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     console.log("[set-copilot] Mic: connected");
     // The rising tone marks the moment you can actually start speaking —
     // played here (mic transcription live), not by the caller.
-    playTone("start");
+    playTone("start", cfg.audio.toneStart || undefined);
   });
   micClient.on("closed", (code: number, reason: string) =>
     console.error(`[set-copilot] Mic transcription connection closed (code=${code}${reason ? `, reason=${reason}` : ""})`));

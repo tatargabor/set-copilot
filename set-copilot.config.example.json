@@ -5,19 +5,35 @@
   "audio": {
     "micSource": "",
     "monitorSource": "",
-    "sampleRate": 16000
+    "sampleRate": 16000,
+    "toneStart": "",
+    "toneEnd": ""
   },
   "knowledge": {
     "adapter": "markdown",
-    "sources": ["docs/knowledge"],
+    "sources": [
+      "docs/knowledge"
+    ],
     "decisions": "docs/knowledge/decisions",
     "decisionIdPrefix": "DEC",
     "keywords": {
       "partners": [
-        { "topic": "Example Partner", "stems": ["example[- ]?partner"] }
+        {
+          "topic": "Example Partner",
+          "stems": [
+            "example[- ]?partner"
+          ]
+        }
       ],
       "features": [
-        { "topic": "invoice", "stems": ["invoice", "számla", "számlá"] }
+        {
+          "topic": "invoice",
+          "stems": [
+            "invoice",
+            "számla",
+            "számlá"
+          ]
+        }
       ]
     }
   }
