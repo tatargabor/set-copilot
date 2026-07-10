@@ -43,7 +43,7 @@ export function startDualCapture(opts: AudioCaptureOptions = {}): DualChannelCap
  * silently against PipeWire (0 bytes forever, no error), which manifests as
  * "connected but never transcribes".
  */
-function parecBin(): string {
+export function parecBin(): string {
   return existsSync("/usr/bin/parec") ? "/usr/bin/parec" : "parec";
 }
 

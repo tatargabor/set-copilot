@@ -10,7 +10,8 @@
  *   digest                   (re)build the knowledge index/context/digest
  *   poll [seconds]           long-poll the transcript for the copilot monitor
  *   sources                  list audio input devices
- *   beep                     play the OS start/stop chime
+ *   doctor                   audio + env health check (probes real signal)
+ *   beep [--end]             play the OS chime (start: single, end: double)
  *   notify <title> [body]    OS desktop notification (--critical for alerts)
  *   path <name>              print a resolved runtime path (skills use this)
  */
@@ -54,6 +55,10 @@ async function main(): Promise<void> {
       for (const s of await listSources()) console.log(`  ${s}`);
       return;
     }
+    case "doctor": {
+      const { runDoctor } = await import("./doctor.js");
+      return runDoctor(loadConfig());
+    }
     case "beep": return void beep(args.includes("--end") ? "end" : "start");
     case "notify": return void notify(args[0] ?? "", args[1] ?? "", args.includes("--critical"));
     case "path": return cmdPath(args[0]);
@@ -93,8 +98,12 @@ function cmdInit(): void {
   console.log(`
 Next steps:
   1. Add SONIOX_API_KEY to your .env (get a key at https://soniox.com)
-  2. Edit ${CONFIG_FILENAME} — set knowledge.sources to your docs (optional; dictation needs none)
-  3. In Claude Code:  /ds  (start dictation) · /dd (stop) · /meeting-copilot start
+  2. Pick your microphone:  set-copilot sources  → put the right input into
+     ${CONFIG_FILENAME} audio.micSource (empty = system default, which is
+     often NOT the mic you speak into)
+  3. Verify the chain:  set-copilot doctor  (probes mic + system audio for real signal)
+  4. Edit ${CONFIG_FILENAME} — set knowledge.sources to your docs (optional; dictation needs none)
+  5. In Claude Code:  /ds  (start dictation) · /dd (stop) · /meeting-copilot start
 `);
 }
 
@@ -105,19 +114,27 @@ function pidFile(): string {
 }
 
 function cmdStop(): void {
-  beep("end");
   const pf = pidFile();
   if (!existsSync(pf)) {
+    beep("end");
     console.log("[set-copilot] No capture running");
     return;
   }
   const pid = parseInt(readFileSync(pf, "utf-8").trim(), 10);
   try {
     process.kill(pid, "SIGTERM");
+    // Wait for the capture process to actually exit (max 2s) so its shutdown
+    // handler finishes flushing the transcript BEFORE the caller reads it.
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0); } catch { break; } // exited
+      sleepMs(25);
+    }
     console.log(`[set-copilot] Stopped capture (pid ${pid})`);
   } catch {
     console.log("[set-copilot] Capture already stopped");
   }
+  beep("end"); // async — does not delay the caller
 }
 
 function cmdStatus(): void {
@@ -158,28 +175,35 @@ function cmdPath(name?: string): void {
 /**
  * Start = one chime; end = double chime (like a ref calling off the match),
  * so you can tell by ear whether the copilot just started or stopped.
+ *
+ * Playback is fully async (detached player, unref'd): a chime is ~1.3s and a
+ * synchronous beep used to block `stop` for seconds. The CLI must never wait
+ * for sound.
  */
 function beep(kind: "start" | "end" = "start"): void {
   const os = platform();
-  const times = kind === "end" ? 2 : 1;
-  for (let i = 0; i < times; i++) {
-    if (i > 0) sleepMs(180);
-    if (os === "darwin") {
-      run("afplay", ["/System/Library/Sounds/Glass.aiff"]);
-    } else if (os === "linux") {
-      if (!run("paplay", ["/usr/share/sounds/freedesktop/stereo/complete.oga"])) {
-        process.stdout.write("\x07");
-      }
-    } else {
-      process.stdout.write("\x07");
-    }
+  const sound = os === "darwin"
+    ? "/System/Library/Sounds/Glass.aiff"
+    : "/usr/share/sounds/freedesktop/stereo/complete.oga";
+  const player = os === "darwin" ? "afplay" : "paplay";
+
+  if ((os !== "darwin" && os !== "linux") || !existsSync(sound)) {
+    process.stdout.write(kind === "end" ? "\x07\x07" : "\x07");
+    return;
+  }
+  const script = kind === "end"
+    ? `${player} '${sound}'; ${player} '${sound}'`
+    : `${player} '${sound}'`;
+  try {
+    spawn("sh", ["-c", script], { stdio: "ignore", detached: true }).unref();
+  } catch {
+    process.stdout.write("\x07");
   }
 }
 
-/** Synchronous pause between the two end-chimes (CLI exits right after). */
+/** Synchronous sleep without burning CPU (used while waiting for capture exit). */
 function sleepMs(ms: number): void {
-  const end = Date.now() + ms;
-  while (Date.now() < end) { /* busy-wait, <200ms */ }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function notify(title: string, body: string, critical: boolean): void {
@@ -225,6 +249,7 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot digest               (re)build knowledge index/context/digest
   set-copilot poll [seconds]       long-poll the transcript (copilot monitor)
   set-copilot sources              list audio input devices
+  set-copilot doctor               audio + env health check (probes real signal)
   set-copilot beep [--end]         OS chime (start: single, --end: double)
   set-copilot notify <t> [b]       OS desktop notification (--critical)
   set-copilot path <name>          print a resolved runtime path
