@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { Readable } from "node:stream";
 import { platform } from "node:os";
 
@@ -36,6 +37,16 @@ export function startDualCapture(opts: AudioCaptureOptions = {}): DualChannelCap
   }
 }
 
+/**
+ * Resolve the parec binary. Prefer the distro binary over whatever shadows it
+ * on PATH — a Homebrew/linuxbrew parec built against plain PulseAudio can hang
+ * silently against PipeWire (0 bytes forever, no error), which manifests as
+ * "connected but never transcribes".
+ */
+function parecBin(): string {
+  return existsSync("/usr/bin/parec") ? "/usr/bin/parec" : "parec";
+}
+
 function startLinuxCapture(
   sampleRate: number,
   micSource?: string,
@@ -49,7 +60,8 @@ function startLinuxCapture(
     ...(micSource ? ["--device", micSource] : []),
   ];
 
-  const micProc = spawn("parec", micArgs, { stdio: ["ignore", "pipe", "ignore"] });
+  const micProc = spawn(parecBin(), micArgs, { stdio: ["ignore", "pipe", "pipe"] });
+  wireProcDiagnostics(micProc, "mic");
   const processes: ChildProcess[] = [micProc];
 
   let systemStream: Readable;
@@ -62,7 +74,8 @@ function startLinuxCapture(
       "--channels=1",
       ...(monitorSource ? ["--device", monitorSource] : ["--device", getDefaultMonitor()]),
     ];
-    const sysProc = spawn("parec", sysArgs, { stdio: ["ignore", "pipe", "ignore"] });
+    const sysProc = spawn(parecBin(), sysArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    wireProcDiagnostics(sysProc, "sys");
     processes.push(sysProc);
     systemStream = sysProc.stdout!;
   }
@@ -72,6 +85,26 @@ function startLinuxCapture(
     systemStream,
     stop: () => killAll(processes),
   };
+}
+
+/**
+ * Audio processes must not die silently: surface stderr and unexpected exits.
+ * Without this, a failed parec/sox leaves the Soniox connection "connected"
+ * with zero audio and an empty transcript — undebuggable from the outside.
+ */
+function wireProcDiagnostics(proc: ChildProcess, label: string): void {
+  proc.stderr?.on("data", (d: Buffer) => {
+    const line = d.toString().trim();
+    if (line) console.error(`[set-copilot] ${label} capture stderr: ${line}`);
+  });
+  proc.on("exit", (code, signal) => {
+    if (code !== 0 && signal !== "SIGTERM") {
+      console.error(`[set-copilot] ${label} capture process exited (code=${code}, signal=${signal}) — no more audio from this source`);
+    }
+  });
+  proc.on("error", (err) => {
+    console.error(`[set-copilot] ${label} capture spawn failed: ${err.message}`);
+  });
 }
 
 function startMacCapture(
@@ -91,7 +124,8 @@ function startMacCapture(
     "-",
   ];
 
-  const micProc = spawn("sox", micArgs, { stdio: ["ignore", "pipe", "ignore"] });
+  const micProc = spawn("sox", micArgs, { stdio: ["ignore", "pipe", "pipe"] });
+  wireProcDiagnostics(micProc, "mic");
   const processes: ChildProcess[] = [micProc];
 
   let systemStream: Readable;
@@ -108,7 +142,8 @@ function startMacCapture(
       "-e", "signed-integer",
       "-",
     ];
-    const sysProc = spawn("sox", sysArgs, { stdio: ["ignore", "pipe", "ignore"] });
+    const sysProc = spawn("sox", sysArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    wireProcDiagnostics(sysProc, "sys");
     processes.push(sysProc);
     systemStream = sysProc.stdout!;
   }

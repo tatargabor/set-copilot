@@ -87,6 +87,8 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   });
   micClient.on("error", (err) => console.error(`[set-copilot] Mic error: ${err.message}`));
   micClient.on("connected", () => console.log("[set-copilot] Mic: connected"));
+  micClient.on("closed", (code: number, reason: string) =>
+    console.error(`[set-copilot] Mic transcription connection closed (code=${code}${reason ? `, reason=${reason}` : ""})`));
 
   if (sysClient) {
     sysClient.on("transcript", (event) => {
@@ -101,6 +103,8 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     });
     sysClient.on("error", (err) => console.error(`[set-copilot] Sys error: ${err.message}`));
     sysClient.on("connected", () => console.log("[set-copilot] Sys: connected"));
+    sysClient.on("closed", (code: number, reason: string) =>
+      console.error(`[set-copilot] Sys transcription connection closed (code=${code}${reason ? `, reason=${reason}` : ""})`));
   }
 
   if (useRt) {
@@ -118,13 +122,33 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     micOnly,
   });
 
-  capture.micStream.on("data", (chunk: Buffer) => micClient.sendAudio(chunk));
-  if (sysClient) capture.systemStream.on("data", (chunk: Buffer) => sysClient!.sendAudio(chunk));
+  // Byte counters: the single most useful signal when "nothing happens".
+  // 16 kHz s16le mono = 32 000 B/s per stream — 0 bytes means the audio
+  // process is not delivering (wrong device, broken parec/sox binary).
+  let micBytes = 0;
+  let sysBytes = 0;
+  capture.micStream.on("data", (chunk: Buffer) => { micBytes += chunk.length; micClient.sendAudio(chunk); });
+  if (sysClient) capture.systemStream.on("data", (chunk: Buffer) => { sysBytes += chunk.length; sysClient!.sendAudio(chunk); });
   capture.micStream.on("error", (err) => console.error(`[set-copilot] Mic stream: ${err.message}`));
   capture.systemStream.on("error", (err) => console.error(`[set-copilot] Sys stream: ${err.message}`));
 
+  const noAudioCheck = setTimeout(() => {
+    if (micBytes === 0) {
+      console.error("[set-copilot] WARNING: 0 bytes from the mic after 5s — no audio is flowing. Check the input device (`set-copilot sources`) and that parec/sox works.");
+    }
+    if (!micOnly && sysBytes === 0) {
+      console.error("[set-copilot] WARNING: 0 bytes from system audio after 5s — the monitor source is not delivering.");
+    }
+  }, 5000);
+
+  const audioStats = setInterval(() => {
+    console.log(`[set-copilot] audio: mic=${Math.round(micBytes / 1024)}KB sys=${Math.round(sysBytes / 1024)}KB`);
+  }, 60_000);
+
   const shutdown = () => {
     console.log("\n[set-copilot] Stopping...");
+    clearTimeout(noAudioCheck);
+    clearInterval(audioStats);
     capture.stop();
     micClient.close();
     if (sysClient) sysClient.close();

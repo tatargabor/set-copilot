@@ -54,7 +54,7 @@ async function main(): Promise<void> {
       for (const s of await listSources()) console.log(`  ${s}`);
       return;
     }
-    case "beep": return void beep();
+    case "beep": return void beep(args.includes("--end") ? "end" : "start");
     case "notify": return void notify(args[0] ?? "", args[1] ?? "", args.includes("--critical"));
     case "path": return cmdPath(args[0]);
     case "help": case undefined: return printHelp();
@@ -105,7 +105,7 @@ function pidFile(): string {
 }
 
 function cmdStop(): void {
-  beep();
+  beep("end");
   const pf = pidFile();
   if (!existsSync(pf)) {
     console.log("[set-copilot] No capture running");
@@ -155,17 +155,31 @@ function cmdPath(name?: string): void {
 
 // ---- OS-aware feedback -----------------------------------------------------
 
-function beep(): void {
+/**
+ * Start = one chime; end = double chime (like a ref calling off the match),
+ * so you can tell by ear whether the copilot just started or stopped.
+ */
+function beep(kind: "start" | "end" = "start"): void {
   const os = platform();
-  if (os === "darwin") {
-    run("afplay", ["/System/Library/Sounds/Glass.aiff"]);
-  } else if (os === "linux") {
-    if (!run("paplay", ["/usr/share/sounds/freedesktop/stereo/complete.oga"])) {
+  const times = kind === "end" ? 2 : 1;
+  for (let i = 0; i < times; i++) {
+    if (i > 0) sleepMs(180);
+    if (os === "darwin") {
+      run("afplay", ["/System/Library/Sounds/Glass.aiff"]);
+    } else if (os === "linux") {
+      if (!run("paplay", ["/usr/share/sounds/freedesktop/stereo/complete.oga"])) {
+        process.stdout.write("\x07");
+      }
+    } else {
       process.stdout.write("\x07");
     }
-  } else {
-    process.stdout.write("\x07");
   }
+}
+
+/** Synchronous pause between the two end-chimes (CLI exits right after). */
+function sleepMs(ms: number): void {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { /* busy-wait, <200ms */ }
 }
 
 function notify(title: string, body: string, critical: boolean): void {
@@ -211,7 +225,7 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot digest               (re)build knowledge index/context/digest
   set-copilot poll [seconds]       long-poll the transcript (copilot monitor)
   set-copilot sources              list audio input devices
-  set-copilot beep                 OS start/stop chime
+  set-copilot beep [--end]         OS chime (start: single, --end: double)
   set-copilot notify <t> [b]       OS desktop notification (--critical)
   set-copilot path <name>          print a resolved runtime path
 
