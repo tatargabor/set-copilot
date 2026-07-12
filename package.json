@@ -11,6 +11,12 @@
     "voice"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tatargabor/set-copilot.git"
+  },
+  "homepage": "https://github.com/tatargabor/set-copilot#readme",
+  "bugs": "https://github.com/tatargabor/set-copilot/issues",
   "type": "module",
   "bin": {
     "set-copilot": "dist/cli.js"
