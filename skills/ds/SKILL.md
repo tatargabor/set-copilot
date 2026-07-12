@@ -6,12 +6,12 @@ user_invocable: true
 
 # ds — Start Dictation
 
-Self-contained fast path for `/dictate start` — do NOT invoke the dictate skill (that would cost an extra round-trip). Optional argument: minutes (default **3**); `/ds 10` = 10 minutes.
+Self-contained fast path for `/dictate start` — do NOT invoke the dictate skill (that would cost an extra round-trip). Optional argument: minutes (default **10**); `/ds 3` = 3 minutes.
 
 Run ONE Bash call with `run_in_background: true`:
 
 ```bash
-SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --mic-only --max-minutes <minutes-or-3>
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --mic-only --max-minutes <minutes-or-10>
 ```
 
 `SET_COPILOT_DIR` scopes the transcript and the PID file to this Claude session (the id matches the conversation history file name), so parallel sessions cannot overwrite each other's recording. Keep it byte-identical in `/dd` — `stop` finds the capture through that same directory.

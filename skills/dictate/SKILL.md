@@ -14,7 +14,7 @@ Voice input into Claude Code. You speak into the microphone; the text arrives as
 
 ### `/dictate start [minutes]`
 
-Arguments: optional `minutes` — recording limit. Default: **3**. Example: `/dictate start 10`.
+Arguments: optional `minutes` — recording limit. Default: **10**. Example: `/dictate start 3`.
 
 Run ONE Bash call with `run_in_background: true` (capture plays the rising tone by itself when the mic is live, and self-stops at the limit — no separate timer or beep step):
 
