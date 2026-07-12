@@ -9,9 +9,9 @@
  *   2. enriched context  → structured JSON for the copilot's "lite" mode
  *   3. markdown digest    → human-readable summary loaded at session start
  *
- * The built-in `markdown` adapter covers the common case (a directory of
- * markdown pages). Projects with richer sources ship their own adapter module
- * and point `knowledge.adapter` at it in set-copilot.config.json.
+ * The built-in `markdown` adapter covers the common case (markdown pages, in
+ * whatever layout the project happens to use). Projects with richer sources ship
+ * their own adapter module and point `knowledge.adapter` at it.
  */
 
 /** A topic and the regex stems (matched at word start, case-insensitive) that trigger it */
@@ -64,13 +64,38 @@ export interface EnrichedContext {
   recentIncidents: Incident[];
 }
 
+/**
+ * One thing the copilot is allowed to speak up about. The shipped defaults are
+ * contradiction / context / new decision / question, but the taxonomy is data:
+ * a project can drop a category or add its own (pricing, compliance, …) without
+ * forking the skill.
+ */
+export interface AlertCategory {
+  /** Stable key, e.g. "contradiction" */
+  key: string;
+  /** Prefix shown in the chat line, e.g. "⚠" */
+  emoji: string;
+  /** Display label; defaults to key.toUpperCase() */
+  label?: string;
+  priority: "high" | "medium" | "low";
+  /** Also fire an OS desktop notification when this category triggers */
+  notify?: boolean;
+  /** Natural-language trigger condition — rendered verbatim into the prompt */
+  when: string;
+}
+
 /** Everything an adapter needs to know about the project it runs against */
 export interface AdapterContext {
   projectRoot: string;
-  /** knowledge.* section of the resolved config */
+  /** knowledge.sources — paths or globs, resolved by the adapter */
   sources: string[];
   decisionsDir?: string;
+  /** Manually seeded keyword patterns from the config */
   seedKeywords: KeywordPattern[];
+  /** Derive additional topics from the sources themselves (headings, titles, tags) */
+  autoKeywords: boolean;
+  /** Regex sources marking a line as deferred / out-of-scope */
+  deferredMarkers: string[];
 }
 
 export interface KnowledgeAdapter {

@@ -2,12 +2,12 @@ import { readFileSync, existsSync } from "node:fs";
 
 import type { KeywordPattern } from "./types.js";
 
-// Word boundaries that respect Hungarian accented letters (agglutinative — a stem
-// like "szállítólev" must match inside "szállítólevelet"). Extend the class for
-// other languages as needed.
-const WORD_CHARS = "0-9a-záéíóöőúüű";
-const WORD_START = `(?<=^|[^${WORD_CHARS}])`;
-const WORD_END = `(?=$|[^${WORD_CHARS}])`;
+// Word boundaries over any script: \b would treat "á" as a boundary and break
+// accented languages. A stem matches from a word start but not to a word end, so
+// it still hits inside agglutinated/inflected forms ("szállítólev" inside
+// "szállítólevelet", "invoic" inside "invoicing").
+const WORD_START = "(?<=^|[^\\p{L}\\p{N}])";
+const WORD_END = "(?=$|[^\\p{L}\\p{N}])";
 
 export interface CompiledPattern {
   topic: string;
@@ -43,7 +43,7 @@ export function buildMatcher(
   const compiled = compilePatterns(patterns);
   const decRe = opts.decisionIdPrefix
     ? new RegExp(
-        `(?<=^|[^0-9a-z])${escapeRegex(opts.decisionIdPrefix)}[-. ]?(\\d{1,3})(?=[^0-9]|$)`,
+        `${WORD_START}${escapeRegex(opts.decisionIdPrefix)}[-. ]?(\\d{1,3})(?=[^0-9]|$)`,
         "giu",
       )
     : null;

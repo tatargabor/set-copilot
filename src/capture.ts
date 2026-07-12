@@ -101,6 +101,7 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     silenceTimeoutMs: 3000,
     maxBufferWords: 80,
     topicMatcher,
+    detect: cfg.detect,
   });
 
   const useRt = cfg.sonioxMode !== "chunk";

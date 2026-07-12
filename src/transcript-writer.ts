@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { DEFAULT_DETECT, type DetectionConfig } from "./config.js";
 import type { TranscriptEvent } from "./soniox-rt.js";
 
 export interface TranscriptLine {
@@ -9,9 +10,9 @@ export interface TranscriptLine {
   final: boolean;
   /** Keyword-index matches (entity names, features, decision ids) — omitted when empty */
   topics?: string[];
-  /** Set to "high" when the text contains urgency indicators (hiba, probléma, sürgős, etc.) */
+  /** Set to "high" when the text matches a `detect.urgency` pattern */
   urgency?: "high";
-  /** True when the text appears to be a question */
+  /** True when the text matches a `detect.question` pattern */
   question?: boolean;
 }
 
@@ -30,9 +31,28 @@ export interface TranscriptWriterOptions {
   checkIntervalMs?: number;
   /** Topic matcher for the "topics" field (default: no-op — capture injects the real one) */
   topicMatcher?: (text: string) => string[];
+  /** Regex sources behind the urgency/question flags (default: config DEFAULT_DETECT) */
+  detect?: DetectionConfig;
 }
 
 const noopMatcher = (): string[] => [];
+
+/**
+ * Compile `detect` sources into one regex. Patterns are user-supplied, so a bad
+ * one must not take the capture down with it — it is dropped with a warning.
+ */
+function compileDetector(sources: string[], kind: string): RegExp | null {
+  const good: string[] = [];
+  for (const src of sources) {
+    try {
+      new RegExp(src, "iu");
+      good.push(`(?:${src})`);
+    } catch (err) {
+      console.error(`[set-copilot] Ignoring invalid detect.${kind} pattern ${JSON.stringify(src)}: ${(err as Error).message}`);
+    }
+  }
+  return good.length ? new RegExp(good.join("|"), "iu") : null;
+}
 
 /**
  * Sentence-based transcript writer.
@@ -56,6 +76,8 @@ export class TranscriptWriter {
   private maxBufferTokens: number;
   private timer: ReturnType<typeof setInterval> | null = null;
   private topicMatcher: (text: string) => string[];
+  private urgencyRe: RegExp | null;
+  private questionRe: RegExp | null;
   /** Wall-clock time of the last final transcript event (any speaker); 0 = no speech yet */
   private lastEventAt = 0;
   /** True once the silence event for the current silence period has been written */
@@ -66,6 +88,10 @@ export class TranscriptWriter {
     this.silenceTimeoutMs = opts?.silenceTimeoutMs ?? 3000;
     this.maxBufferTokens = opts?.maxBufferWords ?? 80;
     this.topicMatcher = opts?.topicMatcher ?? noopMatcher;
+
+    const detect = opts?.detect ?? DEFAULT_DETECT;
+    this.urgencyRe = compileDetector(detect.urgency, "urgency");
+    this.questionRe = compileDetector(detect.question, "question");
 
     this.buffers = {
       mic: { text: "", tokenCount: 0, lastTs: 0, lastActivity: 0 },
@@ -194,10 +220,10 @@ export class TranscriptWriter {
     if (topics.length > 0) {
       line.topics = topics;
     }
-    if (detectUrgency(text)) {
+    if (this.urgencyRe?.test(text)) {
       line.urgency = "high";
     }
-    if (detectQuestion(text)) {
+    if (this.questionRe?.test(text)) {
       line.question = true;
     }
     appendFileSync(this.outputPath, JSON.stringify(line) + "\n");
@@ -220,17 +246,4 @@ export class TranscriptWriter {
     this.flushBuffer("mic");
     this.flushBuffer("system");
   }
-}
-
-const URGENCY_RE =
-  /(?:^|[^a-záéíóöőúüű])(hib[aá]|probléma|nem működ|sürgős|nem jó|rossz|elroml|baj van|nem stim|nem ok|gond van|bug|broken|crash)/iu;
-
-function detectUrgency(text: string): boolean {
-  return URGENCY_RE.test(text);
-}
-
-const QUESTION_RE = /[?]\s*$|(?:^|[.!]\s+)(?:mi[tck]?soda|hogyan|miért|mikor|hol|ki |mennyit?|melyik|hány|mit |mit\b|milyen|hogy\b|kell-e|lehet-e|van-e|tudunk-e)/iu;
-
-function detectQuestion(text: string): boolean {
-  return QUESTION_RE.test(text);
 }

@@ -35,7 +35,9 @@ export async function runDigest(cfg: CopilotConfig): Promise<string> {
     projectRoot: cfg.projectRoot,
     sources: cfg.knowledge.sources,
     decisionsDir: cfg.knowledge.decisions,
-    seedKeywords: [...cfg.knowledge.keywords.partners, ...cfg.knowledge.keywords.features],
+    seedKeywords: cfg.knowledge.keywords,
+    autoKeywords: cfg.knowledge.autoKeywords,
+    deferredMarkers: cfg.knowledge.deferredMarkers,
   };
 
   const adapter = await resolveAdapter(cfg, ctx);

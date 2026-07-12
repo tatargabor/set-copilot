@@ -10,7 +10,9 @@ Real-time meeting assistant that monitors a live transcript and cross-references
 
 The copilot is NOT a separate AI — it IS this Claude Code session. The `set-copilot` capture process handles audio + transcription; Claude Code handles analysis via a Monitor loop + filesystem access to your knowledge base. The only external dependency is Soniox for transcription.
 
-Knowledge is defined in `set-copilot.config.json` (`knowledge.sources`, `knowledge.decisions`, `knowledge.keywords`). The digest step reads those and produces three artifacts the copilot consumes.
+Both halves are config, not code:
+- **Knowledge** — `knowledge.sources` (dirs, files, or globs), `knowledge.decisions`, `knowledge.keywords`. The digest step reads those and produces three artifacts the copilot consumes.
+- **Policy** — `copilot.alerts` (what to speak up about) and `copilot.instructions` (a project-owned markdown file of domain rules), rendered by `npx set-copilot prompt`.
 
 ## Usage
 
@@ -25,10 +27,13 @@ Knowledge is defined in `set-copilot.config.json` (`knowledge.sources`, `knowled
 
 #### Phase 1: Knowledge Pre-load (max 2 minutes)
 
-Regenerate the digest first (pulls fresh keywords/decisions from your configured sources into the runtime dir):
+Regenerate the digest first (pulls fresh keywords/decisions from your configured sources into the runtime dir), then load the project's copilot policy — the alert categories and any project instructions, both from `set-copilot.config.json`:
 ```bash
 npx set-copilot digest
+npx set-copilot prompt
 ```
+
+**The `prompt` output is your analysis policy for this session.** It defines which categories you may speak up about, what triggers each, which ones fire a desktop notification, and any domain rules the project wrote for you. It replaces the default taxonomy in Phase 4 — follow it, not your assumptions about what matters. Run it in every mode, including `--zero`: it is config, not knowledge, and costs one call.
 
 **Normal mode (`start`):** Read the digest, then remember you have Grep/Read access during the meeting:
 ```bash
@@ -88,30 +93,17 @@ Each notification is one batch of JSONL lines:
 4. **NEVER output filler.** If a batch has nothing alert-worthy, end the turn with no visible text.
 5. **Lookups (normal mode only)** happen while handling a notification — Grep/Read `knowledge.sources` BEFORE writing your final text. In `--lite`/`--zero` you MUST NOT use tools; work from context.
 
-**ANALYSIS — what to look for (check each thought unit against your knowledge):**
+**ANALYSIS — check every thought unit against the alert categories you loaded in Phase 1** (`npx set-copilot prompt`). Those categories, their triggers, their priorities, and which of them fire a desktop notification ARE the policy: they come from the project's config, so do not substitute a taxonomy of your own. Out of the box they are ⚠ CONTRADICTION (high) / 📋 CONTEXT / ✏ NEW DECISION / ❓ QUESTION (low), but a project may reword them, drop them, or add its own.
 
-⚠ **CONTRADICTION** (highest priority) — contradicts an active decision, or discusses a deferred/out-of-scope item as if in scope, or contradicts the knowledge wiki. Cite the exact source (decision id, file, line).
+**SILENCE — say NOTHING (not even filler)** for anything that fits no category: mundane conversation, greetings, scheduling, repetition of known facts, discussion that doesn't touch the knowledge base, or when unsure. **NO FILLER. EVER.**
 
-📋 **CONTEXT** (medium) — relevant existing knowledge the speakers may not remember; a prior different outcome; a spec section covering this. Quote the fact + cite the file.
-
-✏ **NEW DECISION** (medium) — the speakers are deciding something that should be recorded (scope change, new requirement, design choice). Summarize + suggest where to record it.
-
-❓ **QUESTION** (low) — a topic raised where knowledge is unclear. Note what's unknown and where to look.
-
-**SILENCE — say NOTHING (not even filler)** for: mundane conversation, greetings, scheduling, repetition of known facts, general discussion that doesn't touch domain knowledge, or when unsure. **NO FILLER. EVER.**
-
-**OUTPUT FORMAT** — alerts/answers go into the chat as normal text; keep it SHORT (max 3 lines). Example:
+**OUTPUT FORMAT** — alerts go into the chat as normal text; keep it SHORT (max 3 lines per alert). With the default categories:
 ```
 ⚠ CONTRADICTION: Cutting log deferred to phase 2 (DEC-002, manufacturing.md:100)
   Now being requested in scope. A scope change is needed if this moves in.
 
 📋 CONTEXT: Documentation photos already implemented (logistics.md)
   Driver-app photo upload is in the spec.
-```
-
-For ⚠ CONTRADICTION additionally fire a desktop notification so it cuts through when the terminal isn't visible:
-```bash
-npx set-copilot notify "⚠ CONTRADICTION: <one-line claim>" "<max 2 sentences + source file>" --critical
 ```
 
 ### `/meeting-copilot stop`

@@ -1,40 +1,16 @@
 {
-  "language": "hu",
-  "runtimeDir": "/tmp/set-copilot",
-  "sonioxMode": "rt",
+  "language": "en",
   "audio": {
     "micSource": "",
-    "monitorSource": "",
-    "sampleRate": 16000,
-    "toneStart": "",
-    "toneEnd": ""
+    "monitorSource": ""
   },
   "knowledge": {
     "adapter": "markdown",
-    "sources": [
-      "docs/knowledge"
-    ],
-    "decisions": "docs/knowledge/decisions",
-    "decisionIdPrefix": "DEC",
-    "keywords": {
-      "partners": [
-        {
-          "topic": "Example Partner",
-          "stems": [
-            "example[- ]?partner"
-          ]
-        }
-      ],
-      "features": [
-        {
-          "topic": "invoice",
-          "stems": [
-            "invoice",
-            "számla",
-            "számlá"
-          ]
-        }
-      ]
-    }
+    "sources": ["docs/**/*.md"],
+    "autoKeywords": true,
+    "keywords": []
+  },
+  "copilot": {
+    "instructions": ""
   }
 }

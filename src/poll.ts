@@ -17,8 +17,10 @@ function captureAlive(cfg: CopilotConfig): boolean {
   }
 }
 
+/** Strip everything but letters/digits, in any script — an accent-blind compare would
+ *  collapse non-Latin text to nothing and make every line look like a duplicate. */
 function normalize(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9áéíóöőúüű]/g, "");
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 }
 
 /**

@@ -2,6 +2,8 @@ import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, resolve, relative, basename } from "node:path";
 import { execSync } from "node:child_process";
 
+import { resolveSources } from "./sources.js";
+import { stemFromName, topicFromName } from "./keyword-matcher.js";
 import type {
   AdapterContext,
   KnowledgeAdapter,
@@ -14,38 +16,51 @@ import type {
 } from "./types.js";
 
 /**
- * Built-in adapter: treats the knowledge base as a directory of markdown pages.
+ * Built-in adapter: the knowledge base is markdown, in whatever shape the project
+ * keeps it — a docs tree, a decisions folder, a pile of meeting notes, a glob.
  *
- * - keyword patterns  = the config seed keywords (no external entity source)
+ * - keyword patterns  = config seeds, plus (autoKeywords) topics derived from the
+ *                       pages themselves: titles, `##` headings, frontmatter tags
  * - enriched context  = decisions parsed from `decisionsDir`, deferred markers
  *                        grepped from pages, per-file key facts, recent fix commits
  * - digest            = compact markdown assembled from the above
  *
- * It makes no assumptions about a database or a specific wiki structure, so it
- * works for any project whose knowledge lives in markdown.
+ * It assumes no database, no wiki product, and no naming convention.
  */
 export class MarkdownAdapter implements KnowledgeAdapter {
   readonly name = "markdown";
   constructor(private ctx: AdapterContext) {}
 
   keywordPatterns(): KeywordPattern[] {
-    // The markdown adapter has no external entity source, so patterns are the
-    // configured seeds. A custom adapter can enrich these from a DB/API.
-    return [...this.ctx.seedKeywords];
+    const seeds = [...this.ctx.seedKeywords];
+    if (!this.ctx.autoKeywords) return seeds;
+
+    // Seeds win: a hand-written stem for a topic is more precise than a derived one.
+    const taken = new Set(seeds.map((s) => s.topic.toLowerCase()));
+    const derived: KeywordPattern[] = [];
+
+    for (const name of this.derivedTopicNames()) {
+      const topic = topicFromName(name);
+      const key = topic.toLowerCase();
+      if (!topic || taken.has(key)) continue;
+      const stem = stemFromName(topic);
+      if (!stem) continue;
+      taken.add(key);
+      derived.push({ topic, stems: [stem] });
+      if (derived.length >= MAX_DERIVED_TOPICS) break;
+    }
+
+    return [...seeds, ...derived];
   }
 
   enrichedContext(): EnrichedContext {
-    const decisions = this.readDecisions();
-    const deferred = this.readDeferred();
-    const domainFaq = this.readDomainFaq();
-    const recentIncidents = this.readRecentIncidents();
     return {
       generated: fixedTimestamp(),
-      decisions,
-      deferred,
+      decisions: this.readDecisions(),
+      deferred: this.readDeferred(),
       cards: [],
-      domainFaq,
-      recentIncidents,
+      domainFaq: this.readDomainFaq(),
+      recentIncidents: this.readRecentIncidents(),
     };
   }
 
@@ -64,7 +79,7 @@ export class MarkdownAdapter implements KnowledgeAdapter {
       lines.push("");
     }
     if (ctx.domainFaq.length) {
-      lines.push("## Domain index", "");
+      lines.push("## Page index", "");
       for (const f of ctx.domainFaq) {
         lines.push(`### ${f.domain} (${f.file})`);
         for (const fact of f.keyFacts) lines.push(`- ${fact}`);
@@ -76,20 +91,40 @@ export class MarkdownAdapter implements KnowledgeAdapter {
       for (const i of ctx.recentIncidents) lines.push(`- ${i.description}`);
       lines.push("");
     }
+    if (lines.length === 2) {
+      lines.push(
+        "_No knowledge sources resolved. Set `knowledge.sources` in set-copilot.config.json_",
+        "",
+      );
+    }
     return lines.join("\n");
   }
 
   // ---- helpers -------------------------------------------------------------
 
   private markdownFiles(): string[] {
-    const out: string[] = [];
-    for (const src of this.ctx.sources) {
-      const abs = resolve(this.ctx.projectRoot, src);
-      if (!existsSync(abs)) continue;
-      if (statSync(abs).isDirectory()) walkMarkdown(abs, out);
-      else if (abs.endsWith(".md")) out.push(abs);
+    return resolveSources(this.ctx.projectRoot, this.ctx.sources);
+  }
+
+  /**
+   * Topic candidates the pages name themselves: frontmatter tags, the page title,
+   * and `##` section headings. This is what makes a project with ordinary docs
+   * useful to the copilot on day one, with an empty `keywords` array.
+   */
+  private derivedTopicNames(): string[] {
+    const names: string[] = [];
+    for (const file of this.markdownFiles()) {
+      const raw = readFileSync(file, "utf-8");
+      const fm = parseFrontmatter(raw);
+      for (const key of ["tags", "topics", "keywords"]) {
+        for (const tag of splitList(fm[key] ?? "")) names.push(tag);
+      }
+      const body = stripFrontmatter(raw);
+      const title = firstHeading(body);
+      if (title) names.push(title);
+      for (const m of body.matchAll(/^##\s+(.+)$/gm)) names.push(m[1]!.trim());
     }
-    return out;
+    return names.filter(isTopicLike);
   }
 
   private readDecisions(): DecisionSummary[] {
@@ -111,14 +146,17 @@ export class MarkdownAdapter implements KnowledgeAdapter {
 
   private readDeferred(): DeferredItem[] {
     const out: DeferredItem[] = [];
-    const marker = /(deferred:\s*\S+|halasztva|M2-re|out of scope|out-of-scope)/i;
-    const reqRe = /\b([A-Z]{2,5}-[A-Z]{2,5}-\d{2,4}|REQ-[A-Z]+-\d+)\b/;
+    const markers = this.ctx.deferredMarkers.filter(Boolean);
+    if (!markers.length) return out;
+    const marker = new RegExp(markers.join("|"), "iu");
+    // A generic ticket/requirement id: two-to-five letter groups plus a number.
+    const reqRe = /\b([A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]{1,5})?-\d{1,5})\b/;
     for (const file of this.markdownFiles()) {
       const rel = relative(this.ctx.projectRoot, file);
       for (const line of readFileSync(file, "utf-8").split("\n")) {
         if (marker.test(line)) {
           const req = line.match(reqRe)?.[1] ?? "";
-          out.push({ req, description: line.replace(/^[-*\s]+/, "").trim().slice(0, 200), source: rel });
+          out.push({ req, description: line.replace(/^[-*\s>]+/, "").trim().slice(0, 200), source: rel });
         }
       }
     }
@@ -162,26 +200,63 @@ export default function createMarkdownAdapter(ctx: AdapterContext): KnowledgeAda
   return new MarkdownAdapter(ctx);
 }
 
-// ---- markdown/frontmatter utilities (no external deps) --------------------
+// ---- topic heuristics ------------------------------------------------------
 
-function walkMarkdown(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) walkMarkdown(full, out);
-    else if (entry.name.endsWith(".md")) out.push(full);
-  }
+const MAX_DERIVED_TOPICS = 200;
+
+/**
+ * Headings that name a document's furniture rather than a subject. Matching one
+ * of these as a "topic" would flag half the meeting.
+ */
+const GENERIC_HEADINGS = new Set([
+  "overview", "summary", "introduction", "intro", "background", "context", "notes",
+  "todo", "todos", "goals", "scope", "status", "details", "usage", "example",
+  "examples", "links", "references", "appendix", "changelog", "history", "faq",
+  "requirements", "open questions", "next steps", "table of contents",
+]);
+
+/** A topic must be a name, not a sentence: short, not generic, not a bare number. */
+export function isTopicLike(name: string): boolean {
+  const t = name.trim().replace(/[.:!?]+$/, "");
+  if (t.length < 3 || t.length > 60) return false;
+  if (GENERIC_HEADINGS.has(t.toLowerCase())) return false;
+  if (t.split(/\s+/).length > 5) return false; // prose heading, not a topic
+  if (!/\p{L}/u.test(t)) return false; // no letters — a number or punctuation run
+  return true;
 }
+
+// ---- markdown/frontmatter utilities (no external deps) --------------------
 
 function parseFrontmatter(raw: string): Record<string, string> {
   const m = raw.match(/^---\n([\s\S]*?)\n---/);
   if (!m) return {};
   const fm: Record<string, string> = {};
+  let listKey = "";
   for (const line of m[1]!.split("\n")) {
+    // YAML block list under the previous key: "- value"
+    const item = line.match(/^\s*-\s+(.+)$/);
+    if (item && listKey) {
+      fm[listKey] = fm[listKey] ? `${fm[listKey]}, ${item[1]!.trim()}` : item[1]!.trim();
+      continue;
+    }
     const kv = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
-    if (kv) fm[kv[1]!] = kv[2]!.trim().replace(/^["']|["']$/g, "");
+    if (kv) {
+      const key = kv[1]!;
+      const value = kv[2]!.trim().replace(/^["']|["']$/g, "");
+      fm[key] = value;
+      listKey = value === "" ? key : "";
+    }
   }
   return fm;
+}
+
+/** "a, b, c" / "[a, b]" / a YAML list already flattened by parseFrontmatter */
+function splitList(value: string): string[] {
+  return value
+    .replace(/^\[|\]$/g, "")
+    .split(",")
+    .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean);
 }
 
 function stripFrontmatter(raw: string): string {

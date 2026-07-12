@@ -8,6 +8,7 @@
  *   stop                     stop the running capture (via PID file)
  *   status                   is capture running? how many lines captured?
  *   digest                   (re)build the knowledge index/context/digest
+ *   prompt                   print the copilot policy (alert categories + instructions)
  *   poll [seconds]           long-poll the transcript for the copilot monitor
  *   sources                  list audio input devices
  *   doctor                   audio + env health check (probes real signal)
@@ -51,6 +52,11 @@ async function main(): Promise<void> {
     case "digest": {
       const { runDigest } = await import("./knowledge/run-digest.js");
       console.log(await runDigest(loadConfig()));
+      return;
+    }
+    case "prompt": {
+      const { renderCopilotPrompt } = await import("./copilot-prompt.js");
+      process.stdout.write(renderCopilotPrompt(loadConfig()));
       return;
     }
     case "poll": {
@@ -295,6 +301,8 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    exactly once)
   set-copilot status               capture state + transcript line count
   set-copilot digest               (re)build knowledge index/context/digest
+  set-copilot prompt               print the copilot policy the skill loads
+                                   (alert categories + copilot.instructions)
   set-copilot poll [seconds]       long-poll the transcript (copilot monitor)
   set-copilot sources              list audio input devices
   set-copilot doctor               audio + env health check (probes real signal)
