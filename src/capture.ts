@@ -81,6 +81,9 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   closeSync(openSync(output, "a"));
 
   writeFileSync(pidFile, String(process.pid));
+  // Record the transcript path: `stop --print` and `status` need it, and only the
+  // capture knows whether this run is dictation or meeting mode.
+  writeFileSync(join(cfg.runtimeDir, "capture.output"), output);
   // Reset the poll offset so the monitor reads from the top of the fresh file.
   writeFileSync(join(cfg.runtimeDir, "poll-offset"), "0");
 

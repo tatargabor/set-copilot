@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 
 import type { KeywordPattern } from "./knowledge/types.js";
@@ -43,9 +44,18 @@ export interface CopilotConfig {
   projectRoot: string;
 }
 
+/**
+ * User-level config dir — the fallback for secrets and settings when the
+ * command runs outside a set-copilot project (e.g. /ds from any cwd).
+ */
+export function userConfigDir(): string {
+  if (process.env.SET_COPILOT_HOME) return resolve(process.env.SET_COPILOT_HOME);
+  const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  return join(base, "set-copilot");
+}
+
 /** Load a simple KEY=VALUE .env file into process.env (does not overwrite existing) */
-function loadDotEnv(projectRoot: string): void {
-  const envPath = join(projectRoot, ".env");
+function loadDotEnvFile(envPath: string): void {
   if (!existsSync(envPath)) return;
   for (const line of readFileSync(envPath, "utf-8").split("\n")) {
     const trimmed = line.trim();
@@ -64,6 +74,12 @@ function loadDotEnv(projectRoot: string): void {
   }
 }
 
+/** Project .env wins over the user-level one (first loader to set a key keeps it). */
+function loadDotEnv(projectRoot: string): void {
+  loadDotEnvFile(join(projectRoot, ".env"));
+  loadDotEnvFile(join(userConfigDir(), ".env"));
+}
+
 const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
   language: "hu",
   runtimeDir: "/tmp/set-copilot",
@@ -80,25 +96,30 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
 
 export const CONFIG_FILENAME = "set-copilot.config.json";
 
+function readConfigFile(path: string): Partial<CopilotConfig> {
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf-8")) as Partial<CopilotConfig>;
+  } catch (err) {
+    throw new Error(`[set-copilot] Failed to parse ${path}: ${(err as Error).message}`);
+  }
+}
+
 /**
  * Load the effective config for a project.
  *
- * Resolution order (later wins): built-in defaults → config file → env overrides.
- * Secrets (SONIOX_API_KEY) come from env / .env only, never the committed config.
+ * Resolution order (later wins): built-in defaults → user config → project config
+ * → env overrides. Secrets (SONIOX_API_KEY) come from env / .env only (project
+ * .env first, then the user-level one), never the committed config.
  */
 export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
   const root = resolve(projectRoot);
   loadDotEnv(root);
 
-  let fileCfg: Partial<CopilotConfig> = {};
-  const cfgPath = join(root, CONFIG_FILENAME);
-  if (existsSync(cfgPath)) {
-    try {
-      fileCfg = JSON.parse(readFileSync(cfgPath, "utf-8")) as Partial<CopilotConfig>;
-    } catch (err) {
-      throw new Error(`[set-copilot] Failed to parse ${CONFIG_FILENAME}: ${(err as Error).message}`);
-    }
-  }
+  const fileCfg: Partial<CopilotConfig> = {
+    ...readConfigFile(join(userConfigDir(), CONFIG_FILENAME)),
+    ...readConfigFile(join(root, CONFIG_FILENAME)),
+  };
 
   const runtimeDir = process.env.SET_COPILOT_DIR || fileCfg.runtimeDir || DEFAULTS.runtimeDir;
 

@@ -17,15 +17,16 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { platform } from "node:os";
+import { homedir, platform } from "node:os";
 import {
-  cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync,
+  cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, statSync,
 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 import {
-  loadConfig, CONFIG_FILENAME, keywordIndexPath, enrichedContextPath, digestMarkdownPath,
+  loadConfig, userConfigDir, CONFIG_FILENAME, keywordIndexPath, enrichedContextPath,
+  digestMarkdownPath, type CopilotConfig,
 } from "./config.js";
 import { playTone } from "./tones.js";
 
@@ -35,7 +36,7 @@ const PKG_ROOT = resolve(__dirname, "..");
 async function main(): Promise<void> {
   const [cmd, ...args] = process.argv.slice(2);
   switch (cmd) {
-    case "init": return cmdInit();
+    case "init": return cmdInit(args.includes("--global"));
     case "capture": {
       const { runCapture } = await import("./capture.js");
       const maxMinutesRaw = flag(args, "--max-minutes");
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
         maxMinutes: maxMinutesRaw ? parseFloat(maxMinutesRaw) : undefined,
       });
     }
-    case "stop": return cmdStop();
+    case "stop": return cmdStop(args.includes("--print"));
     case "status": return cmdStatus();
     case "digest": {
       const { runDigest } = await import("./knowledge/run-digest.js");
@@ -78,10 +79,19 @@ async function main(): Promise<void> {
 
 // ---- init ------------------------------------------------------------------
 
-function cmdInit(): void {
-  const root = process.cwd();
+/**
+ * Project init writes into ./.claude + ./set-copilot.config.json.
+ * Global init (--global) writes into ~/.claude/skills + the user config dir, so
+ * /ds works from any cwd — the secret and mic live there once, not per project.
+ */
+function cmdInit(global = false): void {
+  const cfgHome = userConfigDir();
+  const skillsDest = global
+    ? join(homedir(), ".claude", "skills")
+    : join(process.cwd(), ".claude", "skills");
+  const cfgPath = join(global ? cfgHome : process.cwd(), CONFIG_FILENAME);
+
   const skillsSrc = join(PKG_ROOT, "skills");
-  const skillsDest = join(root, ".claude", "skills");
   mkdirSync(skillsDest, { recursive: true });
 
   let copied = 0;
@@ -91,21 +101,30 @@ function cmdInit(): void {
     cpSync(src, join(skillsDest, name), { recursive: true });
     copied++;
   }
-  console.log(`✓ Installed ${copied} skills into .claude/skills/ (dictate, dd, ds, meeting-copilot)`);
+  console.log(`✓ Installed ${copied} skills into ${skillsDest} (dictate, dd, ds, meeting-copilot)`);
 
-  const cfgPath = join(root, CONFIG_FILENAME);
+  mkdirSync(cfgHome, { recursive: true });
   if (existsSync(cfgPath)) {
-    console.log(`• ${CONFIG_FILENAME} already exists — left untouched`);
+    console.log(`• ${cfgPath} already exists — left untouched`);
   } else {
     cpSync(join(PKG_ROOT, "set-copilot.config.example.json"), cfgPath);
-    console.log(`✓ Wrote ${CONFIG_FILENAME} (edit knowledge.sources for the copilot)`);
+    console.log(`✓ Wrote ${cfgPath}`);
+  }
+
+  const envPath = join(cfgHome, ".env");
+  if (existsSync(envPath)) {
+    console.log(`• ${envPath} already exists — left untouched`);
+  } else {
+    writeFileSync(envPath, "SONIOX_API_KEY=\n", { mode: 0o600 });
+    console.log(`✓ Wrote ${envPath} — put your Soniox key in it`);
   }
 
   console.log(`
 Next steps:
-  1. Add SONIOX_API_KEY to your .env (get a key at https://soniox.com)
+  1. Put SONIOX_API_KEY into ${envPath} (get a key at https://soniox.com).
+     It is the fallback for every project — a project-local .env overrides it.
   2. Pick your microphone:  set-copilot sources  → put the right input into
-     ${CONFIG_FILENAME} audio.micSource (empty = system default, which is
+     ${cfgPath} audio.micSource (empty = system default, which is
      often NOT the mic you speak into)
   3. Verify the chain:  set-copilot doctor  (probes mic + system audio for real signal)
   4. Edit ${CONFIG_FILENAME} — set knowledge.sources to your docs (optional; dictation needs none)
@@ -119,11 +138,40 @@ function pidFile(): string {
   return join(loadConfig().runtimeDir, "capture.pid");
 }
 
-function cmdStop(): void {
+/**
+ * The transcript the last capture in this runtime dir wrote. The capture records
+ * it, because only the capture knows whether it ran in dictation or meeting mode.
+ */
+function lastTranscript(cfg: CopilotConfig): string {
+  const marker = join(cfg.runtimeDir, "capture.output");
+  if (existsSync(marker)) return readFileSync(marker, "utf-8").trim();
+  return cfg.dictationOutput;
+}
+
+/**
+ * Print the transcript, then archive it — handing it over consumes it.
+ *
+ * Without the archive step a second `stop --print` (a double /dd, or one after the
+ * capture already self-stopped on its timer) would replay the previous dictation as
+ * if it were freshly spoken, and Claude would act on it twice.
+ */
+function printTranscriptOnce(cfg: CopilotConfig): void {
+  const out = lastTranscript(cfg);
+  if (!existsSync(out) || statSync(out).size === 0) return;
+  process.stdout.write(readFileSync(out, "utf-8"));
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  renameSync(out, `${out.replace(/\.jsonl$/, "")}-${stamp}.jsonl`);
+}
+
+function cmdStop(print = false): void {
+  const cfg = loadConfig();
   const pf = pidFile();
   if (!existsSync(pf)) {
     beep("end");
     console.log("[set-copilot] No capture running");
+    // A capture that hit its --max-minutes limit removed its own PID file, but its
+    // transcript is still waiting to be read — so print even with nothing to kill.
+    if (print) printTranscriptOnce(cfg);
     return;
   }
   const pid = parseInt(readFileSync(pf, "utf-8").trim(), 10);
@@ -141,6 +189,7 @@ function cmdStop(): void {
     console.log("[set-copilot] Capture already stopped");
   }
   beep("end"); // async — does not delay the caller
+  if (print) printTranscriptOnce(cfg);
 }
 
 function cmdStatus(): void {
@@ -151,10 +200,12 @@ function cmdStatus(): void {
     const pid = parseInt(readFileSync(pf, "utf-8").trim(), 10);
     try { process.kill(pid, 0); running = true; } catch { running = false; }
   }
-  const lines = existsSync(cfg.transcriptOutput)
-    ? readFileSync(cfg.transcriptOutput, "utf-8").split("\n").filter(Boolean).length
+  // The capture records which file it writes — dictation and meeting mode differ.
+  const out = lastTranscript(cfg);
+  const lines = existsSync(out)
+    ? readFileSync(out, "utf-8").split("\n").filter(Boolean).length
     : 0;
-  console.log(`capture: ${running ? "running" : "stopped"} · transcript lines: ${lines}`);
+  console.log(`capture: ${running ? "running" : "stopped"} · transcript: ${out} (${lines} lines)`);
 }
 
 // ---- path ------------------------------------------------------------------
@@ -233,11 +284,15 @@ function printHelp(): void {
   console.log(`
 set-copilot — voice dictation + meeting copilot for Claude Code
 
-  set-copilot init                 scaffold skills + config into this project
+  set-copilot init [--global]      scaffold skills + config into this project
+                                   (--global: ~/.claude/skills + user config dir,
+                                   so /ds works from any directory)
   set-copilot capture [--mic-only] [--max-minutes N]
                                    start capture (mic-only = dictation; plays the
                                    rising tone when live, self-stops after N min)
-  set-copilot stop                 stop the running capture
+  set-copilot stop [--print]       stop the running capture (--print: also emit the
+                                   transcript, then archive it so it is handed over
+                                   exactly once)
   set-copilot status               capture state + transcript line count
   set-copilot digest               (re)build knowledge index/context/digest
   set-copilot poll [seconds]       long-poll the transcript (copilot monitor)
@@ -247,7 +302,8 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot notify <t> [b]       OS desktop notification (--critical)
   set-copilot path <name>          print a resolved runtime path
 
-Config:  ${CONFIG_FILENAME}   ·   Secret:  SONIOX_API_KEY (env / .env)
+Config:  ./${CONFIG_FILENAME}  →  ${join(userConfigDir(), CONFIG_FILENAME)}
+Secret:  SONIOX_API_KEY  (env  →  ./.env  →  ${join(userConfigDir(), ".env")})
 `);
 }
 

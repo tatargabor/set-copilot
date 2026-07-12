@@ -29,10 +29,12 @@ Then tell the user: "🔴 Dictation active (N min limit) — the rising tone mea
 Run ONE Bash call (stop plays the falling tone and waits for the transcript flush):
 
 ```bash
-export SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}"; npx set-copilot stop; cat "$(npx set-copilot path dictation)"
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot stop --print
 ```
 
-`SET_COPILOT_DIR` scopes the transcript and the PID file to this Claude session (the id is the same UUID the conversation history file uses), so parallel sessions cannot overwrite each other's recording — and it must be identical in `start` and `stop`. Each start archives the previous transcript as `dictation-<timestamp>.jsonl`, so the session's earlier dictations stay readable.
+`SET_COPILOT_DIR` scopes the transcript and the PID file to this Claude session (the id is the same UUID the conversation history file uses), so parallel sessions cannot overwrite each other's recording — and it must be identical in `start` and `stop`.
+
+`--print` emits the transcript and archives it as `dictation-<timestamp>.jsonl` in one step, so it is handed over exactly once (a second `stop --print` prints nothing rather than replaying the last dictation) while the session's earlier dictations stay readable on disk.
 
 Parse the JSONL lines from the output:
 
