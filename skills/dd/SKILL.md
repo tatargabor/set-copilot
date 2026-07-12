@@ -11,8 +11,10 @@ Self-contained fast path for `/dictate stop` — do NOT invoke the dictate skill
 Run ONE Bash call (stop plays the falling tone and waits for the transcript flush):
 
 ```bash
-npx set-copilot stop; cat "$(npx set-copilot path dictation)"
+export SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}"; npx set-copilot stop; cat "$(npx set-copilot path dictation)"
 ```
+
+`SET_COPILOT_DIR` must match the one `/ds` used — that directory holds this session's PID file and transcript. Without it, `stop` would look in the global runtime dir and could kill another session's capture.
 
 Parse the JSONL lines: concatenate the `text` fields of `final: true` lines into one block; skip `{"type":"silence"}` lines and ignore any `topics` field.
 

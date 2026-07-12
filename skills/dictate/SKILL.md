@@ -19,7 +19,7 @@ Arguments: optional `minutes` — recording limit. Default: **3**. Example: `/di
 Run ONE Bash call with `run_in_background: true` (capture plays the rising tone by itself when the mic is live, and self-stops at the limit — no separate timer or beep step):
 
 ```bash
-npx set-copilot capture --mic-only --max-minutes <minutes>
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --mic-only --max-minutes <minutes>
 ```
 
 Then tell the user: "🔴 Dictation active (N min limit) — the rising tone means the mic is live. `/dd` to finish." and END YOUR TURN.
@@ -29,8 +29,10 @@ Then tell the user: "🔴 Dictation active (N min limit) — the rising tone mea
 Run ONE Bash call (stop plays the falling tone and waits for the transcript flush):
 
 ```bash
-npx set-copilot stop; cat "$(npx set-copilot path dictation)"
+export SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}"; npx set-copilot stop; cat "$(npx set-copilot path dictation)"
 ```
+
+`SET_COPILOT_DIR` scopes the transcript and the PID file to this Claude session (the id is the same UUID the conversation history file uses), so parallel sessions cannot overwrite each other's recording — and it must be identical in `start` and `stop`. Each start archives the previous transcript as `dictation-<timestamp>.jsonl`, so the session's earlier dictations stay readable.
 
 Parse the JSONL lines from the output:
 
@@ -50,7 +52,7 @@ Concatenate all `text` fields from `final: true` lines into one block. **Skip `{
 ### `/dictate status`
 
 ```bash
-npx set-copilot status
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot status
 ```
 
 ## Prerequisites
