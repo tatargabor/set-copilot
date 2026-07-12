@@ -5,7 +5,9 @@
  * sentence-level transcript JSONL. Claude Code monitors that file.
  */
 
-import { truncateSync, closeSync, openSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import {
+  closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 import { loadConfig, keywordIndexPath } from "./config.js";
@@ -24,6 +26,28 @@ export interface CaptureOptions {
   maxMinutes?: number;
 }
 
+/** PID of the capture owning `pidFile`, or null if the file is stale/absent. */
+function livePid(pidFile: string): number | null {
+  if (!existsSync(pidFile)) return null;
+  const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+  if (!Number.isFinite(pid)) return null;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    return null; // process is gone — the PID file is a leftover
+  }
+}
+
+/** Move a non-empty transcript to `<name>-<timestamp>.jsonl` so it survives the next capture. */
+function archivePrevious(output: string): void {
+  if (!existsSync(output) || statSync(output).size === 0) return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const archived = `${output.replace(/\.jsonl$/, "")}-${stamp}.jsonl`;
+  renameSync(output, archived);
+  console.log(`[set-copilot] Previous transcript archived: ${archived}`);
+}
+
 export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   const cfg = loadConfig();
 
@@ -35,14 +59,27 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   const micOnly = opts.micOnly ?? process.env.MIC_ONLY === "1";
   const output = opts.output ?? (micOnly ? cfg.dictationOutput : cfg.transcriptOutput);
 
-  // Truncate the output file so each session starts clean.
+  mkdirSync(cfg.runtimeDir, { recursive: true });
   mkdirSync(dirname(output), { recursive: true });
-  closeSync(openSync(output, "a"));
-  truncateSync(output, 0);
 
   // PID file lets `set-copilot stop` and the poll loop find/track this process
   // without brittle pkill pattern matching (works identically on Linux + macOS).
+  // A second capture in the same runtime dir would overwrite it, orphaning the
+  // first process (it keeps recording, nothing can stop it) — so refuse instead.
   const pidFile = join(cfg.runtimeDir, "capture.pid");
+  const alive = livePid(pidFile);
+  if (alive !== null) {
+    console.error(
+      `[set-copilot] A capture is already running (pid ${alive}) in ${cfg.runtimeDir} — run \`set-copilot stop\` first.`,
+    );
+    process.exit(1);
+  }
+
+  // Rotate the previous transcript aside rather than truncating it: past dictations
+  // stay readable, while the configured output path keeps naming the current one.
+  archivePrevious(output);
+  closeSync(openSync(output, "a"));
+
   writeFileSync(pidFile, String(process.pid));
   // Reset the poll offset so the monitor reads from the top of the fresh file.
   writeFileSync(join(cfg.runtimeDir, "poll-offset"), "0");
