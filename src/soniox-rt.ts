@@ -112,6 +112,58 @@ export class SonioxRtClient extends EventEmitter {
     }
   }
 
+  /**
+   * End-of-stream, THEN wait for the tail.
+   *
+   * Soniox holds the most recent audio in a non-final (still revisable) state — it
+   * only promotes those tokens to final once it knows no more audio is coming. The
+   * signal for that is an empty-string message; the server then flushes the pending
+   * tokens and replies `finished: true`.
+   *
+   * Calling `close()` straight away (what we used to do) drops exactly that tail —
+   * every dictation lost its last few words, and the more abruptly you stopped, the
+   * more you lost. So: signal, wait for `finished` (or the socket to close), and only
+   * then tear down. Bounded by `timeoutMs` so a dead socket cannot hang the shutdown.
+   */
+  async finalize(timeoutMs = 6000): Promise<void> {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      this.close();
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        ws.off("message", onMessage);
+        ws.off("close", finish);
+        resolve();
+      };
+
+      const onMessage = (data: Buffer | string) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          // The tokens in this message are still delivered by the normal "message"
+          // handler registered in connect() — we only watch for the end marker here.
+          if (msg.finished === true) finish();
+        } catch {
+          /* not JSON — ignore, the main handler reports it */
+        }
+      };
+
+      const timer = setTimeout(finish, timeoutMs);
+      ws.on("message", onMessage);
+      ws.on("close", finish);
+
+      ws.send(""); // end-of-stream: "no more audio, flush what you're holding"
+    });
+
+    this.close();
+  }
+
   close(): void {
     if (this.ws) {
       this.ws.close();
@@ -261,6 +313,23 @@ export class SonioxChunkClient extends EventEmitter {
     }
 
     throw new Error("Soniox transcription timed out");
+  }
+
+  /**
+   * Same contract as SonioxRtClient.finalize(): transcribe the audio still sitting in
+   * the buffer and only resolve once its tokens have been emitted. `close()` used to
+   * fire the flush and forget it, so the caller exited before the chunk came back —
+   * on this path that dropped up to a full chunk interval (30s) of speech.
+   */
+  async finalize(timeoutMs = 20_000): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    await Promise.race([
+      this.flushChunk().catch(() => {}),
+      new Promise<void>((r) => setTimeout(r, timeoutMs)),
+    ]);
   }
 
   close(): void {

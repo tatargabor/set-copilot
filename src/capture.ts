@@ -194,24 +194,37 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     console.log(`[set-copilot] audio: mic=${Math.round(micBytes / 1024)}KB sys=${Math.round(sysBytes / 1024)}KB`);
   }, 60_000);
 
-  const shutdown = () => {
+  /**
+   * Order matters: stop the mic FIRST (no new audio), then ask Soniox to flush the
+   * tail it is still holding, and only close the writer once those last tokens have
+   * arrived. Tearing the socket down synchronously — as this did until 2026-07-13 —
+   * threw away the final words of every dictation.
+   */
+  let stopping = false;
+  const shutdown = async () => {
+    if (stopping) return; // a second SIGTERM must not cut the flush short
+    stopping = true;
     console.log("\n[set-copilot] Stopping...");
     clearTimeout(noAudioCheck);
     clearInterval(audioStats);
     capture.stop();
-    micClient.close();
-    if (sysClient) sysClient.close();
+
+    await Promise.all([
+      micClient.finalize(),
+      sysClient ? sysClient.finalize() : Promise.resolve(),
+    ]);
+
     writer.close();
     try { rmSync(pidFile); } catch { /* already gone */ }
     process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
 
   if (opts.maxMinutes && opts.maxMinutes > 0) {
     setTimeout(() => {
       console.log(`[set-copilot] Max duration (${opts.maxMinutes} min) reached — stopping`);
-      shutdown();
+      void shutdown();
     }, opts.maxMinutes * 60_000);
     console.log(`[set-copilot] Auto-stop after ${opts.maxMinutes} min`);
   }

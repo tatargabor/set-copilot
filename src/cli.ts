@@ -183,9 +183,11 @@ function cmdStop(print = false): void {
   const pid = parseInt(readFileSync(pf, "utf-8").trim(), 10);
   try {
     process.kill(pid, "SIGTERM");
-    // Wait for the capture process to actually exit (max 2s) so its shutdown
-    // handler finishes flushing the transcript BEFORE the caller reads it.
-    const deadline = Date.now() + 2000;
+    // Wait for the capture process to actually exit so its shutdown handler finishes
+    // flushing the transcript BEFORE the caller reads it. The budget must cover the
+    // Soniox end-of-stream round-trip (finalize(), up to 6s) — the old 2s cut the
+    // flush off and the caller printed a transcript missing its last words.
+    const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       try { process.kill(pid, 0); } catch { break; } // exited
       sleepMs(25);
