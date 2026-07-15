@@ -3,6 +3,9 @@ dist/
 .env
 *.log
 
+# Personal, per-machine Claude Code settings (opsx commands/skills are shared)
+.claude/settings.local.json
+
 # Per-session capture runtime dir (transcripts, PID file, poll offset)
 .set/
 

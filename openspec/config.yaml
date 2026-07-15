@@ -1,0 +1,39 @@
+schema: spec-driven
+
+context: |
+  set-copilot — a CLI + library that captures audio, streams it to Soniox for
+  speech-to-text, and writes sentence-level JSONL that a Claude Code session reads.
+  There is no server and no second AI: the "copilot intelligence" IS the Claude Code
+  session running the skills in skills/.
+
+  Tech stack: TypeScript (strict), Node.js (ESM), vitest. No linter — `tsc` strict is
+  the only static check. Build with `npm run build` (tsc → dist/); bin + exports point
+  at dist. `set-copilot doctor` verifies the audio chain + Soniox creds end-to-end.
+
+  Architecture: audio.ts (parec/sox → 16kHz s16le) → soniox-rt.ts (WS stt-rt-v5) →
+  transcript-writer.ts (buffers, flushes JSONL on sentence/speaker-change/silence/
+  overflow; tags each line speaker: "mic" | "system") → capture.ts. poll.ts long-polls
+  the transcript for the meeting-copilot loop. Knowledge adapters in src/knowledge/.
+
+  Core conventions (read CLAUDE.md before proposing changes):
+  - "Everything project-specific is config, not code." Domain behavior belongs behind
+    the config seams (copilot.alerts, detect.urgency/question, knowledge.keywords),
+    NEVER as a regex in src/. The engine is knowledge- and language-agnostic.
+  - The mic/system tag is the load-bearing primitive — build features on it, not on new
+    capture. Word boundaries are Unicode (\p{L}\p{N}), never \b.
+  - Skills in skills/ are PROMPTS, not code: mechanics in the skill, judgement in config.
+  - Tests cover pure logic only (no mic/Soniox/PID); verify audio paths by running the CLI.
+  - Runtime-dir invariants: a capture owns its runtime dir; a transcript is handed over
+    exactly once (archive, never truncate); a second capture in a live dir is refused.
+
+  Direction and rationale live in docs/ROADMAP.md; research notes in docs/research/.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
