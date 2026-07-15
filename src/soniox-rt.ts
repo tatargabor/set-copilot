@@ -481,7 +481,7 @@ export class SonioxChunkClient extends EventEmitter {
   }
 }
 
-function addWavHeader(pcmData: Buffer, sampleRate: number): Buffer {
+export function addWavHeader(pcmData: Buffer, sampleRate: number): Buffer {
   const header = Buffer.alloc(44);
   const dataSize = pcmData.length;
   const fileSize = dataSize + 36;

@@ -30,7 +30,9 @@ And dictation is really the on-ramp. **The meeting copilot has no built-in equiv
 ## Requirements
 
 - Node.js ≥ 18
-- A [Soniox](https://soniox.com) API key
+- **A speech-to-text backend** — pick one:
+  - [Soniox](https://soniox.com) API key (cloud, low latency, 60+ languages), or
+  - **local whisper** (free, offline, no key): `brew install whisper-cpp` + a ggml model in `~/.config/set-copilot/models/` — set `"sttBackend": "whisper"`
 - Audio capture tooling:
   - **Linux**: `parec` (PipeWire/PulseAudio) — usually preinstalled. `notify-send` for desktop alerts.
   - **macOS**: `sox` (`brew install sox`). System-audio capture for meetings needs [BlackHole](https://github.com/ExistentialAudio/BlackHole); dictation needs only the mic. Cloning the repo? `brew bundle` installs both from the [`Brewfile`](Brewfile).
@@ -90,9 +92,14 @@ Every field is optional. Dictation works with an empty config; the copilot needs
 
 ```jsonc
 {
-  "language": "en",                 // Soniox language hint
+  "language": "en",                 // STT language hint ("auto" lets whisper detect)
   "runtimeDir": "/tmp/set-copilot", // scratch dir for transcript + state
+  "sttBackend": "soniox",           // "soniox" (cloud, needs a key) | "whisper" (local, free/offline)
   "sonioxMode": "rt",               // "rt" (low latency) | "chunk" (10s fallback)
+  "whisper": {                      // used only when sttBackend === "whisper"
+    "bin": "whisper-cli",           // whisper.cpp binary (brew install whisper-cpp)
+    "model": ""                     // path to a ggml model; empty → ~/.config/set-copilot/models/ggml-base.bin
+  },
   "audio": { "micSource": "", "monitorSource": "", "sampleRate": 16000 },
 
   "knowledge": {

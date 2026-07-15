@@ -7,6 +7,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { platform } from "node:os";
 
 import type { CopilotConfig } from "./config.js";
@@ -77,8 +78,22 @@ export async function runDoctor(cfg: CopilotConfig): Promise<void> {
   let failed = false;
   const os = platform();
 
-  // 1. API key
-  if (cfg.sonioxApiKey) {
+  // 1. STT backend credentials/dependencies
+  if (cfg.sttBackend === "whisper") {
+    const w = spawnSync(cfg.whisper.bin, ["--help"], { stdio: "ignore" });
+    if (w.error) {
+      console.log(`  ✗ whisper bináris nem futtatható: ${cfg.whisper.bin} — telepítsd (brew install whisper-cpp)`);
+      failed = true;
+    } else {
+      console.log(`  ✓ whisper bináris: ${cfg.whisper.bin}`);
+    }
+    if (existsSync(cfg.whisper.model)) {
+      console.log(`  ✓ whisper modell: ${cfg.whisper.model}`);
+    } else {
+      console.log(`  ✗ whisper modell hiányzik: ${cfg.whisper.model} — tölts le egyet (pl. ggml-base.bin) vagy állítsd a whisper.model / WHISPER_MODEL értéket`);
+      failed = true;
+    }
+  } else if (cfg.sonioxApiKey) {
     console.log("  ✓ SONIOX_API_KEY beállítva");
   } else {
     console.log("  ✗ SONIOX_API_KEY hiányzik (.env vagy környezeti változó)");

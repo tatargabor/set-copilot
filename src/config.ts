@@ -73,6 +73,15 @@ export interface CopilotConfig {
   dictationOutput: string;
   sonioxApiKey: string;
   sonioxMode: "rt" | "chunk";
+  /** Speech-to-text backend: "soniox" (cloud, needs a key) or "whisper" (local whisper.cpp, free/offline) */
+  sttBackend: "soniox" | "whisper";
+  /** whisper.cpp settings, used only when sttBackend === "whisper" */
+  whisper: {
+    /** whisper.cpp CLI binary (default "whisper-cli") */
+    bin: string;
+    /** Path to a ggml model file (e.g. ggml-base.bin) */
+    model: string;
+  };
   audio: {
     micSource: string;
     monitorSource: string;
@@ -198,6 +207,8 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
   transcriptOutput: "/tmp/set-copilot/transcript.jsonl",
   dictationOutput: "/tmp/set-copilot/dictation.jsonl",
   sonioxMode: "rt",
+  sttBackend: "soniox",
+  whisper: { bin: "whisper-cli", model: "" },
   audio: { micSource: "", monitorSource: "", sampleRate: 16000, toneStart: "", toneEnd: "" },
   knowledge: {
     adapter: "markdown",
@@ -295,6 +306,13 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
     dictationOutput: fileCfg.dictationOutput ?? join(runtimeDir, "dictation.jsonl"),
     sonioxApiKey: process.env.SONIOX_API_KEY || "",
     sonioxMode: mode === "chunk" ? "chunk" : "rt",
+    sttBackend: (process.env.STT_BACKEND || fileCfg.sttBackend) === "whisper" ? "whisper" : "soniox",
+    whisper: {
+      bin: process.env.WHISPER_BIN || fileCfg.whisper?.bin || DEFAULTS.whisper.bin,
+      // Default model lives under the user config dir, so `init` + docs can point
+      // users at a single drop-in location and whisper mode works with no config.
+      model: process.env.WHISPER_MODEL || fileCfg.whisper?.model || join(userConfigDir(), "models", "ggml-base.bin"),
+    },
     audio: {
       micSource: process.env.MIC_SOURCE || fileCfg.audio?.micSource || DEFAULTS.audio.micSource,
       monitorSource: process.env.MONITOR_SOURCE || fileCfg.audio?.monitorSource || DEFAULTS.audio.monitorSource,

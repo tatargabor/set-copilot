@@ -1,5 +1,10 @@
 {
   "language": "en",
+  "sttBackend": "soniox",
+  "whisper": {
+    "bin": "whisper-cli",
+    "model": ""
+  },
   "audio": {
     "micSource": "",
     "monitorSource": ""

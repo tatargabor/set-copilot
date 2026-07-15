@@ -17,6 +17,9 @@ beforeEach(() => {
   delete process.env.SET_COPILOT_DIR;
   delete process.env.SONIOX_MODE;
   delete process.env.SET_COPILOT_LANGUAGE;
+  delete process.env.STT_BACKEND;
+  delete process.env.WHISPER_MODEL;
+  delete process.env.WHISPER_BIN;
 });
 
 afterEach(() => {
@@ -114,6 +117,38 @@ describe("loadConfig", () => {
   it("throws with the offending path when a config file is malformed", () => {
     writeFileSync(join(project, CONFIG_FILENAME), "{ not json");
     expect(() => loadConfig(project)).toThrow(/Failed to parse .*set-copilot\.config\.json/);
+  });
+});
+
+describe("stt backend config", () => {
+  it("defaults to the soniox backend with a whisper-cli fallback binary", () => {
+    const cfg = loadConfig(project);
+    expect(cfg.sttBackend).toBe("soniox");
+    expect(cfg.whisper.bin).toBe("whisper-cli");
+    // Default model lives under the (temp) user config dir.
+    expect(cfg.whisper.model).toBe(join(userHome, "models", "ggml-base.bin"));
+  });
+
+  it("selects whisper from the config file", () => {
+    writeCfg(project, { sttBackend: "whisper", whisper: { bin: "/opt/whisper", model: "/models/hu.bin" } });
+    const cfg = loadConfig(project);
+    expect(cfg.sttBackend).toBe("whisper");
+    expect(cfg.whisper.bin).toBe("/opt/whisper");
+    expect(cfg.whisper.model).toBe("/models/hu.bin");
+  });
+
+  it("lets STT_BACKEND / WHISPER_MODEL env vars win over the file", () => {
+    writeCfg(project, { sttBackend: "soniox", whisper: { model: "/from/file.bin" } });
+    process.env.STT_BACKEND = "whisper";
+    process.env.WHISPER_MODEL = "/from/env.bin";
+    const cfg = loadConfig(project);
+    expect(cfg.sttBackend).toBe("whisper");
+    expect(cfg.whisper.model).toBe("/from/env.bin");
+  });
+
+  it("falls back to soniox for an unknown backend value", () => {
+    process.env.STT_BACKEND = "nonsense";
+    expect(loadConfig(project).sttBackend).toBe("soniox");
   });
 });
 

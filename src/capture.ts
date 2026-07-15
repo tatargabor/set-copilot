@@ -14,6 +14,7 @@ import type { EventEmitter } from "node:events";
 import { loadConfig, keywordIndexPath } from "./config.js";
 import { startDualCapture, listSources } from "./audio.js";
 import { SonioxRtClient, SonioxChunkClient } from "./soniox-rt.js";
+import { WhisperLocalClient } from "./whisper-local.js";
 import { TranscriptWriter } from "./transcript-writer.js";
 import { buildMatcher, loadKeywordIndex } from "./knowledge/keyword-matcher.js";
 import { playTone } from "./tones.js";
@@ -81,8 +82,13 @@ function archivePrevious(output: string): void {
 export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   const cfg = loadConfig();
 
-  if (!cfg.sonioxApiKey) {
+  if (cfg.sttBackend === "soniox" && !cfg.sonioxApiKey) {
     console.error("[set-copilot] SONIOX_API_KEY is required (set it in .env or the environment)");
+    process.exit(1);
+  }
+  if (cfg.sttBackend === "whisper" && !existsSync(cfg.whisper.model)) {
+    console.error(`[set-copilot] whisper model not found: ${cfg.whisper.model}`);
+    console.error("[set-copilot] Download one (e.g. ggml-base.bin) or set whisper.model / WHISPER_MODEL. See: set-copilot doctor");
     process.exit(1);
   }
 
@@ -134,14 +140,20 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     detect: cfg.detect,
   });
 
-  const useRt = cfg.sonioxMode !== "chunk";
+  const useWhisper = cfg.sttBackend === "whisper";
+  const useRt = !useWhisper && cfg.sonioxMode !== "chunk";
   const soniox = { apiKey: cfg.sonioxApiKey, language: cfg.language, sampleRate: cfg.audio.sampleRate };
+  const whisper = { bin: cfg.whisper.bin, model: cfg.whisper.model, language: cfg.language, sampleRate: cfg.audio.sampleRate };
 
-  let micClient: SonioxRtClient | SonioxChunkClient;
-  let sysClient: SonioxRtClient | SonioxChunkClient | null = null;
+  let micClient: SonioxRtClient | SonioxChunkClient | WhisperLocalClient;
+  let sysClient: SonioxRtClient | SonioxChunkClient | WhisperLocalClient | null = null;
   let lastSpeaker: "mic" | "system" = "mic";
 
-  if (useRt) {
+  if (useWhisper) {
+    micClient = new WhisperLocalClient(whisper, "mic", 10_000);
+    if (!micOnly) sysClient = new WhisperLocalClient(whisper, "system", 10_000);
+    console.log(`[set-copilot] STT backend: whisper (local) — ${cfg.whisper.model}`);
+  } else if (useRt) {
     micClient = new SonioxRtClient(soniox, "mic");
     if (!micOnly) sysClient = new SonioxRtClient(soniox, "system");
   } else {
@@ -192,8 +204,9 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     (micClient as SonioxRtClient).connect();
     if (sysClient) (sysClient as SonioxRtClient).connect();
   } else {
-    (micClient as SonioxChunkClient).start();
-    if (sysClient) (sysClient as SonioxChunkClient).start();
+    // Chunk (Soniox) and whisper both poll on a timer via start().
+    (micClient as SonioxChunkClient | WhisperLocalClient).start();
+    if (sysClient) (sysClient as SonioxChunkClient | WhisperLocalClient).start();
   }
 
   const capture = startDualCapture({
