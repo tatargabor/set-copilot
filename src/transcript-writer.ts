@@ -238,6 +238,21 @@ export class TranscriptWriter {
     appendFileSync(this.outputPath, JSON.stringify(event) + "\n");
   }
 
+  /**
+   * Record a non-speech event (currently: a transcription reconnect) in the same
+   * stream as the speech. The point is honesty about coverage: if the socket dropped,
+   * the reader — human or copilot — must be able to see that there is a hole here,
+   * rather than reading an unbroken transcript that quietly skipped a minute.
+   */
+  writeEvent(type: string, fields: Record<string, unknown> = {}): void {
+    const event = {
+      type,
+      ...fields,
+      ts: Math.max(this.buffers.mic.lastTs, this.buffers.system.lastTs),
+    };
+    appendFileSync(this.outputPath, JSON.stringify(event) + "\n");
+  }
+
   close(): void {
     if (this.timer) {
       clearInterval(this.timer);

@@ -79,3 +79,42 @@ describe("renderCopilotPrompt", () => {
     expect(out).toContain("does not exist");
   });
 });
+
+/**
+ * How talkative the copilot is used to be hardcoded ("anything else: say nothing"),
+ * which made a bug-triage watcher and a design-call participant impossible to express
+ * in the same package. It is config now, so these assertions guard the three levels.
+ */
+describe("engagement", () => {
+  const alerts: AlertCategory[] = [{ key: "x", emoji: "⚠", priority: "high", when: "w" }];
+
+  it("defaults to reactive — a watcher that stays silent between alerts", () => {
+    const out = renderAlerts(alerts);
+    expect(out).toContain("**reactive.**");
+    expect(out).toContain("say nothing");
+    expect(out).toContain("at most 3 lines");
+  });
+
+  it("participant mode licenses confirming, refuting and adding — but still not filler", () => {
+    const out = renderAlerts(alerts, { engagement: "participant", maxLines: 6 });
+    expect(out).toContain("**participant.**");
+    expect(out).toContain("Refute");
+    expect(out).toContain("Confirm");
+    expect(out).toContain("Still no filler");
+    expect(out).toContain("at most 6 lines");
+    expect(out).not.toContain("**reactive.**");
+  });
+
+  it("silent mode drops everything below high priority", () => {
+    const out = renderAlerts(alerts, { engagement: "silent" });
+    expect(out).toContain("**silent.**");
+    expect(out).toContain("high");
+  });
+
+  it("mentions web research only when it is allowed", () => {
+    expect(renderAlerts(alerts, { engagement: "participant" })).not.toContain("WebSearch");
+    expect(
+      renderAlerts(alerts, { engagement: "participant", allowWebResearch: true }),
+    ).toContain("WebSearch");
+  });
+});

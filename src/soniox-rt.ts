@@ -22,6 +22,14 @@ interface SonioxRtOptions {
   sampleRate?: number;
 }
 
+/** How long a socket may go without answering a ping before we call it dead. */
+const PING_INTERVAL_MS = 20_000;
+const PONG_TIMEOUT_MS = 15_000;
+/** Reconnect backoff: 0.5s, 1s, 2s, 4s, then 8s forever. */
+const RECONNECT_BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
+/** Audio kept while the socket is down, so a reconnect does not lose speech. 16 kHz s16le = 32 kB/s. */
+const RECONNECT_BUFFER_BYTES = 32_000 * 15; // ~15 seconds
+
 /**
  * Real-time Soniox WebSocket streaming client.
  *
@@ -29,7 +37,23 @@ interface SonioxRtOptions {
  *  - "transcript" (TranscriptEvent) — partial or final transcript tokens
  *  - "error" (Error) — connection or transcription errors
  *  - "connected" — WebSocket connected
- *  - "closed" — WebSocket closed
+ *  - "reconnecting" (attempt, reason) — the socket dropped; a new one is coming
+ *  - "reconnected" (downtimeMs, bufferedBytes) — speech resumed after a drop
+ *  - "closed" — WebSocket closed for good (we are shutting down)
+ *
+ * ## Why the reconnect exists
+ *
+ * Until 2026-07-14 a dropped socket was only logged. The process stayed alive, the
+ * mic kept streaming, and `sendAudio()` silently discarded every chunk because the
+ * socket was no longer OPEN — so the capture did not crash, it went DEAF: `status`
+ * said "running", the byte counters kept climbing, and no transcript line ever
+ * appeared again. In a 2-hour meeting that happened repeatedly and the only cure was
+ * a manual restart. A single WS close must never cost the rest of the meeting.
+ *
+ * Two failure modes, two defences:
+ *   - socket closes    → reconnect with backoff, replaying the audio buffered meanwhile
+ *   - socket half-open → ping/pong: a socket that misses a pong is dead, force-reconnect
+ * A half-open socket reports OPEN forever, so the close handler alone cannot see it.
  */
 export class SonioxRtClient extends EventEmitter {
   private ws: WebSocket | null = null;
@@ -38,6 +62,17 @@ export class SonioxRtClient extends EventEmitter {
   private sampleRate: number;
   private speaker: "mic" | "system";
   private startTime: number = 0;
+
+  /** True once finalize()/close() ran: an intentional teardown must not reconnect. */
+  private closing = false;
+  private attempt = 0;
+  private downSince = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pongTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Audio that arrived while the socket was down (bounded — oldest dropped first). */
+  private pending: Buffer[] = [];
+  private pendingBytes = 0;
 
   constructor(opts: SonioxRtOptions, speaker: "mic" | "system") {
     super();
@@ -48,11 +83,13 @@ export class SonioxRtClient extends EventEmitter {
   }
 
   connect(): void {
+    if (this.closing) return;
     const url = `wss://stt-rt.soniox.com/transcribe-websocket`;
-    this.ws = new WebSocket(url);
-    this.startTime = Date.now();
+    const ws = new WebSocket(url);
+    this.ws = ws;
+    if (this.startTime === 0) this.startTime = Date.now();
 
-    this.ws.on("open", () => {
+    ws.on("open", () => {
       const config = {
         api_key: this.apiKey,
         model: "stt-rt-v5",
@@ -61,11 +98,23 @@ export class SonioxRtClient extends EventEmitter {
         audio_format: "s16le",
         num_channels: 1,
       };
-      this.ws!.send(JSON.stringify(config));
-      this.emit("connected");
+      ws.send(JSON.stringify(config));
+
+      const wasDown = this.downSince > 0;
+      const downtime = wasDown ? Date.now() - this.downSince : 0;
+      const buffered = this.pendingBytes;
+      this.attempt = 0;
+      this.downSince = 0;
+      this.startHeartbeat(ws);
+      // Replay what was spoken while we were disconnected — Soniox treats it as the
+      // head of the new stream, so the words land instead of vanishing.
+      this.flushPending(ws);
+
+      if (wasDown) this.emit("reconnected", downtime, buffered);
+      else this.emit("connected");
     });
 
-    this.ws.on("message", (data: Buffer | string) => {
+    ws.on("message", (data: Buffer | string) => {
       try {
         const msg = JSON.parse(data.toString());
         if (msg.error) {
@@ -97,18 +146,91 @@ export class SonioxRtClient extends EventEmitter {
       }
     });
 
-    this.ws.on("error", (err: Error) => {
-      this.emit("error", err);
+    ws.on("pong", () => {
+      if (this.pongTimer) clearTimeout(this.pongTimer);
+      this.pongTimer = null;
     });
 
-    this.ws.on("close", (code: number, reason: Buffer) => {
-      this.emit("closed", code, reason.toString());
+    ws.on("error", (err: Error) => {
+      this.emit("error", err);
+      // 'error' is always followed by 'close' — let the close handler do the reconnect.
     });
+
+    ws.on("close", (code: number, reason: Buffer) => {
+      this.stopHeartbeat();
+      if (this.closing) {
+        this.emit("closed", code, reason.toString());
+        return;
+      }
+      this.scheduleReconnect(`socket closed (code=${code}${reason.length ? `, ${reason}` : ""})`);
+    });
+  }
+
+  /**
+   * A socket that stops answering pings is dead even though `readyState` still says
+   * OPEN. This is the half-open case that made the capture go deaf without ever
+   * firing a close event.
+   */
+  private startHeartbeat(ws: WebSocket): void {
+    this.stopHeartbeat();
+    this.pingTimer = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      if (this.pongTimer) return; // a ping is already outstanding
+      this.pongTimer = setTimeout(() => {
+        this.pongTimer = null;
+        if (this.closing) return;
+        // Terminate (not close) — a half-open socket will not complete a handshake.
+        ws.terminate();
+        this.scheduleReconnect(`no pong within ${PONG_TIMEOUT_MS / 1000}s — socket is dead`);
+      }, PONG_TIMEOUT_MS);
+      try {
+        ws.ping();
+      } catch {
+        /* the close handler picks it up */
+      }
+    }, PING_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    if (this.pongTimer) clearTimeout(this.pongTimer);
+    this.pingTimer = null;
+    this.pongTimer = null;
+  }
+
+  private scheduleReconnect(reason: string): void {
+    if (this.closing || this.reconnectTimer) return;
+    if (this.downSince === 0) this.downSince = Date.now();
+    const delay = RECONNECT_BACKOFF_MS[Math.min(this.attempt, RECONNECT_BACKOFF_MS.length - 1)]!;
+    this.attempt++;
+    this.emit("reconnecting", this.attempt, reason);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
+  }
+
+  private flushPending(ws: WebSocket): void {
+    if (!this.pending.length) return;
+    const chunks = this.pending;
+    this.pending = [];
+    this.pendingBytes = 0;
+    for (const c of chunks) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(c);
+    }
   }
 
   sendAudio(pcmChunk: Buffer): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(pcmChunk);
+      return;
+    }
+    if (this.closing) return;
+    // Socket is down: hold the audio for the reconnect rather than dropping it.
+    this.pending.push(pcmChunk);
+    this.pendingBytes += pcmChunk.length;
+    while (this.pendingBytes > RECONNECT_BUFFER_BYTES && this.pending.length > 1) {
+      this.pendingBytes -= this.pending.shift()!.length;
     }
   }
 
@@ -126,11 +248,22 @@ export class SonioxRtClient extends EventEmitter {
    * then tear down. Bounded by `timeoutMs` so a dead socket cannot hang the shutdown.
    */
   async finalize(timeoutMs = 6000): Promise<void> {
+    // From here on a close is intentional: no reconnect, no heartbeat.
+    this.closing = true;
+    this.stopHeartbeat();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       this.close();
       return;
     }
+
+    // Speech captured during a reconnect gap would otherwise die with the process.
+    this.flushPending(ws);
 
     await new Promise<void>((resolve) => {
       let done = false;
@@ -165,6 +298,12 @@ export class SonioxRtClient extends EventEmitter {
   }
 
   close(): void {
+    this.closing = true;
+    this.stopHeartbeat();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;

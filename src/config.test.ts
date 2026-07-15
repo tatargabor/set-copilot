@@ -116,3 +116,29 @@ describe("loadConfig", () => {
     expect(() => loadConfig(project)).toThrow(/Failed to parse .*set-copilot\.config\.json/);
   });
 });
+
+describe("copilot engagement config", () => {
+  it("defaults to a reactive watcher, 3 lines, no web research", () => {
+    const cfg = loadConfig(project);
+    expect(cfg.copilot.engagement).toBe("reactive");
+    expect(cfg.copilot.maxLines).toBe(3);
+    expect(cfg.copilot.allowWebResearch).toBe(false);
+  });
+
+  it("takes engagement, maxLines and allowWebResearch from the project config", () => {
+    writeCfg(project, {
+      copilot: { engagement: "participant", maxLines: 6, allowWebResearch: true },
+    });
+    const cfg = loadConfig(project);
+    expect(cfg.copilot.engagement).toBe("participant");
+    expect(cfg.copilot.maxLines).toBe(6);
+    expect(cfg.copilot.allowWebResearch).toBe(true);
+  });
+
+  it("falls back to the default on a bogus engagement rather than passing it to the prompt", () => {
+    writeCfg(project, { copilot: { engagement: "chatty", maxLines: -4 } });
+    const cfg = loadConfig(project);
+    expect(cfg.copilot.engagement).toBe("reactive");
+    expect(cfg.copilot.maxLines).toBe(3);
+  });
+});

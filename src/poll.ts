@@ -32,7 +32,10 @@ function filterLines(lines: string[]): string[] {
   let p1 = "";
   let p2 = "";
   for (const line of lines) {
-    if (line.includes('"type":"silence"')) {
+    // Non-speech events carry no "text" — pass them through instead of letting the
+    // dedup below drop them. A reconnect marker in particular MUST reach the copilot:
+    // it is the only signal that a stretch of the meeting may be missing.
+    if (line.includes('"type":"silence"') || line.includes('"type":"reconnect"')) {
       out.push(line);
       continue;
     }

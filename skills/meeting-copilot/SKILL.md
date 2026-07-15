@@ -25,25 +25,40 @@ Both halves are config, not code:
 - **`start --lite`** — pre-loaded context: loads the enriched JSON at Phase 1, then **zero tool calls** during the meeting. Fast (<1s) but limited to pre-loaded knowledge.
 - **`start --zero`** — zero-load: **skips Phase 1 entirely**. Works purely from what's already in the conversation context (CLAUDE.md, rules, memory). Fastest start, smallest footprint.
 
+#### Phase 0: Scope the runtime dir (do this in EVERY command below)
+
+Every `set-copilot` command in this skill — `digest`, `prompt`, `path`, `capture`, `poll`,
+`stop`, `status` — MUST be prefixed with the same runtime dir:
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}"
+```
+
+It is where the keyword index, the transcript, and the PID file live, and every command
+reads it back from there. Scope it in one command and not another and they silently talk
+past each other: a `capture` in the scoped dir with a `digest` in the default one finds no
+keyword index, so no line ever gets a `topics` annotation and the copilot loses its routing.
+Byte-identical, every time.
+
 #### Phase 1: Knowledge Pre-load (max 2 minutes)
 
-Regenerate the digest first (pulls fresh keywords/decisions from your configured sources into the runtime dir), then load the project's copilot policy — the alert categories and any project instructions, both from `set-copilot.config.json`:
+Regenerate the digest first (pulls fresh keywords/decisions from your configured sources into the runtime dir), then load the project's copilot policy — the alert categories, the engagement level, and any project instructions, all from `set-copilot.config.json`:
 ```bash
-npx set-copilot digest
-npx set-copilot prompt
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot digest
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot prompt
 ```
 
 **The `prompt` output is your analysis policy for this session.** It defines which categories you may speak up about, what triggers each, which ones fire a desktop notification, and any domain rules the project wrote for you. It replaces the default taxonomy in Phase 4 — follow it, not your assumptions about what matters. Run it in every mode, including `--zero`: it is config, not knowledge, and costs one call.
 
 **Normal mode (`start`):** Read the digest, then remember you have Grep/Read access during the meeting:
 ```bash
-cat "$(npx set-copilot path digest)"
+cat "$(SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot path digest)"
 ```
 You don't need to memorize everything — know WHAT EXISTS and WHERE. During the meeting, Grep/Read the configured `knowledge.sources` on demand.
 
 **Lite mode (`start --lite`):** Load the enriched context JSON — this replaces ALL grep/read during the meeting:
 ```
-Read the file printed by:  npx set-copilot path context
+Read the file printed by:  SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot path context
 ```
 It contains: `decisions`, `deferred`, `cards` (per-entity quirks), `domainFaq`, `recentIncidents`. From here on, work exclusively from what's loaded.
 
@@ -56,8 +71,14 @@ It contains: `decisions`, `deferred`, `cards` (per-entity quirks), `domainFaq`, 
 ONE Bash call with `run_in_background: true` — the capture plays the rising tone by itself when the mic is live, and self-stops after 2 hours (no separate timer or beep step):
 
 ```bash
-npx set-copilot capture --max-minutes 120
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --max-minutes 120
 ```
+
+`SET_COPILOT_DIR` scopes the transcript and the PID file to this Claude session and this
+project, exactly as `/ds` does for dictation. Without it the capture lands in the shared
+`/tmp/set-copilot`, where a reboot eats the meeting and a second Claude session is refused
+outright ("a capture is already running"). **Keep it byte-identical in Phase 3 and in
+`stop`** — that directory is how they find this capture.
 
 **After starting: immediately proceed to Phase 3. Do NOT stop.**
 
@@ -67,7 +88,7 @@ Do NOT `tail -f` (per-line flood) and do NOT run the poll as a blocking foregrou
 
 Start the Monitor with `persistent: true` and `timeout_ms: 7200000`:
 ```bash
-while :; do OUT=$(npx set-copilot poll 60); if [ -n "$OUT" ]; then printf '%s\n' "$OUT"; fi; case "$OUT" in *capture-dead*) exit 0;; esac; done
+while :; do OUT=$(SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot poll 60); if [ -n "$OUT" ]; then printf '%s\n' "$OUT"; fi; case "$OUT" in *capture-dead*) exit 0;; esac; done
 ```
 
 Then tell the user: "🟢 Meeting Copilot active. Watching and analyzing. `/meeting-copilot stop` to finish." and END YOUR TURN — the Monitor notifications drive everything from here.
@@ -82,6 +103,7 @@ Each notification is one batch of JSONL lines:
 - `urgency: "high"` = the text contains problem indicators. Prioritize.
 - `question: true` = looks like a question that may need a knowledge-backed answer.
 - `type: "silence"` = a pause started — a good moment for a slightly deeper lookup.
+- `{"type":"reconnect", "downtime_ms": N}` = the transcription socket dropped and came back. Audio buffered during the gap is replayed, but if `downtime_ms` is large, **words may be missing here** — treat the surrounding text as possibly incomplete, and say so rather than guessing at a half-sentence.
 - `{"type":"capture-dead"}` = capture stopped (stop/timeout/crash); the Monitor exits — process remaining lines and give the closing summary.
 
 #### Phase 4: Continuous Analysis
@@ -90,8 +112,15 @@ Each notification is one batch of JSONL lines:
 1. React in the same round when a topic is recognizable — one sentence is often enough.
 2. Use `topics` for instant routing, `urgency` for prioritization, `question` for proactive answers.
 3. If a sentence references a known topic (entity, feature, decision, incident), respond NOW with the relevant context. Don't say "listening" or "waiting".
-4. **NEVER output filler.** If a batch has nothing alert-worthy, end the turn with no visible text.
+4. **NEVER output filler.** If a batch gives you nothing to add, end the turn with no visible text.
 5. **Lookups (normal mode only)** happen while handling a notification — Grep/Read `knowledge.sources` BEFORE writing your final text. In `--lite`/`--zero` you MUST NOT use tools; work from context.
+
+**HOW MUCH TO TALK is config, not your judgement** — the `## Engagement` block from
+`npx set-copilot prompt` (Phase 1) decides it: `silent` / `reactive` (a watcher: speak only
+when a category fires) / `participant` (a third voice: also confirm, refute, add, answer).
+It also sets the per-contribution line limit and whether web research is allowed. Follow it.
+Do not import a silence policy from your own instincts, and do not carry one over from
+another project.
 
 **ANALYSIS — check every thought unit against the alert categories you loaded in Phase 1** (`npx set-copilot prompt`). Those categories, their triggers, their priorities, and which of them fire a desktop notification ARE the policy: they come from the project's config, so do not substitute a taxonomy of your own. Out of the box they are ⚠ CONTRADICTION (high) / 📋 CONTEXT / ✏ NEW DECISION / ❓ QUESTION (low), but a project may reword them, drop them, or add its own.
 
@@ -109,14 +138,14 @@ Each notification is one batch of JSONL lines:
 ### `/meeting-copilot stop`
 
 ```bash
-npx set-copilot stop
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot stop
 ```
 The Monitor exits on its own (the in-flight poll returns `{"type":"capture-dead"}`). Then report a summary: meeting duration, alert counts by type (⚠/📋/✏/❓), and any new decisions detected (for post-meeting processing).
 
 ### `/meeting-copilot status`
 
 ```bash
-npx set-copilot status
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot status
 ```
 
 ## Prerequisites

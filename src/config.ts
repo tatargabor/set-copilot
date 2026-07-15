@@ -21,6 +21,18 @@ export interface KnowledgeConfig {
   deferredMarkers: string[];
 }
 
+/**
+ * How much of a voice the copilot has.
+ *
+ * - `silent`      — only the high-priority categories. Nothing else, ever.
+ * - `reactive`    — the default: speak when a category fires, otherwise say nothing.
+ *                   A watcher, not a participant.
+ * - `participant` — a third voice in the conversation. Still no filler, but it may
+ *                   volunteer: confirm or refute a claim, add a fact the speakers
+ *                   would want, bring background. Use when you WANT it talking.
+ */
+export type Engagement = "silent" | "reactive" | "participant";
+
 /** What the copilot is allowed to speak up about, and how it should read the knowledge */
 export interface CopilotPromptConfig {
   /**
@@ -30,6 +42,16 @@ export interface CopilotPromptConfig {
   instructions?: string;
   /** Alert taxonomy. Defaults to contradiction / context / new decision / question. */
   alerts: AlertCategory[];
+  /** How eagerly it speaks. Default "reactive". */
+  engagement: Engagement;
+  /** Max lines per contribution. Default 3 — raise it when you want reasoning, not just flags. */
+  maxLines: number;
+  /**
+   * Allow WebSearch/WebFetch during the meeting (background research, fact-checking a
+   * claim against the outside world). Off by default: it costs seconds, and most
+   * meetings only need the project's own knowledge.
+   */
+  allowWebResearch: boolean;
 }
 
 /** Regex sources driving the per-line flags the copilot routes on */
@@ -184,9 +206,16 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     autoKeywords: true,
     deferredMarkers: DEFAULT_DEFERRED_MARKERS,
   },
-  copilot: { alerts: DEFAULT_ALERTS },
+  copilot: {
+    alerts: DEFAULT_ALERTS,
+    engagement: "reactive",
+    maxLines: 3,
+    allowWebResearch: false,
+  },
   detect: DEFAULT_DETECT,
 };
+
+const ENGAGEMENTS: Engagement[] = ["silent", "reactive", "participant"];
 
 export const CONFIG_FILENAME = "set-copilot.config.json";
 
@@ -287,6 +316,14 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
     copilot: {
       instructions: copilot.instructions,
       alerts: normalizeAlerts(copilot.alerts) ?? DEFAULT_ALERTS,
+      engagement: ENGAGEMENTS.includes(copilot.engagement as Engagement)
+        ? (copilot.engagement as Engagement)
+        : DEFAULTS.copilot.engagement,
+      maxLines:
+        typeof copilot.maxLines === "number" && copilot.maxLines > 0
+          ? Math.floor(copilot.maxLines)
+          : DEFAULTS.copilot.maxLines,
+      allowWebResearch: copilot.allowWebResearch === true,
     },
     detect: {
       urgency: detect.urgency?.length ? detect.urgency : DEFAULT_DETECT.urgency,

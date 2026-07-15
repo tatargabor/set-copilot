@@ -9,6 +9,7 @@ import {
   closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import type { EventEmitter } from "node:events";
 
 import { loadConfig, keywordIndexPath } from "./config.js";
 import { startDualCapture, listSources } from "./audio.js";
@@ -37,6 +38,35 @@ function livePid(pidFile: string): number | null {
   } catch {
     return null; // process is gone — the PID file is a leftover
   }
+}
+
+/**
+ * Surface a transcription drop instead of swallowing it.
+ *
+ * A dropped socket used to be a one-line `console.error` while the capture kept
+ * running deaf. Now the reconnect is automatic, but the reader still has to KNOW a
+ * gap happened — so it goes into the transcript itself as a `{"type":"reconnect"}`
+ * line. The copilot reads that as "I may have missed something here", which is the
+ * honest reading; an unbroken-looking transcript with a silent hole is not.
+ */
+function attachReconnectLogging(
+  client: EventEmitter,
+  writer: TranscriptWriter,
+  label: "mic" | "system",
+): void {
+  client.on("reconnecting", (attempt: number, reason: string) => {
+    console.error(`[set-copilot] ${label}: transcription dropped (${reason}) — reconnecting (attempt ${attempt})`);
+  });
+  client.on("reconnected", (downtimeMs: number, bufferedBytes: number) => {
+    const secs = (downtimeMs / 1000).toFixed(1);
+    const audioSecs = (bufferedBytes / 32_000).toFixed(1);
+    console.log(`[set-copilot] ${label}: transcription reconnected after ${secs}s (replayed ${audioSecs}s of audio)`);
+    writer.writeEvent("reconnect", {
+      speaker: label,
+      downtime_ms: downtimeMs,
+      replayed_audio_ms: Math.round((bufferedBytes / 32_000) * 1000),
+    });
+  });
 }
 
 /** Move a non-empty transcript to `<name>-<timestamp>.jsonl` so it survives the next capture. */
@@ -136,6 +166,7 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     // played here (mic transcription live), not by the caller.
     playTone("start", cfg.audio.toneStart || undefined);
   });
+  attachReconnectLogging(micClient, writer, "mic");
   micClient.on("closed", (code: number, reason: string) =>
     console.error(`[set-copilot] Mic transcription connection closed (code=${code}${reason ? `, reason=${reason}` : ""})`));
 
@@ -152,6 +183,7 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     });
     sysClient.on("error", (err) => console.error(`[set-copilot] Sys error: ${err.message}`));
     sysClient.on("connected", () => console.log("[set-copilot] Sys: connected"));
+    attachReconnectLogging(sysClient, writer, "system");
     sysClient.on("closed", (code: number, reason: string) =>
       console.error(`[set-copilot] Sys transcription connection closed (code=${code}${reason ? `, reason=${reason}` : ""})`));
   }
