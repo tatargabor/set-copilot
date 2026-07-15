@@ -140,6 +140,68 @@ Ehhez a `speaker: "mic" | "system"` mező **általánosul `source`-ra**: `mic` (
 
 **Van hasonló?** Az MCP friss (2024 vége); „élő meeting-copilot kontextus MCP-n keresztül egy másik fél ügynökének" tudtommal nincs termékként. A #6-tal együtt: **egy „publikus kontextus", két fogyasztó — ember (fal) és gép (MCP)**.
 
+### 8. Menet közben tanítható copilot — futásidejű policy + tudás-tanulás ⭐
+A #3 (hangvezérelt mód-váltás) általánosítása egy pillanatnyi mód-váltásból **tartós tanulássá**: a copilot menet közben — **bemondva vagy beírva** — utasítható, és amit tanul, azt **megjegyzi a következő meetingre is**. Nem új AI és nem új capture: a copilot *maga a Claude session*, ezért a „tanítás" a lehető legkisebb seam.
+
+**Két külön dolgot hívunk „tanításnak", és szándékosan szét kell válniuk, mert más a perzisztálásuk:**
+
+| Típus | Példa (bemondva/beírva) | Ma hol él | Természete |
+|---|---|---|---|
+| **Viselkedés-delta** | „gyakrabban szólj", „csak ellentmondásra", „max 1 sor" | `copilot.engagement` / `maxLines` / `alerts` | strukturált beállítás |
+| **Tudás-delta** | „a számlázási kérdésekre a `docs/billing.md`-ben keress", „az ügyfél-döntések a Notion X oldalon vannak" | `copilot.instructions` (kézzel írt md) | szabad szöveg / forrás-pointer |
+
+**A kulcs-belátás: a „jegyezd meg" = futásidőben írt prompt.** Mivel a copilot egy Claude session, egy megtanult utasítás nem igényel strukturált gépezetet — egyszerűen *több prompt*, pont mint a `copilot.instructions`, csak menet közben írva, nem előre. Ebből adódik a projekt filozófiájával (`minden projekt-specifikus = config, nem kód`) egyező, legkisebb dizájn.
+
+**Új seam: `learned` overlay.** Egy markdown fájl, amit a `set-copilot prompt` a `copilot.instructions` UTÁN fűz a policy-blokkhoz (a `renderCopilotPrompt` kiterjesztése). Egyetlen új CLI-ige tölti, időbélyeges bulletekkel:
+
+```bash
+set-copilot learn "számlázási kérdésre a docs/billing.md-ben keress"
+set-copilot learn --behavior "ritkábban szólj, csak ha biztos vagy"
+set-copilot learn --forget <n>      # egy tanult sor törlése
+set-copilot learn --list            # mit tanult eddig
+```
+
+A session indulásakor (és bármely `prompt` híváskor) beolvasódik → a **következő** meeting már örökli. Ez a réteg **pure logic, tesztelhető** — pont az a fajta, amit a CLAUDE.md szerint tesztelünk (prompt-render, fájl-append, forget-index).
+
+**Két bemenet, egy célpont:**
+- **Bemondva (hang):** a Monitor-loopban egy `mic`-re szűkített parancs-felismerés (a #3 `detect.command` seamje) kiszűri a „copilot, …" mondatot a normál transzkriptből, meghívja a `learn`-t, **röviden visszaigazol** (ez az *egyetlen* eset, ahol a rövid ack nem filler — a user tudni akarja, hogy landolt), és **azonnal alkalmazza**. A `mic`-scoping **load-bearing**: a hívás másik oldala (`system`) soha ne tudja átprogramozni a copilotot.
+- **Beírva (chat):** a user szimplán megmondja a sessionnek; az a `learn`-nel perzisztálja. Nulla új gépezet.
+
+**Azonnali vs. tartós hatás — mindkettő ingyen:** *azonnal*, mert a session LLM → amint a megtanult utasítás a kontextusában van, engedelmeskedik (nincs újraindítás); *tartósan*, mert a fájl-append a következő meetingnek is átadja.
+
+**Döntendő — scope.** Hova írjon a `learn`? Három réteg, config-mergelve, mint minden más:
+- **projekt** (`.set/copilot/learned.md`, default) — „billing itt van": projekt-specifikus tudás;
+- **user-szintű** (`~/.config/set-copilot/learned.md`, `--global`) — „általában szólj kevesebbet": minden meetingre;
+- **session** (nem perzisztál a `stop` után) — elsőre kihagyható, mert épp a *megjegyzés* a lényeg.
+Javaslat: default projekt, `--global` a user-szintűre (tükrözi az `init --global` mintát).
+
+**Döntendő — viselkedés-delta: szöveg vagy strukturált?** Két út:
+- *(a) natúr szöveg a `learned` overlay-ben* — a session értelmezi. Egyszerűbb, nyelvfüggetlen, egy fájl mindkét típusra. **Kockázat:** a `## Engagement` blokk determinisztikusan kapuzza a loopot (silent/reactive/participant); egy overlay-mondat („ritkábban") ezzel *ütközhet* vagy fölébe kerülhet, és nem-determinisztikus lesz.
+- *(b) strukturált visszaírás a config-kulcsokba* (`engagement`, `maxLines`) — determinisztikus kapuzás, de JSON-írás + a prompt újra-renderelése kell hozzá menet közben.
+Javaslat: **hibrid** — a *tudás-delta* mindig szöveg-overlay; a *viselkedés-delta* a néhány ismert kulcsra (`engagement`, `maxLines`) strukturáltan írjon vissza, minden egyébre overlay. Így a talkativeness determinisztikus marad, a szabad tudás meg rugalmas.
+
+**Illeszkedés — mi van már készen:**
+- `renderCopilotPrompt` / `readInstructions` (`copilot-prompt.ts`) — az overlay-t ugyanide fűzzük, a `## Project instructions` után egy `## Learned` blokkal.
+- `copilot.instructions` már bizonyítja a „projekt-tulajdonú md verbatim a promptba" mintát — a `learned` ennek futásidejű testvére.
+- `mic` vs `system` tagelés (a fő primitív) adja a parancs-scoping-ot ingyen.
+- A config már háromrétegű merge (default → user → projekt); a `learned` ugyanezt a rétegzést követi.
+
+**Buktatók (tapasztalatból, hogy az OpenSpec-átvitel ne fusson bele):**
+- **Ack ≠ filler.** A skill „NO FILLER. EVER." szabálya alól a tanítás-visszaigazolás **kivétel** — de csak a tanítás-parancsra, semmi másra. Ezt explicit ki kell mondani a skillben, különben a session vagy elnyeli az ack-et, vagy elkezd fecsegni.
+- **A `learned.md` a runtime-dir invariánsok alá esik-e?** NEM a transcript/PID mellé való (az per-capture, egyszer átadott); a `learned.md` **tartós, több meetinget túlél**, tehát a runtime scratch dir helyett a projekt/user configdir mellé kerüljön — különben egy reboot vagy egy új session elveszti.
+- **Forget/visszavonás kell.** Egy elrontott tanult sor (rossz path, félrehallott parancs) ne mérgezze örökre a promptot — innen a `--forget`/`--list`. A félrehallás valós: hangból jövő parancsnál a session olvassa vissza, mit értett, mielőtt ír.
+- **Ne szivárogjon vissza a domain a kódba.** A parancs-felismerés (`detect.command`) **regex-config**, nem beégetett „copilot," szó — a #3 alatti seam, Unicode szóhatárral (`\p{L}\p{N}`, soha `\b`), hogy accentes nyelveken is működjön.
+- **Több meeting, egy tanulság.** Ha `--global`, a tanult viselkedés minden projektre hat — ezt a `learn` visszaigazolásában jelezni kell („mostantól **minden** meetingen"), nehogy a user véletlenül globálisan némítsa a copilotot.
+
+**Méret:** kicsi–közepes. A magja (`learned` overlay + `learn` ige + prompt-render + tesztek) **kicsi és önálló**, a #3 hang-felismerése nélkül is szállítható (beírt tanítással már teljes értékű). A hang-ág a #3-mal közös `detect.command` seamre épül — együtt érdemes tervezni.
+
+**Első szelet (javasolt sorrend):**
+1. `learned` overlay + `renderCopilotPrompt` kiterjesztés (pure logic + teszt),
+2. `set-copilot learn` ige (`append` / `--behavior` / `--forget` / `--list` / `--global`),
+3. egy bekezdés a meeting-copilot skillbe: „ha egy `mic` sor tanítás → `learn` + rövid ack + azonnali alkalmazás" (a hang-felismerés a #3-mal jön).
+
+**Van hasonló?** A meeting-AI-k (Otter, Granola, Fireflies) *fix* beállításokkal futnak; menet közben, hangból/chatből tanuló és a tudását következő ülésre átvivő copilot — a `mic`/`system` scoping-gal védve — nincs termékként. A #5 (personák) *statikus* módjaival szemben ez a **futásidejű, tanuló** változat.
+
 ## Usage receptek (tervezett docs)
 - **Teams / Google Meet mellett:** system audio routing (BlackHole aggregate device), privát second-monitor súgógép setup, „mikor mit lát a másik fél".
 - Sink → forgatókönyv térkép: súgógép = privát; Artifact URL = megosztott jegyzet; teleprompter oldal = képernyő-megosztás.
@@ -161,4 +223,5 @@ Ehhez a `speaker: "mic" | "system"` mező **általánosul `source`-ra**: `mic` (
 - Artifact-frissítés üteme meeting közben (percenként? esemény-alapon?).
 - Monitor-fal (#6): a fő technikai kérdések **kutatva** ([docs/research/monitor-fal-latency.md](research/monitor-fal-latency.md)) — diagram-engine: **Cytoscape.js** (nem Mermaid); latency: kezelhető (kis-delta ~1–4 mp); privát/publikus: **két külön route** (`/` + `/wall`), nem két panel; transport: **SSE** (ngrok tunnel, nem Cloudflare quick tunnel, mert az nem tud SSE-t). Nyitva: a determinisztikus vizuális szótár (dobozok+nyilak) pontos formája; mikor „esemény" (endpoint/pause detektálás küszöbei).
 - MCP-szerver (#7): **auth eldöntve** — per-meeting ephemeral token, ngrok/cloudflared transport. Nyitva marad: a kurált „publikus nézet" pontosan mit tartalmazzon? (transcript kurált része + knowledge-digest + „kérdezz" tool).
+- Tanítható copilot (#8): a viselkedés-delta **szöveg-overlay vs. strukturált config-visszaírás** (javaslat: hibrid); a `learned.md` **scope**-ja (projekt default, `--global` user-szintre); a session-scope (nem-perzisztáló) kell-e egyáltalán.
 - Windows kell-e 1.0 előtt?
