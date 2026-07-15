@@ -88,7 +88,7 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   }
   if (cfg.sttBackend === "whisper" && !existsSync(cfg.whisper.model)) {
     console.error(`[set-copilot] whisper model not found: ${cfg.whisper.model}`);
-    console.error("[set-copilot] Download one (e.g. ggml-base.bin) or set whisper.model / WHISPER_MODEL. See: set-copilot doctor");
+    console.error("[set-copilot] Download one (e.g. ggml-small.en.bin) or set whisper.model / WHISPER_MODEL. See: set-copilot doctor");
     process.exit(1);
   }
 

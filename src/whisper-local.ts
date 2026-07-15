@@ -9,7 +9,7 @@ import { addWavHeader, type TranscriptEvent } from "./soniox-rt.js";
 export interface WhisperLocalOptions {
   /** whisper.cpp CLI binary (e.g. "whisper-cli" or an absolute path) */
   bin: string;
-  /** Path to a ggml model file (e.g. ggml-base.bin) */
+  /** Path to a ggml model file (e.g. ggml-small.en.bin) */
   model: string;
   language?: string;
   sampleRate?: number;

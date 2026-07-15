@@ -126,7 +126,7 @@ describe("stt backend config", () => {
     expect(cfg.sttBackend).toBe("soniox");
     expect(cfg.whisper.bin).toBe("whisper-cli");
     // Default model lives under the (temp) user config dir.
-    expect(cfg.whisper.model).toBe(join(userHome, "models", "ggml-base.bin"));
+    expect(cfg.whisper.model).toBe(join(userHome, "models", "ggml-small.en.bin"));
   });
 
   it("selects whisper from the config file", () => {

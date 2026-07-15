@@ -79,7 +79,7 @@ export interface CopilotConfig {
   whisper: {
     /** whisper.cpp CLI binary (default "whisper-cli") */
     bin: string;
-    /** Path to a ggml model file (e.g. ggml-base.bin) */
+    /** Path to a ggml model file (e.g. ggml-small.en.bin) */
     model: string;
   };
   audio: {
@@ -311,7 +311,7 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       bin: process.env.WHISPER_BIN || fileCfg.whisper?.bin || DEFAULTS.whisper.bin,
       // Default model lives under the user config dir, so `init` + docs can point
       // users at a single drop-in location and whisper mode works with no config.
-      model: process.env.WHISPER_MODEL || fileCfg.whisper?.model || join(userConfigDir(), "models", "ggml-base.bin"),
+      model: process.env.WHISPER_MODEL || fileCfg.whisper?.model || join(userConfigDir(), "models", "ggml-small.en.bin"),
     },
     audio: {
       micSource: process.env.MIC_SOURCE || fileCfg.audio?.micSource || DEFAULTS.audio.micSource,

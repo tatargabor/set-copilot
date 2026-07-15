@@ -98,7 +98,7 @@ Every field is optional. Dictation works with an empty config; the copilot needs
   "sonioxMode": "rt",               // "rt" (low latency) | "chunk" (10s fallback)
   "whisper": {                      // used only when sttBackend === "whisper"
     "bin": "whisper-cli",           // whisper.cpp binary (brew install whisper-cpp)
-    "model": ""                     // path to a ggml model; empty → ~/.config/set-copilot/models/ggml-base.bin
+    "model": ""                     // path to a ggml model; empty → ~/.config/set-copilot/models/ggml-small.en.bin
   },
   "audio": { "micSource": "", "monitorSource": "", "sampleRate": 16000 },
 

@@ -90,7 +90,7 @@ export async function runDoctor(cfg: CopilotConfig): Promise<void> {
     if (existsSync(cfg.whisper.model)) {
       console.log(`  ✓ whisper modell: ${cfg.whisper.model}`);
     } else {
-      console.log(`  ✗ whisper modell hiányzik: ${cfg.whisper.model} — tölts le egyet (pl. ggml-base.bin) vagy állítsd a whisper.model / WHISPER_MODEL értéket`);
+      console.log(`  ✗ whisper modell hiányzik: ${cfg.whisper.model} — tölts le egyet (pl. ggml-small.en.bin) vagy állítsd a whisper.model / WHISPER_MODEL értéket`);
       failed = true;
     }
   } else if (cfg.sonioxApiKey) {

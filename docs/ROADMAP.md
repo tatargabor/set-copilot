@@ -34,11 +34,15 @@ Ebből az egy meglévő mezőből következik a legtöbb tervezett feature — n
 
 ## Feature-backlog
 
-### 1. Ingyenes lokál STT backend (whisper)
-- **Cél:** ne legyen kötelező Soniox-számla; offline is működjön.
-- **Illeszkedés:** a `soniox-rt.ts` már `TranscriptEvent`-et emittál, és van `SonioxRtClient` + `SonioxChunkClient`. Egy `WhisperClient` ugyanezt az eventet adná, `sttBackend: "soniox" | "whisper"` config mögött.
-- **Döntendő:** engine (whisper.cpp bináris vs faster-whisper); real-time streaming (whisper chunk-alapú → latency/minőség tradeoff); modell-letöltés/tárolás kezelése.
-- **Méret:** nagy. Ez a legnagyobb önálló dev-tétel.
+### 1. Ingyenes lokál STT backend (whisper) — ✅ KÉSZ (angol tesztelve)
+- **Cél:** ne legyen kötelező Soniox-számla; offline is működjön. **Teljesítve.**
+- **Megvalósítás:** `sttBackend: "soniox" | "whisper"` config mögött a `WhisperLocalClient` (`src/whisper-local.ts`) — a `SonioxChunkClient` mintájára bufferel, 10s-enként temp WAV-ot ír és `whisper-cli`-t (whisper.cpp) futtat, ugyanazt a `TranscriptEvent`-et emittálja. Hálózat és API-kulcs nélkül. Default modell: `ggml-small.en.bin`.
+- **Engine-döntés:** whisper.cpp bináris (nem faster-whisper) — illeszkedik a meglévő spawn-binary mintához (sox/parec).
+- **Streaming:** chunk-alapú maradt (mint a Soniox chunk kliens); a chunk-határon egy szó összecsúszhat — ismert tradeoff, később overlap-pal csökkenthető.
+- **Teszt-eredmény (valós mikrofon, 2026-07-15):**
+  - **Angol** (`small.en`): **szó szerint pontos** élő beszéden — bizonyítva.
+  - **Magyar**: `base` = használhatatlan (hallucináció-hurkok); `small` (multilingual) = valódi ragozott magyar szavak, de rendes teszt még hátravan. **A magyar úthoz továbbra is a Soniox az elsődleges** (lásd döntések logja).
+- **Marad:** rendes magyar minőség-teszt (több/tisztább beszéd, esetleg `medium`/`large-v3`); opcionális chunk-overlap.
 
 ### 2. Interaktív `init`
 - A mostani `init` üres `.env`-et ír. Cél: prompt a backendre (Soniox/whisper), mikrofon-választás a `sources` listából, nyelv, kulcs bekérése.
