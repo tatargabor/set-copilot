@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { platform } from "node:os";
 
 import type { CopilotConfig } from "./config.js";
-import { listSources, parecBin } from "./audio.js";
+import { listSources, parecBin, soxBin } from "./audio.js";
 
 interface ProbeResult {
   bytes: number;
@@ -29,7 +29,7 @@ async function probeSourceRetry(device: string | undefined, sampleRate: number):
 function probeSource(device: string | undefined, sampleRate: number): Promise<ProbeResult> {
   return new Promise((resolvePromise) => {
     const os = platform();
-    const bin = os === "darwin" ? "sox" : parecBin();
+    const bin = os === "darwin" ? soxBin() : parecBin();
     const args = os === "darwin"
       ? ["-t", "coreaudio", device || "default", "-t", "raw", "-r", String(sampleRate), "-b", "16", "-c", "1", "-e", "signed-integer", "-"]
       : ["--format=s16le", "--rate", String(sampleRate), "--channels=1", ...(device ? ["--device", device] : [])];
@@ -101,8 +101,8 @@ export async function runDoctor(cfg: CopilotConfig): Promise<void> {
   }
 
   // 2. Audio binary
-  const bin = os === "darwin" ? "sox" : parecBin();
-  const which = spawnSync(os === "darwin" ? "sox" : bin, ["--version"], { stdio: "ignore" });
+  const bin = os === "darwin" ? soxBin() : parecBin();
+  const which = spawnSync(bin, ["--version"], { stdio: "ignore" });
   if (which.error) {
     console.log(`  ✗ ${bin} nem futtatható — telepítsd (${os === "darwin" ? "brew install sox" : "pulseaudio-utils / pipewire-pulse"})`);
     failed = true;

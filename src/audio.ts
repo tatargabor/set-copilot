@@ -47,6 +47,20 @@ export function parecBin(): string {
   return existsSync("/usr/bin/parec") ? "/usr/bin/parec" : "parec";
 }
 
+/**
+ * Resolve the sox binary. On macOS, GUI/background-launched processes frequently
+ * do NOT inherit the Homebrew bin dir on PATH, so a bare `spawn("sox")` fails with
+ * ENOENT ("spawn sox ENOENT") even though sox is installed — and the capture then
+ * flows 0 bytes with no obvious cause. Probe the common Homebrew locations first,
+ * then fall back to PATH.
+ */
+export function soxBin(): string {
+  for (const p of ["/opt/homebrew/bin/sox", "/usr/local/bin/sox"]) {
+    if (existsSync(p)) return p;
+  }
+  return "sox";
+}
+
 function startLinuxCapture(
   sampleRate: number,
   micSource?: string,
@@ -92,18 +106,30 @@ function startLinuxCapture(
  * Without this, a failed parec/sox leaves the Soniox connection "connected"
  * with zero audio and an empty transcript — undebuggable from the outside.
  */
-function wireProcDiagnostics(proc: ChildProcess, label: string): void {
+function wireProcDiagnostics(proc: ChildProcess, label: string, failHint?: string): void {
+  let hintShown = false;
+  const showHint = () => {
+    if (failHint && !hintShown) {
+      hintShown = true;
+      console.error(`[set-copilot] ${label}: ${failHint}`);
+    }
+  };
   proc.stderr?.on("data", (d: Buffer) => {
     const line = d.toString().trim();
     if (line) console.error(`[set-copilot] ${label} capture stderr: ${line}`);
+    // A device that cannot be opened is a setup issue, not a transient error —
+    // surface the actionable hint next to the raw sox message.
+    if (/can ?not open|can't open|no such/i.test(line)) showHint();
   });
   proc.on("exit", (code, signal) => {
     if (code !== 0 && signal !== "SIGTERM") {
       console.error(`[set-copilot] ${label} capture process exited (code=${code}, signal=${signal}) — no more audio from this source`);
+      showHint();
     }
   });
   proc.on("error", (err) => {
     console.error(`[set-copilot] ${label} capture spawn failed: ${err.message}`);
+    showHint();
   });
 }
 
@@ -124,7 +150,7 @@ function startMacCapture(
     "-",
   ];
 
-  const micProc = spawn("sox", micArgs, { stdio: ["ignore", "pipe", "pipe"] });
+  const micProc = spawn(soxBin(), micArgs, { stdio: ["ignore", "pipe", "pipe"] });
   wireProcDiagnostics(micProc, "mic");
   const processes: ChildProcess[] = [micProc];
 
@@ -132,9 +158,10 @@ function startMacCapture(
   if (micOnly) {
     systemStream = new Readable({ read() {} });
   } else {
+    const sysDevice = monitorSource || "BlackHole 2ch";
     const sysArgs = [
       "-t", "coreaudio",
-      monitorSource || "BlackHole 2ch",
+      sysDevice,
       "-t", "raw",
       "-r", String(sampleRate),
       "-b", "16",
@@ -142,8 +169,11 @@ function startMacCapture(
       "-e", "signed-integer",
       "-",
     ];
-    const sysProc = spawn("sox", sysArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    wireProcDiagnostics(sysProc, "sys");
+    const sysProc = spawn(soxBin(), sysArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    // System audio needs a virtual loopback device (BlackHole/Loopback). When it is
+    // absent, sox fails to open it — mic capture still works, so continue mic-only
+    // instead of leaving the user with a cryptic device error and no context.
+    wireProcDiagnostics(sysProc, "sys", `system audio device "${sysDevice}" could not be opened — capturing mic only. Install BlackHole and route output to it (see README), or set monitorSource in the config, to capture the other party.`);
     processes.push(sysProc);
     systemStream = sysProc.stdout!;
   }
@@ -188,7 +218,7 @@ export async function listSources(): Promise<string[]> {
     });
   } else if (os === "darwin") {
     return new Promise((resolve) => {
-      const proc = spawn("sox", ["--help-device", "coreaudio"], { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = spawn(soxBin(), ["--help-device", "coreaudio"], { stdio: ["ignore", "pipe", "pipe"] });
       let output = "";
       proc.stderr!.on("data", (d: Buffer) => { output += d.toString(); });
       // Missing sox emits an unhandled 'error' event that would crash the
