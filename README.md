@@ -33,7 +33,7 @@ And dictation is really the on-ramp. **The meeting copilot has no built-in equiv
 - A [Soniox](https://soniox.com) API key
 - Audio capture tooling:
   - **Linux**: `parec` (PipeWire/PulseAudio) — usually preinstalled. `notify-send` for desktop alerts.
-  - **macOS**: `sox` (`brew install sox`). System-audio capture for meetings needs [BlackHole](https://github.com/ExistentialAudio/BlackHole); dictation needs only the mic.
+  - **macOS**: `sox` (`brew install sox`). System-audio capture for meetings needs [BlackHole](https://github.com/ExistentialAudio/BlackHole); dictation needs only the mic. Cloning the repo? `brew bundle` installs both from the [`Brewfile`](Brewfile).
 
 ## Install
 
