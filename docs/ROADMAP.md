@@ -68,10 +68,12 @@ Ma az output a Claude Code chat-ablak, és csak a session gazdája látja. Konfi
 A mód-váltás cél-állapotai: *teljes jegyzet* · *súgó/rövid* · *csak riasztás* · *néma/log-only*. A „mit jelent egy mód" **config** (`copilot.*`), nem a skillbe drótozva.
 
 ### 6. Monitor-fal — élő, kétnézetes prezentációs felület ⭐ (nagy lehetőség)
+> 📎 **Technológia + latency kutatás:** [docs/research/monitor-fal-latency.md](research/monitor-fal-latency.md) — transport, diagram-motor, LLM-pipeline, prior art, megosztás, hivatkozásokkal.
+
 A #4 output-sink csúcsra járatott változata. Egy **lokál HTML fal**, amit a CLI szolgál ki, és ami:
 
 - **Kétnézetes**: **privát** zóna (amit csak én nézek — súgás, mit mondjak, ellentmondás-riasztás, következő pont) és **publikus** zóna (amit szándékosan kifelé mutatok — megbeszélésben képernyő-megosztva vagy megosztható URL-en). A `mic`/`system` primitív eleve tudja, mi az „enyém" és mi „mindenkié".
-- **Nem csak szöveg — rajzol**: amikor egy architektúráról beszélünk, a fal **élőben diagramot generál** (Mermaid natívan renderel; nehezebb esetre tldraw/Excalidraw-stílus, SVG). „Oprezentál", ábrát készít menet közben — a cél a **gyorsaság**.
+- **Nem csak szöveg — rajzol**: amikor egy architektúráról beszélünk, a fal **élőben diagramot generál**. Élő, *növekvő* gráfhoz a [kutatás](research/monitor-fal-latency.md#2-diagram-motorok) alapján **Cytoscape.js** a helyes motor (inkrementális `cy.add()` + részleges, animált, stabil layout) — a Mermaid minden híváskor újraparse-olja és átrendezi az egészet, ezért statikus, egyszeri ábrákra való, nem élő append-re. „Oprezentál", ábrát készít menet közben — a cél a **gyorsaság**.
 - **Kifelé megosztható**: vagy a publikus panel képernyő-megosztása, vagy Claude Artifact URL a távoli résztvevőknek.
 
 **Illeszkedés:** a copilot „intelligencia" a Claude session, ami natívan tud Mermaid/SVG/HTML-t generálni; a lokál sink kiszolgálja, a `speaker` mező adja az én/ők szétválasztást, a mód-váltás (#3) állítja, mi kerül a privát vs publikus zónába.
@@ -83,14 +85,15 @@ A #4 output-sink csúcsra járatott változata. Egy **lokál HTML fal**, amit a 
 - **Inkrementális:** append a nulláról-újrarajzolás helyett — egy futó gráfot bővítünk.
 - **Esemény-alapú + streaming:** nem minden mondatra frissítünk; a delta-tokeneket streamelve progresszíven rajzolunk.
 
-→ Kutatási feladat: megmérni, hogy a „Haiku gráf-delta → determinisztikus render" pipeline elég gyors-e élőben. Ez a #6 nyitott technikai kockázata.
+→ Kutatási feladat: megmérni, hogy a „Haiku gráf-delta → determinisztikus render" pipeline elég gyors-e élőben. **Megvan** ([kutatás, 3. szakasz](research/monitor-fal-latency.md#3-llm-latency-pipeline)): a kis JSON-delta (~100–300 token) Haiku 4.5-tel ~1–4 mp (Gemini Flash-sel <1,5 mp), field-by-field streamelve — szemben a teljes-diagram-generálással (10+ mp). A #6 latency-kockázata **kezelhető, nem blokkoló**; a szétválasztás nem opció, hanem feltétel.
 
 **Van hasonló?** A darabok külön léteznek, a kombináció nem:
 - *Meeting-jegyzet AI-k* (Granola, Otter, Fireflies, tl;dv, Fathom) — szöveges összefoglaló, **nincs** élő diagram, nincs privát/publikus kettéosztás, nincs vetíthető vászon.
 - *AI-diagram* (tldraw „Make Real", Excalidraw+AI, Napkin.ai, Mermaid AI) — de **nem** valós időben, beszédből, megbeszélés közben.
 - *Interjú/teleprompter-copilotok* (pl. Cluely) — privát szöveges overlay, **nem** kétnézetes rajzoló fal.
+- *Beszéd→élő diagram* (2025–2026-ban feltűnőben, de felhős + egynézetes): **Tough Tongue AI „Live Whiteboard"** (beszédre rajzol, de hosztolt, nincs privát/publikus split, nincs self-host), **Zoom AI Companion Whiteboard** (prompt-triggerelt, fizetős, felhő). Lásd a [kutatás 4. szakaszát](research/monitor-fal-latency.md#4-prior-art--versenytársak).
 
-→ A **kétnézetes (privát+publikus), beszédből élőben rajzoló, self-hosted, saját Claude-session-nel hajtott monitor-fal** tudtommal nem létezik termékként. Ez a package legerősebb differenciálója lehet.
+→ A **kétnézetes (privát+publikus), beszédből élőben rajzoló, self-hosted, saját Claude-session-nel hajtott monitor-fal** 2026-ra sem létezik termékként. Ez a package legerősebb differenciálója lehet — de a rés szűkül, érdemes haladni vele.
 
 ### 7. MCP-szerver — a kontextus gépi olvasója ⭐ (nagy lehetőség)
 A #6 monitor-fal az **emberi** megosztott nézet; ez a **gépi** párja. A `set-copilot` egy **MCP-szervert** ad, amire *más AI* (az ügyfél asszisztense, vagy a saját második ügynököd) **rácsatlakozhat, kérdezhet, és megkapja a magyarázatokat**.
@@ -156,6 +159,6 @@ Ehhez a `speaker: "mic" | "system"` mező **általánosul `source`-ra**: `mic` (
 - whisper engine + streaming megközelítés?
 - súgógép sink: lokál web-szerver a CLI-ben, vagy a Claude session Artifactja legyen az egyetlen „megosztható" út?
 - Artifact-frissítés üteme meeting közben (percenként? esemény-alapon?).
-- Monitor-fal (#6): diagram-engine (Mermaid vs tldraw/Excalidraw)? A latency mekkora akadály — elég-e az esemény-alapú, inkrementális rajzolás? A privát/publikus zóna külön oldal vagy egy oldal két panele?
+- Monitor-fal (#6): a fő technikai kérdések **kutatva** ([docs/research/monitor-fal-latency.md](research/monitor-fal-latency.md)) — diagram-engine: **Cytoscape.js** (nem Mermaid); latency: kezelhető (kis-delta ~1–4 mp); privát/publikus: **két külön route** (`/` + `/wall`), nem két panel; transport: **SSE** (ngrok tunnel, nem Cloudflare quick tunnel, mert az nem tud SSE-t). Nyitva: a determinisztikus vizuális szótár (dobozok+nyilak) pontos formája; mikor „esemény" (endpoint/pause detektálás küszöbei).
 - MCP-szerver (#7): **auth eldöntve** — per-meeting ephemeral token, ngrok/cloudflared transport. Nyitva marad: a kurált „publikus nézet" pontosan mit tartalmazzon? (transcript kurált része + knowledge-digest + „kérdezz" tool).
 - Windows kell-e 1.0 előtt?
