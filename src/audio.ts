@@ -179,6 +179,9 @@ export async function listSources(): Promise<string[]> {
       const proc = spawn("pactl", ["list", "sources", "short"], { stdio: ["ignore", "pipe", "ignore"] });
       let output = "";
       proc.stdout!.on("data", (d: Buffer) => { output += d.toString(); });
+      // Missing binary emits an unhandled 'error' event that would crash the
+      // process — swallow it and report no sources instead.
+      proc.on("error", () => resolve([]));
       proc.on("close", () => {
         resolve(output.split("\n").filter(Boolean));
       });
@@ -188,6 +191,9 @@ export async function listSources(): Promise<string[]> {
       const proc = spawn("sox", ["--help-device", "coreaudio"], { stdio: ["ignore", "pipe", "pipe"] });
       let output = "";
       proc.stderr!.on("data", (d: Buffer) => { output += d.toString(); });
+      // Missing sox emits an unhandled 'error' event that would crash the
+      // process — swallow it and report no sources instead.
+      proc.on("error", () => resolve([]));
       proc.on("close", () => {
         resolve(output.split("\n").filter(Boolean));
       });
