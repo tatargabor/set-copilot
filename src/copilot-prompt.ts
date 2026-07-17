@@ -62,10 +62,34 @@ function renderEngagement(engagement: Engagement, maxLines: number, allowWeb: bo
   return lines;
 }
 
+/**
+ * The narrow feedback opening (design D1 of wall-feedback-and-replay). The engagement
+ * rule above governs how eagerly the copilot speaks about *content*; this bounds its
+ * silence in two orthogonal cases, because a copilot whose only channel is a wall that
+ * may not visibly update looks broken when it stays mute. It never widens the
+ * multi-party content policy — only direct address and echoing its own wall emissions.
+ */
+function renderFeedback(): string[] {
+  return [
+    "## Feedback — liveness & wall echo",
+    "",
+    "The engagement rule governs what you say about the *conversation*. It does NOT make you silent in these two cases:",
+    "",
+    "- **Direct address.** When the mic speaker speaks to you (asks if you heard them, asks you to draw/show something, asks a question of you), answer briefly in chat — even if no category fires. Silence to a direct question reads as broken, not disciplined.",
+    "- **Wall echo.** Whenever you emit a wall visual (graph, chart, or a wall-only note), also write ONE short chat line saying what you understood — the interpretation, not the raw transcript. The wall is a secondary artifact; chat is your primary voice, and it must never be the case that the wall is the only sign you acted.",
+    "",
+    "**Ambiguity is a chat question, not a wall fact.** If an extraction is ambiguous (numbers given only relatively, an unclear reference), state your assumption in chat or ask — do not render a guessed value on the wall as established fact. A wall carries authority; never lend it to a guess.",
+    "",
+    "This is still not filler: no \"I'm listening\", no restating. A brief, substantive acknowledgement of a direct address or your own emission — then stop.",
+    "",
+  ];
+}
+
 export function renderAlerts(alerts: AlertCategory[], opts?: Partial<CopilotPromptConfig>): string {
   const engagement = opts?.engagement ?? "reactive";
   const maxLines = opts?.maxLines ?? 3;
   const allowWeb = opts?.allowWebResearch ?? false;
+  const acknowledge = opts?.acknowledge ?? true;
 
   const sorted = [...alerts].sort((a, b) => RANK[a.priority] - RANK[b.priority]);
   const lines: string[] = ["## Alert categories", ""];
@@ -89,6 +113,7 @@ export function renderAlerts(alerts: AlertCategory[], opts?: Partial<CopilotProm
   }
 
   lines.push(...renderEngagement(engagement, maxLines, allowWeb));
+  if (acknowledge) lines.push(...renderFeedback());
 
   lines.push(
     "Output goes into the chat as normal text:",

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>set-copilot wall</title>
+  <link rel="stylesheet" href="/wall.css" />
+  <!-- Cytoscape from CDN for the POC (design D4 / task 6.3). Vendoring for an
+       offline `wall` is a noted follow-up; the graph slot degrades to empty if
+       these fail to load, so text slots still work without a network. -->
+  <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+  <script>
+    // Register the dagre layout if all three scripts loaded; otherwise wall.js
+    // falls back to the built-in breadthfirst layout.
+    window.addEventListener("DOMContentLoaded", () => {
+      try {
+        if (window.cytoscape && window.cytoscapeDagre) window.cytoscape.use(window.cytoscapeDagre);
+      } catch (_) { /* offline / blocked CDN — breadthfirst fallback */ }
+    });
+  </script>
+</head>
+<body>
+  <main id="wall"></main>
+  <script type="module" src="/wall.js"></script>
+</body>
+</html>

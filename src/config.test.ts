@@ -65,6 +65,12 @@ describe("loadConfig", () => {
     expect(cfg.knowledge.autoKeywords).toBe(true);
   });
 
+  it("defaults copilot.acknowledge on, and only off when explicitly false", () => {
+    expect(loadConfig(project).copilot.acknowledge).toBe(true);
+    writeCfg(project, { copilot: { acknowledge: false } });
+    expect(loadConfig(project).copilot.acknowledge).toBe(false);
+  });
+
   it("lets the project override the user config key by key", () => {
     writeCfg(userHome, { language: "hu", audio: { micSource: "user-mic" } });
     writeCfg(project, { audio: { monitorSource: "proj-monitor" } });

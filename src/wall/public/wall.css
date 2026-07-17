@@ -1,0 +1,68 @@
+:root {
+  --bg: #0f1420;
+  --panel: #161d2e;
+  --line: #22304a;
+  --text: #e7ecf5;
+  --muted: #8aa0c0;
+  --accent: #4f8cff;
+  --alert: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+/* One column, rows stacked top-to-bottom — the wall never lays slots side by side. */
+#wall {
+  height: 100vh;
+  grid-auto-flow: row;
+  gap: 10px;
+  padding: 10px;
+}
+
+.slot {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  overflow: auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.slot-paced { padding: 0; position: relative; overflow: hidden; }
+.slot-paced.fade { animation: fade 0.4s ease; }
+@keyframes fade { from { opacity: 0.35; } to { opacity: 1; } }
+
+/* Text lanes */
+.line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.line:last-child { border-bottom: 0; }
+.line .icon { flex: 0 0 auto; }
+.line .txt { flex: 1 1 auto; }
+
+/* mic = "én" (me), system = "mindenki más" (everyone else) — the load-bearing
+   speaker primitive gets a visible distinction. */
+.speaker-mic { color: var(--text); }
+.speaker-mic .txt { font-weight: 600; }
+.speaker-system { color: var(--muted); }
+
+.line.immediate .txt { color: var(--alert); font-weight: 600; }
+
+/* A pinned latest slot centers its single item (an alert line or a chart). */
+.slot-latest:not(.slot-paced) { display: flex; align-items: center; justify-content: center; }
+.slot-latest:not(.slot-paced) .line { border: 0; font-size: 17px; width: 100%; }
+
+/* Chart slot: the SVG fills the width, capped in height by its own attribute. */
+.slot svg { display: block; width: 100%; }

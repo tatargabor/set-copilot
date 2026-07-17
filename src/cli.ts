@@ -10,6 +10,7 @@
  *   digest                   (re)build the knowledge index/context/digest
  *   prompt                   print the copilot policy (alert categories + instructions)
  *   poll [seconds]           long-poll the transcript for the copilot monitor
+ *   wall [--port N] [--no-fake-feed]  start the local monitor-wall display server
  *   sources                  list audio input devices
  *   doctor                   audio + env health check (probes real signal)
  *   beep [--end]             play the OS chime (start: single, end: double)
@@ -62,6 +63,58 @@ async function main(): Promise<void> {
     case "poll": {
       const { runPoll } = await import("./poll.js");
       return runPoll(loadConfig(), args[0] ? parseInt(args[0], 10) : 60);
+    }
+    case "wall": {
+      const { runWall } = await import("./wall/index.js");
+      const portRaw = flag(args, "--port");
+      await runWall(loadConfig(), {
+        port: portRaw ? parseInt(portRaw, 10) : undefined,
+        fakeFeed: !args.includes("--no-fake-feed"),
+      });
+      return; // server keeps the process alive; Ctrl-C stops it
+    }
+    case "wall-feed": {
+      const { runTranscriptFeed } = await import("./wall/producers/run-feed.js");
+      const transcript = flag(args, "--transcript");
+      if (!transcript) {
+        console.error("Usage: set-copilot wall-feed --transcript <path> [--model claude-sonnet-5] [--lines N] [--pause MS] [--reset]");
+        process.exit(1);
+      }
+      const linesRaw = flag(args, "--lines");
+      const pauseRaw = flag(args, "--pause");
+      return runTranscriptFeed(loadConfig(), {
+        transcript,
+        model: flag(args, "--model"),
+        linesPerSpan: linesRaw ? parseInt(linesRaw, 10) : undefined,
+        pauseMs: pauseRaw ? parseInt(pauseRaw, 10) : 300,
+        reset: args.includes("--reset"),
+      });
+    }
+    case "wall-emit": {
+      // The main session's hand on the wall (design D9): push a DisplayEvent (or a
+      // JSON array of them) onto the canonical events log. JSON comes from the first
+      // argument, or from stdin when none is given (handy for heredocs).
+      const { emitWallEvents } = await import("./wall/emit.js");
+      const positional = args.find((a) => !a.startsWith("-"));
+      let payload = positional;
+      if (!payload) {
+        const { readFileSync } = await import("node:fs");
+        try { payload = readFileSync(0, "utf-8").trim(); } catch { payload = ""; }
+      }
+      if (!payload) {
+        console.error('Usage: set-copilot wall-emit \'{"category":"súgás","zone":"private","text":"…"}\'  (or a JSON array, or pipe JSON on stdin)');
+        process.exit(1);
+      }
+      let parsed: unknown;
+      try { parsed = JSON.parse(payload); } catch (e) {
+        console.error(`[wall-emit] invalid JSON: ${(e as Error).message}`);
+        process.exit(1);
+      }
+      const res = emitWallEvents(loadConfig(), parsed);
+      for (const d of res.dropped) console.error(`[wall-emit] dropped: ${d.reason}`);
+      console.log(`[wall-emit] emitted ${res.emitted}${res.dropped.length ? `, dropped ${res.dropped.length}` : ""}`);
+      if (res.emitted === 0) process.exit(1);
+      return;
     }
     case "sources": {
       const { listSources } = await import("./audio.js");
@@ -306,6 +359,11 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot prompt               print the copilot policy the skill loads
                                    (alert categories + copilot.instructions)
   set-copilot poll [seconds]       long-poll the transcript (copilot monitor)
+  set-copilot wall [--port N] [--no-fake-feed]
+                                   start the local monitor-wall display (SSE);
+                                   prints window URLs. Fake-feed on by default
+  set-copilot wall-emit '<json>'   push a DisplayEvent (or JSON array) onto the
+                                   wall — the main session's producer seam (D9)
   set-copilot sources              list audio input devices
   set-copilot doctor               audio + env health check (probes real signal)
   set-copilot beep [--end]         OS chime (start: single, --end: double)

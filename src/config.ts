@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 
 import type { AlertCategory, KeywordPattern } from "./knowledge/types.js";
+import type { WallConfig, Category, WallWindow } from "./wall/types.js";
 
 export interface KnowledgeConfig {
   /** "markdown" (built-in) or a path to a module exporting a KnowledgeAdapter factory */
@@ -52,6 +53,16 @@ export interface CopilotPromptConfig {
    * meetings only need the project's own knowledge.
    */
   allowWebResearch: boolean;
+  /**
+   * The narrow feedback opening (design D1 of wall-feedback-and-replay). When on, the
+   * copilot is NOT silent in two cases the engagement policy would otherwise mute:
+   * when the mic speaker directly addresses it, and when it emits a wall visual (it
+   * also writes a one-line chat echo of what it understood). Orthogonal to
+   * `engagement`, which governs how eagerly it speaks about *content*. Default on:
+   * a copilot whose only channel is a wall that may not visibly update looks broken
+   * when it stays silent. Multi-party conversation policy is unchanged.
+   */
+  acknowledge: boolean;
 }
 
 /** Regex sources driving the per-line flags the copilot routes on */
@@ -93,6 +104,8 @@ export interface CopilotConfig {
   knowledge: KnowledgeConfig;
   copilot: CopilotPromptConfig;
   detect: DetectionConfig;
+  /** The monitor-wall display: categories + windows + port, all config/data */
+  wall: WallConfig;
   /** Absolute path of the project root the config was loaded from */
   projectRoot: string;
 }
@@ -201,6 +214,55 @@ export const DEFAULT_DEFERRED_MARKERS = [
   "\\bTBD\\b",
 ];
 
+/**
+ * The out-of-the-box display model — Hungarian category labels because the
+ * project is Hungarian, but the whole thing is data: a project replaces the
+ * registry and the windows wholesale from config without touching `src/`.
+ *
+ * The copilot shows only *processed* output — there is deliberately no raw
+ * transcript category. `súgás`/`riasztás` are `text`, `architektúra` is a
+ * node/edge `graph`, `metrika` is a data `chart`. That is the whole render-type
+ * vocabulary (text / graph / chart).
+ */
+export const DEFAULT_CATEGORIES: Category[] = [
+  { id: "súgás", label: "Súgás", icon: "💡", render: "text" },
+  { id: "riasztás", label: "Riasztás", icon: "⚠", render: "text" },
+  { id: "architektúra", label: "Architektúra", icon: "🕸", render: "graph" },
+  { id: "metrika", label: "Metrika", icon: "📊", render: "chart" },
+];
+
+// Slots stack top-to-bottom (one column). The private view keeps the alert
+// pinned, scrolls processed hints, and gives the graph the hero space with the
+// chart beneath; the public wall shows only the shared graph + chart.
+export const DEFAULT_WINDOWS: WallWindow[] = [
+  {
+    name: "én",
+    route: "/",
+    zones: ["private", "both"],
+    slots: [
+      { area: "pinned", behavior: "latest", cats: ["riasztás"] },
+      { area: "hints", behavior: "scroll", cats: ["súgás"] },
+      { area: "canvas", behavior: "latest", cats: ["architektúra"], pacing: { minDwellMs: 8000, crossFadeMs: 400 } },
+      { area: "chart", behavior: "latest", cats: ["metrika"] },
+    ],
+  },
+  {
+    name: "fal",
+    route: "/wall",
+    zones: ["public", "both"],
+    slots: [
+      { area: "canvas", behavior: "latest", cats: ["architektúra"], pacing: { minDwellMs: 8000, crossFadeMs: 400 } },
+      { area: "chart", behavior: "latest", cats: ["metrika"] },
+    ],
+  },
+];
+
+export const DEFAULT_WALL: WallConfig = {
+  port: 4180,
+  categories: DEFAULT_CATEGORIES,
+  windows: DEFAULT_WINDOWS,
+};
+
 const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
   language: "en",
   runtimeDir: "/tmp/set-copilot",
@@ -222,8 +284,10 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     engagement: "reactive",
     maxLines: 3,
     allowWebResearch: false,
+    acknowledge: true,
   },
   detect: DEFAULT_DETECT,
+  wall: DEFAULT_WALL,
 };
 
 const ENGAGEMENTS: Engagement[] = ["silent", "reactive", "participant"];
@@ -295,6 +359,7 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
   const knowledge: RawKnowledge = { ...userCfg.knowledge, ...projCfg.knowledge };
   const copilot = { ...userCfg.copilot, ...projCfg.copilot };
   const detect = { ...userCfg.detect, ...projCfg.detect };
+  const wall = { ...userCfg.wall, ...projCfg.wall };
 
   const runtimeDir = process.env.SET_COPILOT_DIR || fileCfg.runtimeDir || DEFAULTS.runtimeDir;
   const mode = process.env.SONIOX_MODE || fileCfg.sonioxMode || DEFAULTS.sonioxMode;
@@ -342,10 +407,19 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
           ? Math.floor(copilot.maxLines)
           : DEFAULTS.copilot.maxLines,
       allowWebResearch: copilot.allowWebResearch === true,
+      acknowledge: copilot.acknowledge !== false,
     },
     detect: {
       urgency: detect.urgency?.length ? detect.urgency : DEFAULT_DETECT.urgency,
       question: detect.question?.length ? detect.question : DEFAULT_DETECT.question,
+    },
+    wall: {
+      // Categories/windows are validated where they are consumed (resolveCategories,
+      // the server), so a bad entry drops with a warning instead of failing the load.
+      port: typeof wall.port === "number" && wall.port > 0 ? wall.port : DEFAULT_WALL.port,
+      categories: Array.isArray(wall.categories) ? wall.categories : DEFAULT_WALL.categories,
+      categoriesModule: wall.categoriesModule,
+      windows: Array.isArray(wall.windows) ? wall.windows : DEFAULT_WALL.windows,
     },
     projectRoot: root,
   };

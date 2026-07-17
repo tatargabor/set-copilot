@@ -135,6 +135,47 @@ another project.
   Driver-app photo upload is in the spec.
 ```
 
+#### Phase 5 (optional): Mirror analysis to the monitor wall
+
+**Chat is your primary voice; the wall is a secondary artifact.** If a wall is running
+(`npx set-copilot wall` in another terminal, or the user asked for it), **you are the wall's
+producer** (design D9): the same understanding that produces your chat alerts also produces the
+wall's visuals. But the wall must never be your ONLY output — a wall that doesn't visibly update
+looks broken, so the chat carries the liveness and the interpretation (this is the `## Feedback`
+block from `set-copilot prompt`).
+
+You emit compact structured specs; the wall renders them deterministically (no second model). Push
+one event — or a JSON array — per turn:
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"category":"súgás","zone":"private","text":"…"}'
+```
+
+The `category` values ARE the ones from your Phase-1 policy / the wall config — do NOT invent
+a taxonomy here; the mechanic is this command, the categories are config. Guidance:
+
+- **Echo every wall emission in chat.** Whenever you `wall-emit` a graph or chart, also write ONE
+  short chat line saying what you understood (the interpretation, not the raw transcript), so the
+  wall is never the only sign you acted.
+- **Ambiguity is a chat question, not a wall fact.** If the numbers/structure are ambiguous (e.g.
+  values given only relatively), state your assumption in chat or ask — do not render a guessed
+  value on the wall as if it were fact.
+- **Text categories** (súgás, riasztás): emit the SAME short line you'd write in chat. Set
+  `zone:"private"` for a note only you should see, `zone:"both"` for something the room may see;
+  set `priority:"immediate"` on alerts so the wall shows them at once.
+- **A diagram** (an architecture/relationship graph category, e.g. `architektúra`): when the
+  discussion builds up a structure, emit a **compact graph delta** — `{"op":"reset"}` to start a
+  fresh visual on a topic change, then `{"op":"add","nodes":[…],"edges":[…]}` with only what's
+  NEW. Reuse one `visual` id across the deltas of one topic. Emit the spec, never a drawing —
+  the client draws it.
+- **A chart** (a metric category, e.g. `metrika`): when explicit numbers sharing one dimension
+  are spoken, emit `{"type":"bar","title":…,"data":[{"label":…,"value":…}]}`. Never invent
+  numbers that weren't said.
+
+A malformed event is dropped with a warning, never crashing capture — so mirror freely and move
+on. If no wall is running, skip the emitting — but the chat-feedback rules above (direct address,
+ambiguity) still apply.
+
 ### `/meeting-copilot stop`
 
 ```bash

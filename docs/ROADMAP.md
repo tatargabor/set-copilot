@@ -74,6 +74,29 @@ A mód-váltás cél-állapotai: *teljes jegyzet* · *súgó/rövid* · *csak ri
 ### 6. Monitor-fal — élő, kétnézetes prezentációs felület ⭐ (nagy lehetőség)
 > 📎 **Technológia + latency kutatás:** [docs/research/monitor-fal-latency.md](research/monitor-fal-latency.md) — transport, diagram-motor, LLM-pipeline, prior art, megosztás, hivatkozásokkal.
 
+> **Állapot — a kijelző kész (scriptelt feeddel).** A `monitor-wall-display` change megépítette a
+> `set-copilot wall` parancsot: lokál HTTP + SSE szerver, egyetlen megjelenítési primitív (**kategória**
+> → `text`/`graph` renderer), **slot × viselkedés** modell (`scroll` / `latest(+pacing)`), config-vezérelt
+> ablakok (`/` privát, `/wall` publikus) szerver-oldali **zóna-szűréssel**, a szerver-oldali **playout-director**
+> (dwell/freshness/immediate-override, több fal szinkronban), **state-replay** a késve csatlakozó ablaknak, és
+> egy **producer-agnosztikus event-source** (JSONL append-and-tail a runtime-dirben — ez a kanonikus log). Egy
+> **scriptelt fake-feed** validálja a display-érzetet; a valódi audio/LLM etető a testvér-change
+> (`wall-producers`: modalitás-szerinti producerek, szöveg modell-hop nélkül, gyors stateful Haiku gráf-worker).
+> A kategóriák/ablakok/slotok mind **config/data** (`wall.*`), nem kód a `src/`-ben.
+>
+> _Nyitva a live előtt:_ Cytoscape jelenleg CDN-ről (offline `wall`-hoz vendored asset kell); az „A-út"
+> teljes-gráf dagre-relayout ugrálásának böngészős megítélése (ha rossz → scoped „B-út"); a runtime-dir
+> events-fájl tulajdon-viszonya a capture-invariánshoz képest.
+
+> **Állapot — valós feed + D9 pivot.** A `wall-producers` change reconcile-olva: az eredeti terv egy
+> **autonóm Haiku gráf-worker** köré épült, de a döntés az lett, hogy **a fő agent egy Opus 4.8 session**
+> (mint a mai kézi copilot-sessionök), és **ez érti meg + emittálja** a strukturált spec-eket (szöveg +
+> graph-delta + chart) a `set-copilot wall-emit` varraton át — a Haiku-worker **opcionális offloaddá** vált
+> (a `wall-feed` prototípus bizonyította). A tanulság a tesztből: az autonóm Haiku grounding/szándék nélkül
+> túl-gyűjt (47-node hairball emberekkel), a groundolt fő session tiszta, tömör spec-et ad. A latency
+> megmarad, mert a fő session **spec-et emittál, nem rajzot** (a render ~10 ms JS a kliensen), és csak
+> amikor indokolt. A `meeting-copilot` skill Phase 5-je tanítja a sessiont az emittálásra.
+
 A #4 output-sink csúcsra járatott változata. Egy **lokál HTML fal**, amit a CLI szolgál ki, és ami:
 
 - **Kétnézetes**: **privát** zóna (amit csak én nézek — súgás, mit mondjak, ellentmondás-riasztás, következő pont) és **publikus** zóna (amit szándékosan kifelé mutatok — megbeszélésben képernyő-megosztva vagy megosztható URL-en). A `mic`/`system` primitív eleve tudja, mi az „enyém" és mi „mindenkié".

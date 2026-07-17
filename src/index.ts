@@ -32,3 +32,12 @@ export type {
   Incident,
 } from "./knowledge/types.js";
 export { MarkdownAdapter, default as createMarkdownAdapter } from "./knowledge/markdown-adapter.js";
+export { runWall, wallEventsPath, type RunWallOptions } from "./wall/index.js";
+export { WallServer, type WallServerOptions } from "./wall/server.js";
+export {
+  resolveCategories, buildRegistry, validateCategory, type CategoryRegistry,
+} from "./wall/categories.js";
+export type {
+  WallConfig, WallWindow, Slot, Category, Pacing, DisplayEvent, ShowCommand,
+  WireMessage, Zone, RenderType, Behavior, GraphDelta, ChartSpec, ChartDatum,
+} from "./wall/types.js";

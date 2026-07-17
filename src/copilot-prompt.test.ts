@@ -28,6 +28,18 @@ describe("renderAlerts", () => {
     expect(order).toEqual(["HIGH ONE", "MID ONE", "LOW ONE"]);
   });
 
+  it("renders the Feedback block by default (acknowledge on)", () => {
+    const out = renderAlerts(DEFAULT_ALERTS);
+    expect(out).toContain("## Feedback — liveness & wall echo");
+    expect(out).toContain("Direct address");
+    expect(out).toContain("Wall echo");
+  });
+
+  it("omits the Feedback block when acknowledge is off", () => {
+    const out = renderAlerts(DEFAULT_ALERTS, { acknowledge: false });
+    expect(out).not.toContain("## Feedback");
+  });
+
   it("renders each category's trigger condition verbatim", () => {
     const out = renderAlerts([
       { key: "pricing", emoji: "💰", priority: "high", when: "a discount over 20% is offered" },
