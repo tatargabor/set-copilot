@@ -4,7 +4,7 @@
 
 The system SHALL resolve a registry of categories at startup, where each category has
 a unique `id`, a human-readable `label`, an `icon`, and a `render` type of exactly
-`text` or `graph`. Categories are data/config (declarative), following the project
+`text`, `graph`, or `chart`. Categories are data/config (declarative), following the project
 convention that project-specific behavior lives in config, not in `src/`. The registry
 SHALL be resolvable from the config layer and/or a categories module, mirroring the
 existing `knowledge.adapter` seam.
@@ -12,14 +12,14 @@ existing `knowledge.adapter` seam.
 #### Scenario: Resolve declarative categories
 
 - **WHEN** the wall starts with a config defining categories `transzkript` (render `text`),
-  `súgás` (render `text`), `riasztás` (render `text`), and `architektúra` (render `graph`)
+  `súgás` (render `text`), `architektúra` (render `graph`), and `metrika` (render `chart`)
 - **THEN** the registry exposes all four categories, each with its `id`, `label`, `icon`,
   and `render` type available to the layout and renderers
 
 #### Scenario: Reject invalid category definition
 
 - **WHEN** a category is defined without an `id`, or with a `render` type other than
-  `text` or `graph`
+  `text`, `graph`, or `chart`
 - **THEN** the registry SHALL drop that category with a warning rather than crash, and
   the remaining valid categories SHALL still resolve
 

@@ -3,9 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { renderAlerts, renderCopilotPrompt } from "./copilot-prompt.js";
-import { DEFAULT_ALERTS, type CopilotConfig } from "./config.js";
+import { renderAlerts, renderCopilotPrompt, renderDrawingContract } from "./copilot-prompt.js";
+import {
+  DEFAULT_ALERTS,
+  DEFAULT_CATEGORIES,
+  DEFAULT_DRAWING_CONVENTIONS,
+  type CopilotConfig,
+} from "./config.js";
 import type { AlertCategory } from "./knowledge/types.js";
+import type { Category } from "./wall/types.js";
 
 let root: string;
 
@@ -128,5 +134,102 @@ describe("engagement", () => {
     expect(
       renderAlerts(alerts, { engagement: "participant", allowWebResearch: true }),
     ).toContain("WebSearch");
+  });
+});
+
+describe("renderDrawingContract", () => {
+  const cats: Category[] = [
+    { id: "súgás", label: "Súgás", icon: "💡", render: "text" },
+    { id: "architektúra", label: "Architektúra", icon: "🕸", render: "graph" },
+    { id: "metrika", label: "Metrika", icon: "📊", render: "chart" },
+  ];
+
+  it("lists the configured categories with their render types", () => {
+    const out = renderDrawingContract(cats, []).join("\n");
+    expect(out).toContain("`súgás`");
+    expect(out).toContain("**text**");
+    expect(out).toContain("`architektúra`");
+    expect(out).toContain("**graph**");
+    expect(out).toContain("`metrika`");
+    expect(out).toContain("**chart**");
+  });
+
+  it("states the fork mechanics the producer model depends on", () => {
+    const out = renderDrawingContract(cats, []).join("\n");
+    // fork-producer: the fork inherits context, runs on the parent's model, and
+    // is never spawned to wait or to keep a cache warm.
+    expect(out).toContain('subagent_type: "fork"');
+    expect(out).toContain("inherits this whole context");
+    expect(out).toContain("the override is ignored");
+    expect(out).toContain("keep a cache warm");
+    expect(out).toContain("wall-emit");
+  });
+
+  it("renders project conventions verbatim", () => {
+    const out = renderDrawingContract(cats, ["Only draw pricing flows.", "Never draw people."]).join("\n");
+    expect(out).toContain("- Only draw pricing flows.");
+    expect(out).toContain("- Never draw people.");
+  });
+
+  it("omits the when-to-draw section when a project configures no conventions", () => {
+    const out = renderDrawingContract(cats, []).join("\n");
+    expect(out).not.toContain("**When to draw:**");
+    // The mechanics still render — conventions are judgement, not mechanics.
+    expect(out).toContain("## Drawing the wall");
+  });
+
+  it("renders nothing at all when there are no categories", () => {
+    expect(renderDrawingContract([], ["ignored"])).toEqual([]);
+  });
+});
+
+describe("drawing contract in the full prompt", () => {
+  const wallCfg = (
+    copilot: Partial<CopilotConfig["copilot"]>,
+    categories: Category[] = DEFAULT_CATEGORIES,
+  ): CopilotConfig =>
+    ({
+      projectRoot: root,
+      copilot: { alerts: DEFAULT_ALERTS, ...copilot },
+      wall: { categories },
+    }) as CopilotConfig;
+
+  it("includes the contract by default", () => {
+    const out = renderCopilotPrompt(
+      wallCfg({ drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS } }),
+    );
+    expect(out).toContain("## Drawing the wall");
+    expect(out).toContain("**When to draw:**");
+    // The default conventions encode the Haiku-worker lesson: don't transcribe.
+    expect(out).toContain("you are transcribing, not drawing");
+  });
+
+  it("omits the contract when drawing is disabled", () => {
+    const out = renderCopilotPrompt(
+      wallCfg({ drawing: { enabled: false, conventions: DEFAULT_DRAWING_CONVENTIONS } }),
+    );
+    expect(out).not.toContain("## Drawing the wall");
+  });
+
+  it("carries a project's renamed categories through with no skill edit", () => {
+    // fork-producer "Contract is configurable": swapping the registry in config is
+    // enough — nothing in src/ or skills/ names these ids.
+    const renamed: Category[] = [
+      { id: "hint", label: "Hint", icon: "💡", render: "text" },
+      { id: "flow", label: "Flow", icon: "🕸", render: "graph" },
+    ];
+    const out = renderCopilotPrompt(
+      wallCfg({ drawing: { enabled: true, conventions: [] } }, renamed),
+    );
+    expect(out).toContain("`hint`");
+    expect(out).toContain("`flow`");
+    expect(out).not.toContain("`architektúra`");
+    expect(out).not.toContain("`metrika`");
+  });
+
+  it("does not crash on a hand-built config with no wall or drawing section", () => {
+    const bare = { projectRoot: root, copilot: { alerts: DEFAULT_ALERTS } } as CopilotConfig;
+    expect(() => renderCopilotPrompt(bare)).not.toThrow();
+    expect(renderCopilotPrompt(bare)).not.toContain("## Drawing the wall");
   });
 });

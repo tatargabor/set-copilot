@@ -73,27 +73,11 @@ async function main(): Promise<void> {
       });
       return; // server keeps the process alive; Ctrl-C stops it
     }
-    case "wall-feed": {
-      const { runTranscriptFeed } = await import("./wall/producers/run-feed.js");
-      const transcript = flag(args, "--transcript");
-      if (!transcript) {
-        console.error("Usage: set-copilot wall-feed --transcript <path> [--model claude-sonnet-5] [--lines N] [--pause MS] [--reset]");
-        process.exit(1);
-      }
-      const linesRaw = flag(args, "--lines");
-      const pauseRaw = flag(args, "--pause");
-      return runTranscriptFeed(loadConfig(), {
-        transcript,
-        model: flag(args, "--model"),
-        linesPerSpan: linesRaw ? parseInt(linesRaw, 10) : undefined,
-        pauseMs: pauseRaw ? parseInt(pauseRaw, 10) : 300,
-        reset: args.includes("--reset"),
-      });
-    }
     case "wall-emit": {
-      // The main session's hand on the wall (design D9): push a DisplayEvent (or a
-      // JSON array of them) onto the canonical events log. JSON comes from the first
-      // argument, or from stdin when none is given (handy for heredocs).
+      // A producer's hand on the wall: push a DisplayEvent (or a JSON array of them)
+      // onto the canonical events log. The producer is a fork of the main session
+      // (fork-wall-producer D1), so this seam is the only way anything reaches the
+      // wall. JSON comes from the first argument, or from stdin when none is given.
       const { emitWallEvents } = await import("./wall/emit.js");
       const positional = args.find((a) => !a.startsWith("-"));
       let payload = positional;

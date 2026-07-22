@@ -1,7 +1,14 @@
 # wall-feed Specification
 
 ## Purpose
-TBD - created by archiving change wall-producers. Update Purpose after archive.
+
+How real content reaches the monitor wall: the producer side of the `wall-emit` ingest
+seam that `monitor-wall-display` opened. It governs how producers are partitioned (by
+output modality, one mandate each), that no producer may block another, that the text
+path stays free of any model hop, and what latency the whole path must meet.
+
+The producer itself is a fork of the main session — see `fork-producer`. This capability
+covers the feed's *shape and budget*; `fork-producer` covers what a producer is.
 ## Requirements
 ### Requirement: Modality-partitioned parallel producers
 

@@ -1,7 +1,21 @@
 # graph-worker Specification
 
 ## Purpose
-TBD - created by archiving change wall-producers. Update Purpose after archive.
+
+**Retired.** This capability specified an autonomous, stateful, fast-tier (Haiku) worker
+that watched the transcript and emitted graph deltas on its own. It was built as a
+prototype and it worked mechanically — real graph, correct chart — but without grounding
+or intent it over-captured, producing a 47-node hairball with people and side threads as
+nodes (`wall-producers` D9).
+
+Two successive changes walked it back: `wall-producers` D9 demoted it to an optional
+offload, and `fork-wall-producer` removed it entirely. The producer is now a fork of the
+main session, which inherits the chat's context and therefore its grounding — see
+`fork-producer`, and `wall-feed` for the feed's shape and latency budget.
+
+The requirements below were removed rather than edited, each with its reason, so the
+decision leaves a trace. Kept as a tombstone: the failure it records is the kind a later
+iteration would otherwise rebuild.
 ## Requirements
 ### Requirement: Stateful incremental graph delta
 

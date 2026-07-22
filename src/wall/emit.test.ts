@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -83,5 +83,69 @@ describe("emitWallEvents", () => {
     expect(res.emitted).toBe(1);
     const line = readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim();
     expect(JSON.parse(line).priority).toBe("immediate");
+  });
+});
+
+describe("payload shape validation", () => {
+  it("rejects a graph that is not an object", () => {
+    // Regression: these used to be cast unvalidated straight into the canonical log,
+    // where a replay would serve them forever.
+    expect(normalizeEvent({ category: "a", graph: 42 }).ok).toBe(false);
+    expect(normalizeEvent({ category: "a", graph: [] }).ok).toBe(false);
+  });
+
+  it("requires graph.op, since it decides reset-vs-append on the client", () => {
+    const res = normalizeEvent({ category: "a", graph: { nodes: [] } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("graph.op");
+    expect(normalizeEvent({ category: "a", graph: { op: "nope" } }).ok).toBe(false);
+    expect(normalizeEvent({ category: "a", graph: { op: "reset" } }).ok).toBe(true);
+    expect(normalizeEvent({ category: "a", graph: { op: "add", nodes: [], edges: [] } }).ok).toBe(true);
+  });
+
+  it("rejects non-array nodes/edges", () => {
+    expect(normalizeEvent({ category: "a", graph: { op: "add", nodes: "x" } }).ok).toBe(false);
+    expect(normalizeEvent({ category: "a", graph: { op: "add", edges: {} } }).ok).toBe(false);
+  });
+
+  it("requires a bar chart with an array of data", () => {
+    expect(normalizeEvent({ category: "m", chart: { type: "pie", data: [] } }).ok).toBe(false);
+    expect(normalizeEvent({ category: "m", chart: { type: "bar" } }).ok).toBe(false);
+    expect(normalizeEvent({ category: "m", chart: { type: "bar", data: [] } }).ok).toBe(true);
+  });
+
+  it("keeps free-form extras on nodes and edges", () => {
+    const res = normalizeEvent({
+      category: "a",
+      graph: { op: "add", nodes: [{ id: "n", colour: "red" }] },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.event.graph?.nodes?.[0] as Record<string, unknown>).colour).toBe("red");
+  });
+});
+
+describe("emitWallEvents write safety", () => {
+  const cfg = (dir: string) => ({ runtimeDir: dir } as CopilotConfig);
+
+  it("creates the runtime dir when it does not exist yet", () => {
+    // Only `capture` creates the runtime dir; a producer may emit with no capture
+    // running, and this used to throw an uncaught ENOENT.
+    const dir = join(mkdtempSync(join(tmpdir(), "wall-emit-")), "nested", "runtime");
+    const res = emitWallEvents(cfg(dir), { category: "súgás", text: "hello" });
+    expect(res.emitted).toBe(1);
+    expect(res.dropped).toHaveLength(0);
+    expect(readFileSync(join(dir, "wall-events.jsonl"), "utf-8")).toContain("hello");
+  });
+
+  it("reports an unwritable target instead of throwing", () => {
+    // A file where the runtime dir should be: mkdir fails, and the caller must
+    // still get a result object back.
+    const base = mkdtempSync(join(tmpdir(), "wall-emit-"));
+    const asFile = join(base, "not-a-dir");
+    writeFileSync(asFile, "");
+    let res: ReturnType<typeof emitWallEvents> | undefined;
+    expect(() => { res = emitWallEvents(cfg(asFile), { category: "a", text: "x" }); }).not.toThrow();
+    expect(res?.emitted).toBe(0);
+    expect(res?.dropped[0]?.reason).toContain("could not write");
   });
 });

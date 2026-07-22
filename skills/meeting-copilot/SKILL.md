@@ -138,39 +138,42 @@ another project.
 #### Phase 5 (optional): Mirror analysis to the monitor wall
 
 **Chat is your primary voice; the wall is a secondary artifact.** If a wall is running
-(`npx set-copilot wall` in another terminal, or the user asked for it), **you are the wall's
-producer** (design D9): the same understanding that produces your chat alerts also produces the
-wall's visuals. But the wall must never be your ONLY output — a wall that doesn't visibly update
-looks broken, so the chat carries the liveness and the interpretation (this is the `## Feedback`
-block from `set-copilot prompt`).
+(`npx set-copilot wall` in another terminal, or the user asked for it), the wall must never be
+your ONLY output — a wall that doesn't visibly update looks broken, so the chat carries the
+liveness and the interpretation (the `## Feedback` block from `set-copilot prompt`).
 
-You emit compact structured specs; the wall renders them deterministically (no second model). Push
-one event — or a JSON array — per turn:
+**The categories, the payload shapes, and when a visual is warranted are NOT in this file.** They
+come from the `## Drawing the wall` block of `set-copilot prompt`, which you loaded in Phase 1.
+That is deliberate: a producer inherits that block for free (below), so it is paid for once per
+session instead of being restated on every drawing. This file owns only the mechanics:
 
-```bash
-SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"category":"súgás","zone":"private","text":"…"}'
-```
+**Spawn a fork to draw.** Don't draw inline — you'd stop talking while you did. Spawn a fork of
+yourself (`subagent_type: "fork"`) whose prompt is ONLY the mandate:
 
-The `category` values ARE the ones from your Phase-1 policy / the wall config — do NOT invent
-a taxonomy here; the mechanic is this command, the categories are config. Guidance:
+> Draw the `<category>` slot for what we just discussed: <one line of what to show>.
+> Emit with `SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '<json>'`, then stop.
 
-- **Echo every wall emission in chat.** Whenever you `wall-emit` a graph or chart, also write ONE
-  short chat line saying what you understood (the interpretation, not the raw transcript), so the
-  wall is never the only sign you acted.
-- **Ambiguity is a chat question, not a wall fact.** If the numbers/structure are ambiguous (e.g.
-  values given only relatively), state your assumption in chat or ask — do not render a guessed
-  value on the wall as if it were fact.
-- **Text categories** (súgás, riasztás): emit the SAME short line you'd write in chat. Set
-  `zone:"private"` for a note only you should see, `zone:"both"` for something the room may see;
-  set `priority:"immediate"` on alerts so the wall shows them at once.
-- **A diagram** (an architecture/relationship graph category, e.g. `architektúra`): when the
-  discussion builds up a structure, emit a **compact graph delta** — `{"op":"reset"}` to start a
-  fresh visual on a topic change, then `{"op":"add","nodes":[…],"edges":[…]}` with only what's
-  NEW. Reuse one `visual` id across the deltas of one topic. Emit the spec, never a drawing —
-  the client draws it.
-- **A chart** (a metric category, e.g. `metrika`): when explicit numbers sharing one dimension
-  are spoken, emit `{"type":"bar","title":…,"data":[{"label":…,"value":…}]}`. Never invent
-  numbers that weren't said.
+The fork inherits this entire conversation — that inheritance IS its grounding, which is why the
+mandate can be one line and why it knows what matters. It draws, emits, and exits.
+
+Rules that keep this cheap and correct:
+
+- **One fork, one slot.** Give each fork a single category. If two slots need updating, spawn two
+  forks in the same message — they run concurrently and neither blocks the other.
+- **Never pass a `model` override to a producer fork.** A fork always runs on your model and the
+  override is ignored; asking for a cheaper tier silently does nothing.
+- **Spawn on need, never to wait.** No idling forks polling for work, and never spawn one merely
+  to keep a cache warm — that is pure waste.
+- **YOU echo, not the fork.** After spawning, write ONE short chat line saying what you understood
+  and are having drawn. The fork's output does not reach the chat, so if you don't say it, nothing
+  does.
+- **Ambiguity is a chat question, not a wall fact.** If the structure or numbers are ambiguous
+  (e.g. values given only relatively), state your assumption in chat or ask — never hand a guess
+  to a fork to render as established fact. A wall carries authority; don't lend it to a guess.
+- **Never invent numbers that weren't said.**
+
+For a one-line text note you may skip the fork and `wall-emit` directly — there is nothing to
+compose, so a fork would only add latency.
 
 A malformed event is dropped with a warning, never crashing capture — so mirror freely and move
 on. If no wall is running, skip the emitting — but the chat-feedback rules above (direct address,

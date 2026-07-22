@@ -63,6 +63,29 @@ export interface CopilotPromptConfig {
    * when it stays silent. Multi-party conversation policy is unchanged.
    */
   acknowledge: boolean;
+  /**
+   * The wall drawing contract (fork-wall-producer D2). Rendered into the policy
+   * `set-copilot prompt` prints, so it is loaded ONCE at session start and every
+   * producer fork inherits it from an already-cached prefix instead of having it
+   * re-supplied on each emission. A fork's own prompt carries only its mandate.
+   */
+  drawing: DrawingContractConfig;
+}
+
+/**
+ * When a visual is warranted, and what the project wants drawn. The *categories*
+ * live in `wall.categories` (already config) and are not duplicated here; the
+ * *payload shapes* are engine mechanics and live in the renderer. This holds the
+ * one genuinely project-specific part: the judgement about when to draw at all.
+ */
+export interface DrawingContractConfig {
+  /** Render the contract into the prompt. Off for a project that never uses the wall. */
+  enabled: boolean;
+  /**
+   * Project-owned drawing conventions, one bullet each, rendered verbatim. Replace
+   * these to teach a project's own visual language without forking the skill.
+   */
+  conventions: string[];
 }
 
 /** Regex sources driving the per-line flags the copilot routes on */
@@ -257,6 +280,21 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
   },
 ];
 
+/**
+ * When drawing is worth a fork at all. Deliberately about *judgement*, not
+ * mechanics — the mechanics (payload shapes, the emit command) are engine facts
+ * rendered alongside these. A project replaces this list to teach its own visual
+ * language; the shipped defaults encode the one lesson the Haiku-worker prototype
+ * cost us: an ungrounded producer draws everything and the result is a hairball.
+ */
+export const DEFAULT_DRAWING_CONVENTIONS: string[] = [
+  "Draw when the *structure* of what was said is the point — components and how they relate, a sequence, a comparison of quantities. Prose that is already clear in chat does not need a picture.",
+  "Prefer few nodes that carry the argument over many that are merely true. A diagram with everything in it says nothing; if it exceeds roughly a dozen nodes, you are transcribing, not drawing.",
+  "People, side threads, and scheduling are not architecture. Leave them out of the graph.",
+  "Redraw when the understanding changed, not when new words arrived. An unchanged picture is a correct picture.",
+  "A number is a chart only when it is comparable to another number. A single figure belongs in text.",
+];
+
 export const DEFAULT_WALL: WallConfig = {
   port: 4180,
   categories: DEFAULT_CATEGORIES,
@@ -285,6 +323,7 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     maxLines: 3,
     allowWebResearch: false,
     acknowledge: true,
+    drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },
   },
   detect: DEFAULT_DETECT,
   wall: DEFAULT_WALL,
@@ -408,6 +447,14 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
           : DEFAULTS.copilot.maxLines,
       allowWebResearch: copilot.allowWebResearch === true,
       acknowledge: copilot.acknowledge !== false,
+      drawing: {
+        enabled: copilot.drawing?.enabled !== false,
+        // An empty array is a deliberate "no conventions", not a missing key — only
+        // an absent/malformed list falls back, mirroring how detect.* handles this.
+        conventions: Array.isArray(copilot.drawing?.conventions)
+          ? copilot.drawing.conventions.filter((c): c is string => typeof c === "string")
+          : DEFAULT_DRAWING_CONVENTIONS,
+      },
     },
     detect: {
       urgency: detect.urgency?.length ? detect.urgency : DEFAULT_DETECT.urgency,

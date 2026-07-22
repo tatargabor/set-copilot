@@ -1,16 +1,18 @@
 /**
- * `wall-emit` — the seam the MAIN session uses to push a display event onto the
- * wall (design D9). The "producer" is the Opus session itself; this is its hand.
+ * `wall-emit` — the seam a producer uses to push a display event onto the wall.
+ * The producer is a FORK of the main session (fork-wall-producer D1): it inherits
+ * the chat's context — and with it the grounding — draws its slot, emits here, and
+ * exits. This is its hand.
  *
  * It appends a byte-compatible `DisplayEvent` to `<runtimeDir>/wall-events.jsonl`
- * — the same JSONL append-and-tail seam the fake-feed and `wall-feed` target — so
- * the display core, SSE, director, and client render are untouched.
+ * — the same JSONL append-and-tail seam the fake-feed targets — so the display
+ * core, SSE, director, and client render are untouched.
  *
  * Validation mirrors the `detect.*` philosophy: a malformed event is dropped with
- * a reason, never crashing the caller. The main session can fire-and-forget.
+ * a reason, never crashing the caller. A producer can fire-and-forget.
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type { CopilotConfig } from "../config.js";
@@ -32,6 +34,38 @@ export type NormalizeResult =
  * (a category may carry text, graph, chart, or several), strict on the two fields
  * routing depends on: a non-empty `category`, and a `zone` that defaults to "both".
  */
+/**
+ * Shape-check a `graph` payload. Deliberately minimal — the renderer tolerates extra
+ * keys and free-form node fields — but `op` decides whether the client starts a fresh
+ * visual or appends, so a payload without it would be silently unrenderable. Anything
+ * that lands in the canonical log gets replayed forever, so it is checked on the way in.
+ */
+function badGraph(graph: unknown): string | null {
+  if (typeof graph !== "object" || graph === null || Array.isArray(graph)) {
+    return `graph must be an object, got ${JSON.stringify(graph)}`;
+  }
+  const op = (graph as { op?: unknown }).op;
+  if (op !== "add" && op !== "reset") {
+    return `graph.op must be "add" or "reset", got ${JSON.stringify(op)}`;
+  }
+  for (const key of ["nodes", "edges"] as const) {
+    const v = (graph as Record<string, unknown>)[key];
+    if (v !== undefined && !Array.isArray(v)) return `graph.${key} must be an array if present`;
+  }
+  return null;
+}
+
+/** Shape-check a `chart` payload — `data` drives the whole render, so it must be an array. */
+function badChart(chart: unknown): string | null {
+  if (typeof chart !== "object" || chart === null || Array.isArray(chart)) {
+    return `chart must be an object, got ${JSON.stringify(chart)}`;
+  }
+  const c = chart as Record<string, unknown>;
+  if (c.type !== "bar") return `chart.type must be "bar", got ${JSON.stringify(c.type)}`;
+  if (!Array.isArray(c.data)) return "chart.data must be an array";
+  return null;
+}
+
 export function normalizeEvent(raw: unknown): NormalizeResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { ok: false, reason: "not an object" };
@@ -63,6 +97,15 @@ export function normalizeEvent(raw: unknown): NormalizeResult {
     return { ok: false, reason: "no payload (need text, graph, or chart)" };
   }
 
+  if (o.graph !== undefined && o.graph !== null) {
+    const bad = badGraph(o.graph);
+    if (bad) return { ok: false, reason: bad };
+  }
+  if (o.chart !== undefined && o.chart !== null) {
+    const bad = badChart(o.chart);
+    if (bad) return { ok: false, reason: bad };
+  }
+
   const event: DisplayEvent = { category: category.trim(), zone };
   if (typeof o.text === "string") event.text = o.text;
   if (o.speaker === "mic" || o.speaker === "system") event.speaker = o.speaker;
@@ -81,6 +124,12 @@ export interface EmitResult {
 /**
  * Append one or more events to the wall's canonical log. Accepts a single event
  * object or an array; each is validated independently, bad ones dropped.
+ *
+ * The runtime dir is created if missing: only `capture` creates it today, but a
+ * producer may legitimately emit with no capture running (a wall driven purely by
+ * the session), and an uncaught ENOENT here would break the "never crash the
+ * caller" promise above. A write that still fails is reported as a dropped batch
+ * rather than thrown, for the same reason.
  */
 export function emitWallEvents(cfg: CopilotConfig, raw: unknown): EmitResult {
   const items = Array.isArray(raw) ? raw : [raw];
@@ -96,6 +145,16 @@ export function emitWallEvents(cfg: CopilotConfig, raw: unknown): EmitResult {
     batch += JSON.stringify(norm.event) + "\n";
     result.emitted++;
   }
-  if (batch) appendFileSync(file, batch);
+  if (!batch) return result;
+
+  try {
+    mkdirSync(cfg.runtimeDir, { recursive: true });
+    appendFileSync(file, batch);
+  } catch (e) {
+    // Report, never throw: the caller fires and forgets.
+    const written = result.emitted;
+    result.emitted = 0;
+    result.dropped.push({ reason: `could not write ${file}: ${(e as Error).message} (${written} event(s) lost)` });
+  }
   return result;
 }

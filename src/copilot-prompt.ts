@@ -12,6 +12,7 @@ import { resolve } from "node:path";
 
 import type { CopilotConfig, CopilotPromptConfig, Engagement } from "./config.js";
 import type { AlertCategory } from "./knowledge/types.js";
+import type { Category } from "./wall/types.js";
 
 const RANK: Record<AlertCategory["priority"], number> = { high: 0, medium: 1, low: 2 };
 
@@ -85,6 +86,62 @@ function renderFeedback(): string[] {
   ];
 }
 
+/**
+ * The wall drawing contract (fork-wall-producer D2).
+ *
+ * This block exists to be *inherited*, not re-supplied. A producer is a fork of the
+ * session that loaded this policy, so everything every drawing needs — the category
+ * registry, the payload shapes, the emit command, the project's conventions — is
+ * paid for once here and reaches every fork as a cache read. A fork's own prompt
+ * therefore carries only its mandate ("draw the metrika slot for what we just said").
+ *
+ * The categories come from `wall.categories`, which is already config; they are not
+ * restated here. The conventions come from `copilot.drawing.conventions`. Only the
+ * payload shapes are hardcoded, because those are engine mechanics — the same split
+ * as SKILL.md (mechanics) vs. config (judgement).
+ */
+export function renderDrawingContract(categories: Category[], conventions: string[]): string[] {
+  if (!categories.length) return [];
+
+  const lines: string[] = [
+    "## Drawing the wall",
+    "",
+    "You can put things on the monitor wall. Do it by spawning a **fork** of yourself (`subagent_type: \"fork\"`) with a mandate naming ONE slot; the fork inherits this whole context — which is exactly why it knows what matters — draws, emits, and exits. You keep talking in chat while it works.",
+    "",
+    "Do not pass a model override to a producer fork: a fork always runs on your model, and the override is ignored. Do not spawn a fork to wait for work, and never spawn one just to keep a cache warm.",
+    "",
+    "**Categories** (id → what it renders):",
+    "",
+  ];
+  for (const c of categories) {
+    lines.push(`- \`${c.id}\` ${c.icon ? `${c.icon} ` : ""}— renders as **${c.render}**`);
+  }
+  lines.push(
+    "",
+    "**Emit** one event or an array of them:",
+    "",
+    "```bash",
+    "npx set-copilot wall-emit '<json>'",
+    "```",
+    "",
+    "Payload shapes — `category` is required, plus exactly one payload. `zone` is `private` | `public` | `both` (default `both`); `priority: \"immediate\"` skips the pacing; `visual` groups graph deltas, and `op: \"reset\"` with a new `visual` id starts a new picture:",
+    "",
+    "```json",
+    '{"category":"<text-cat>","zone":"private","text":"…"}',
+    '{"category":"<graph-cat>","visual":"<id>","graph":{"op":"reset","nodes":[{"id":"a","label":"A"}],"edges":[{"source":"a","target":"b","label":"…"}]}}',
+    '{"category":"<chart-cat>","chart":{"type":"bar","title":"…","unit":"%","data":[{"label":"…","value":1}]}}',
+    "```",
+    "",
+  );
+
+  if (conventions.length) {
+    lines.push("**When to draw:**", "");
+    for (const c of conventions) lines.push(`- ${c}`);
+    lines.push("");
+  }
+  return lines;
+}
+
 export function renderAlerts(alerts: AlertCategory[], opts?: Partial<CopilotPromptConfig>): string {
   const engagement = opts?.engagement ?? "reactive";
   const maxLines = opts?.maxLines ?? 3;
@@ -141,9 +198,22 @@ export function readInstructions(cfg: CopilotConfig): string {
   return readFileSync(path, "utf-8").trim() + "\n";
 }
 
-/** The full policy block: categories first, then the project's own instructions. */
+/**
+ * The full policy block: alert categories, then the wall drawing contract, then the
+ * project's own instructions. The drawing contract sits here rather than in the skill
+ * so it is loaded once and inherited by every producer fork (fork-wall-producer D2).
+ */
 export function renderCopilotPrompt(cfg: CopilotConfig): string {
   const parts = [renderAlerts(cfg.copilot.alerts, cfg.copilot)];
+  // Tolerate a hand-built config: CopilotConfig is exported, so consumers construct
+  // one, and a missing wall/drawing section means "no wall", not a crash.
+  if (cfg.copilot.drawing?.enabled) {
+    const drawing = renderDrawingContract(
+      cfg.wall?.categories ?? [],
+      cfg.copilot.drawing.conventions ?? [],
+    );
+    if (drawing.length) parts.push(drawing.join("\n"));
+  }
   const instructions = readInstructions(cfg);
   if (instructions) parts.push("## Project instructions", "", instructions);
   return parts.join("\n");
