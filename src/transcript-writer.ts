@@ -14,6 +14,12 @@ export interface TranscriptLine {
   urgency?: "high";
   /** True when the text matches a `detect.question` pattern */
   question?: boolean;
+  /**
+   * True when the mic speaker addressed the copilot by name (`copilot.names` /
+   * `detect.command`). `poll` returns at once on such a line rather than waiting for
+   * the silence event — a direct instruction should not sit behind an ambient gate.
+   */
+  command?: boolean;
 }
 
 export interface SilenceEvent {
@@ -78,6 +84,7 @@ export class TranscriptWriter {
   private topicMatcher: (text: string) => string[];
   private urgencyRe: RegExp | null;
   private questionRe: RegExp | null;
+  private commandRe: RegExp | null;
   /** Wall-clock time of the last final transcript event (any speaker); 0 = no speech yet */
   private lastEventAt = 0;
   /** True once the silence event for the current silence period has been written */
@@ -92,6 +99,7 @@ export class TranscriptWriter {
     const detect = opts?.detect ?? DEFAULT_DETECT;
     this.urgencyRe = compileDetector(detect.urgency, "urgency");
     this.questionRe = compileDetector(detect.question, "question");
+    this.commandRe = compileDetector(detect.command ?? [], "command");
 
     this.buffers = {
       mic: { text: "", tokenCount: 0, lastTs: 0, lastActivity: 0 },
@@ -225,6 +233,12 @@ export class TranscriptWriter {
     }
     if (this.questionRe?.test(text)) {
       line.question = true;
+    }
+    // Only the mic speaker can address the copilot — a name heard on the system
+    // channel is someone else's meeting, not an instruction to us. Same restriction
+    // the voice-command scoping already uses.
+    if (speaker === "mic" && this.commandRe?.test(text)) {
+      line.command = true;
     }
     appendFileSync(this.outputPath, JSON.stringify(line) + "\n");
   }

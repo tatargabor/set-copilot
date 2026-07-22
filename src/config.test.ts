@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { loadConfig, normalizeKeywords, DEFAULT_ALERTS, CONFIG_FILENAME } from "./config.js";
+import { loadConfig, normalizeKeywords, namePattern, DEFAULT_ALERTS, CONFIG_FILENAME } from "./config.js";
 
 /** loadConfig() reads the real user config dir — point it at an empty temp dir so
  *  the developer's own ~/.config/set-copilot cannot leak into the assertions. */
@@ -181,5 +181,71 @@ describe("copilot engagement config", () => {
     const cfg = loadConfig(project);
     expect(cfg.copilot.engagement).toBe("reactive");
     expect(cfg.copilot.maxLines).toBe(3);
+  });
+});
+
+describe("copilot.names → detect.command", () => {
+  it("ships 'copilot' as the default address form", () => {
+    const cfg = loadConfig(project);
+    expect(cfg.copilot.names).toEqual(["copilot"]);
+    expect(cfg.detect.command).toEqual([namePattern("copilot")]);
+  });
+
+  it("lets a project use its own nicknames", () => {
+    writeFileSync(
+      join(project, CONFIG_FILENAME),
+      JSON.stringify({ copilot: { names: ["copilot", "tesa"] } }),
+    );
+    const cfg = loadConfig(project);
+    expect(cfg.copilot.names).toEqual(["copilot", "tesa"]);
+    expect(cfg.detect.command).toEqual([namePattern("copilot"), namePattern("tesa")]);
+  });
+
+  it("merges names with raw detect.command patterns rather than overriding", () => {
+    // Names are the friendly front door; detect.command the raw-regex one. Both
+    // set the same flag, so a project can use either or both.
+    writeFileSync(
+      join(project, CONFIG_FILENAME),
+      JSON.stringify({ copilot: { names: ["tesa"] }, detect: { command: ["^hey\\b"] } }),
+    );
+    const cfg = loadConfig(project);
+    expect(cfg.detect.command).toEqual([namePattern("tesa"), "^hey\\b"]);
+  });
+
+  it("drops blank and non-string names", () => {
+    writeFileSync(
+      join(project, CONFIG_FILENAME),
+      JSON.stringify({ copilot: { names: ["copilot", "  ", 42, ""] } }),
+    );
+    expect(loadConfig(project).copilot.names).toEqual(["copilot"]);
+  });
+});
+
+describe("namePattern", () => {
+  it("anchors the left side with a Unicode boundary, never \\b", () => {
+    // \b treats á as a boundary and silently breaks every accented language.
+    expect(namePattern("copilot")).toContain("\\p{L}");
+    expect(namePattern("copilot")).not.toContain("\\b");
+  });
+
+  it("escapes regex metacharacters — a name is a word, not a pattern", () => {
+    const re = new RegExp(namePattern("c++"), "iu");
+    expect(re.test("hey c++ do this")).toBe(true);
+    expect(re.test("hey cccc do this")).toBe(false);
+  });
+
+  it("leaves the right side open so suffixes still match", () => {
+    const re = new RegExp(namePattern("copilot"), "iu");
+    expect(re.test("megkérdeztem a copilotot")).toBe(true);
+    expect(re.test("beszéltem a copilottal")).toBe(true);
+  });
+
+  it("does not match a vowel-final name whose stem changes when suffixed", () => {
+    // Hungarian lengthens a final -a before a suffix (tesa → tesá-), so the bare
+    // stem is genuinely absent from the inflected form. Documented, not fixed:
+    // guessing at morphology would cost false positives. Configure both forms.
+    const re = new RegExp(namePattern("tesa"), "iu");
+    expect(re.test("tesa, nézd")).toBe(true);
+    expect(re.test("tesám, nézd")).toBe(false);
   });
 });

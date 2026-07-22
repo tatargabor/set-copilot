@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TranscriptWriter, type TranscriptLine } from "./transcript-writer.js";
+import { namePattern } from "./config.js";
 import type { TranscriptEvent } from "./soniox-rt.js";
 
 let dir: string;
@@ -134,5 +135,51 @@ describe("TranscriptWriter", () => {
     const l = lines();
     expect(l[0]!.topics).toEqual(["invoice"]);
     expect(l[1]!.topics).toBeUndefined();
+  });
+});
+
+describe("addressing the copilot by name", () => {
+  const cmd = { urgency: [], question: [], command: [namePattern("copilot")] };
+
+  it("flags a line where the mic speaker names the copilot", () => {
+    writer = new TranscriptWriter(out, { detect: cmd });
+    writer.onTranscript(token("Copilot, draw the pipeline."));
+    expect(lines()[0]!.command).toBe(true);
+  });
+
+  it("matches an agglutinated form — Hungarian suffixes attach to the stem", () => {
+    writer = new TranscriptWriter(out, { detect: cmd });
+    writer.onTranscript(token("Megkérdeztem a copilotot."));
+    writer.onTranscript(token(" Beszéltem a copilottal."));
+    expect(lines().map((l) => l.command)).toEqual([true, true]);
+  });
+
+  it("does NOT match the name inside another word", () => {
+    // The leading boundary is what stops this; a trailing one would break the
+    // agglutinated forms above, so only the left side is anchored.
+    writer = new TranscriptWriter(out, { detect: cmd });
+    writer.onTranscript(token("The autocopilot handles it."));
+    expect(lines()[0]!.command).toBeUndefined();
+  });
+
+  it("ignores the name on the system channel — that is someone else's meeting", () => {
+    writer = new TranscriptWriter(out, { detect: cmd });
+    writer.onTranscript(token("Copilot, show the chart.", "system"));
+    expect(lines()[0]!.command).toBeUndefined();
+  });
+
+  it("leaves ordinary speech unflagged", () => {
+    writer = new TranscriptWriter(out, { detect: cmd });
+    writer.onTranscript(token("We shipped it on Tuesday."));
+    expect(lines()[0]!.command).toBeUndefined();
+  });
+
+  it("supports a project's own nickname", () => {
+    writer = new TranscriptWriter(out, {
+      detect: { urgency: [], question: [], command: [namePattern("tesa")] },
+    });
+    writer.onTranscript(token("Tesa, rajzold ki."));
+    writer.onTranscript(token(" Copilot, rajzold ki."));
+    expect(lines().map((l) => l.command)).toEqual([true, undefined]);
   });
 });

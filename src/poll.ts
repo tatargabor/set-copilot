@@ -67,7 +67,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function runPoll(cfg: CopilotConfig, maxWaitSec = 60): Promise<void> {
   const file = cfg.transcriptOutput;
   const stateFile = join(cfg.runtimeDir, "poll-offset");
-  const tick = 2000;
+  // 250ms, not 2000: the tick is pure detection granularity added to every reaction,
+  // and re-reading one small file eight times a second costs nothing next to the
+  // seconds it saves. Measured: the old tick added up to 2s to every round.
+  const tick = 250;
 
   let last = 0;
   if (existsSync(stateFile)) {
@@ -88,7 +91,17 @@ export async function runPoll(cfg: CopilotConfig, maxWaitSec = 60): Promise<void
     if (all.length > last) {
       const pending = filterLines(all.slice(last));
       const early =
-        pending.some((l) => l.includes('"urgency":"high"') || l.includes('"question":true')) ||
+        pending.some(
+          (l) =>
+            l.includes('"urgency":"high"') ||
+            l.includes('"question":true') ||
+            // Addressed by name: a direct instruction must not wait behind the
+            // ambient silence gate. Safe because a transcript line is already a
+            // complete sentence — the writer flushes on `. ? !`, so the silence
+            // event is a second, redundant coherence check, worth keeping only
+            // for ambient listening where the copilot infers rather than obeys.
+            l.includes('"command":true'),
+        ) ||
         (pending.some((l) => l.includes('"type":"silence"')) && pending.some((l) => l.includes('"speaker"')));
       if (early) break;
     }

@@ -70,6 +70,18 @@ export interface CopilotPromptConfig {
    * re-supplied on each emission. A fork's own prompt carries only its mandate.
    */
   drawing: DrawingContractConfig;
+  /**
+   * What the copilot answers to. Plain words, not regexes — naming one of these
+   * marks the line `command: true`, and `poll` returns at once instead of waiting
+   * for the silence gate. Default `["copilot"]`; add nicknames or slang freely
+   * (`["copilot", "tesa"]`).
+   *
+   * Only address forms belong here. An imperative ("draw this") is ambiguous in a
+   * meeting — usually aimed at another person — and a false positive costs a
+   * wasted reaction. For anything more complex than a word, use `detect.command`,
+   * which takes raw regexes and is merged with these.
+   */
+  names: string[];
 }
 
 /**
@@ -94,6 +106,17 @@ export interface DetectionConfig {
   urgency: string[];
   /** A match sets `question: true` */
   question: string[];
+  /**
+   * A match sets `command: true` — the speaker is addressing the copilot and wants
+   * a reaction NOW. `poll` returns immediately on such a line instead of waiting for
+   * the silence event that closes a spoken thought unit.
+   *
+   * This is safe because a transcript line is already a complete sentence (the writer
+   * flushes on `. ? !`); the silence gate is a second, redundant coherence check. It
+   * is worth keeping for *ambient* listening, where the copilot infers rather than
+   * obeys and reacting mid-thought is noisy — but not for a direct instruction.
+   */
+  command: string[];
 }
 
 export interface CopilotConfig {
@@ -215,6 +238,10 @@ export const DEFAULT_DETECT: DetectionConfig = {
     // hu
     "(?<=^|[^\\p{L}])(hib[aá]|probléma|nem működ|sürgős|nem jó|rossz|elroml|baj van|nem stim|nem ok|gond van)",
   ],
+  // Empty by default: the shipped trigger is the address form, which comes from
+  // `copilot.names` and is merged in at load time. This list is the escape hatch
+  // for a project that needs a pattern rather than a word.
+  command: [],
   question: [
     // language-independent
     "[?]\\s*$",
@@ -301,6 +328,26 @@ export const DEFAULT_WALL: WallConfig = {
   windows: DEFAULT_WINDOWS,
 };
 
+/** The default name — the copilot answers to itself unless a project renames it. */
+export const DEFAULT_NAMES: string[] = ["copilot"];
+
+/**
+ * Turn a name the copilot answers to into a detector pattern.
+ *
+ * A leading Unicode boundary (never `\b`, which treats `á` as a boundary and breaks
+ * every accented language) and NO trailing one: Hungarian agglutinates, so
+ * "copilotot" / "copilottal" must match the same stem. The name itself is escaped -
+ * it is a word from config, not a pattern, and `c++` must not compile as a quantifier.
+ *
+ * Known limit: a name ending in a vowel changes stem when suffixed (tesa -> tesa-with-
+ * accent), so only its bare form matches. Guessing at morphology would buy false
+ * positives; configure both forms instead.
+ */
+export function namePattern(name: string): string {
+  const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return `(?<=^|[^\\p{L}\\p{N}])${escaped}`;
+}
+
 const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
   language: "en",
   runtimeDir: "/tmp/set-copilot",
@@ -324,6 +371,7 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     allowWebResearch: false,
     acknowledge: true,
     drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },
+    names: DEFAULT_NAMES,
   },
   detect: DEFAULT_DETECT,
   wall: DEFAULT_WALL,
@@ -397,6 +445,11 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
   // also having to restate the user-level `keywords`.
   const knowledge: RawKnowledge = { ...userCfg.knowledge, ...projCfg.knowledge };
   const copilot = { ...userCfg.copilot, ...projCfg.copilot };
+  // Resolved once: the names feed both `copilot.names` (what the policy shows) and
+  // `detect.command` (what flags the line).
+  const resolvedNames = Array.isArray(copilot.names)
+    ? copilot.names.filter((n): n is string => typeof n === "string" && !!n.trim())
+    : DEFAULT_NAMES;
   const detect = { ...userCfg.detect, ...projCfg.detect };
   const wall = { ...userCfg.wall, ...projCfg.wall };
 
@@ -455,10 +508,14 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
           ? copilot.drawing.conventions.filter((c): c is string => typeof c === "string")
           : DEFAULT_DRAWING_CONVENTIONS,
       },
+      names: resolvedNames,
     },
     detect: {
       urgency: detect.urgency?.length ? detect.urgency : DEFAULT_DETECT.urgency,
       question: detect.question?.length ? detect.question : DEFAULT_DETECT.question,
+      // Names are the friendly front door, detect.command the raw-regex one; both
+      // set the same flag, so they merge rather than override.
+      command: [...resolvedNames.map(namePattern), ...(detect.command ?? [])],
     },
     wall: {
       // Categories/windows are validated where they are consumed (resolveCategories,
