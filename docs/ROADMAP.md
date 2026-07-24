@@ -115,6 +115,21 @@ A mód-váltás cél-állapotai: *teljes jegyzet* · *súgó/rövid* · *csak ri
 > pontos, szűk megbízás megspórolja a forknak a forrásolvasást — ezért éri meg a doboz-policynek pontosnak lennie.
 > A `wall-feed` spec „Latency budget"-je ezért **mérésre hivatkozik**, nem a régi Haiku-becslésre (1–4 mp).
 
+> **Állapot — spec↔kód szinkron + feedback szétbontás.** Egy adverzális audit a 7 alkalmazott
+> specet a kódhoz igazította (`spec-sync-corrections`: transcript-kategória kivéve, gráf-render az
+> A-path valóságra, zóna window-szintű). A `wall-feedback-and-replay` change szétbontva: a **chat↔fal
+> feedback szerződés már szállítva** (`copilot.acknowledge`, `renderFeedback`), külön `wall-feedback`
+> specként archiválva; a maradék a **scroll-history replay** (`wall-scroll-replay` change, még
+> építendő). Két adósság ROADMAP-tétellé vált (lásd lent).
+>
+> _Nyitott adósságok (nem spec-driven change, hanem ROADMAP):_
+> - **Böngészős verifikációs kapu** — egy ember a böngésző előtt lefuttat egy checklistet
+>   (reconnect/tab-reload utáni helyes állapot; élő chart-frissítés rárendelődik; paced-swap
+>   dwell/override érzet; gráf-append; zóna-szűrés `/` vs `/wall`). A headless SSE-próba ezt a réteget
+>   nem fedi; ez zárja le a `monitor-wall-display` task 7.3/7.4-et.
+> - **Élő latency-mérés** — modalitásonkénti valós számok (szöveg emisszió→render-hop; gráf/chart
+>   spec-emisszió→render) stabil, nem-újraindított szerveren, a kutatási becslés helyett.
+
 A #4 output-sink csúcsra járatott változata. Egy **lokál HTML fal**, amit a CLI szolgál ki, és ami:
 
 - **Kétnézetes**: **privát** zóna (amit csak én nézek — súgás, mit mondjak, ellentmondás-riasztás, következő pont) és **publikus** zóna (amit szándékosan kifelé mutatok — megbeszélésben képernyő-megosztva vagy megosztható URL-en). A `mic`/`system` primitív eleve tudja, mi az „enyém" és mi „mindenkié".
