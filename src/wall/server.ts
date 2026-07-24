@@ -22,7 +22,7 @@ import {
 } from "./director.js";
 import { normalizeEvent } from "./emit.js";
 import type { EventSource } from "./event-source.js";
-import { windowCats, zoneMatches } from "./routing.js";
+import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
   type DisplayEvent, type GraphEdge, type GraphNode, type Pacing,
   type ResolvedWindow, type ShowCommand, type WireMessage, type Zone, isShowCommand,
@@ -213,6 +213,13 @@ export class WallServer {
       return;
     }
     msg = norm.event;
+
+    // Drop an event whose category is not in the registry at the funnel, with a
+    // warning, rather than letting it accumulate graph state and reach clients
+    // only to be silently ignored by every box's `cats` gate (display-categories:
+    // "Drop an unknown category").
+    if (!resolveEventCategory(msg, this.opts.registry)) return;
+
     this.accumulate(msg);
     this.broadcast(msg);
 
