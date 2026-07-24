@@ -36,6 +36,6 @@ Purpose fills.
 
 ## 5. Post-archive Purpose fills (direct edits to applied specs)
 
-- [ ] 5.1 `openspec/specs/box-policy/spec.md` — replace `Purpose: TBD` with a real one-liner
-- [ ] 5.2 `openspec/specs/display-layout/spec.md` — replace `Purpose: TBD` with a real one-liner
-- [ ] 5.3 `openspec/specs/fork-producer/spec.md` — replace `Purpose: TBD` with a real one-liner
+- [x] 5.1 `openspec/specs/box-policy/spec.md` — replace `Purpose: TBD` with a real one-liner
+- [x] 5.2 `openspec/specs/display-layout/spec.md` — replace `Purpose: TBD` with a real one-liner
+- [x] 5.3 `openspec/specs/fork-producer/spec.md` — replace `Purpose: TBD` with a real one-liner

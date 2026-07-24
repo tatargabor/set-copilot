@@ -1,7 +1,10 @@
 # box-policy Specification
 
 ## Purpose
-TBD - created by archiving change wall-layout-and-box-policy. Update Purpose after archive.
+How the copilot's content mandate is scoped to an individual box — the instructions, alert
+categories, engagement level, and drawing conventions that govern what a box emits — layered over
+the session-global `copilot.*` policy and rendered as one section per box by `set-copilot prompt`.
+A box's mandate is independent of the window-level zone that routes where its events may appear.
 ## Requirements
 ### Requirement: Policy is scopable to a box
 

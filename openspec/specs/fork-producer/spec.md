@@ -1,7 +1,10 @@
 # fork-producer Specification
 
 ## Purpose
-TBD - created by archiving change fork-wall-producer. Update Purpose after archive.
+What a wall producer is: a fork of the main Claude Code session (`subagent_type: "fork"`) that
+inherits the chat's context as its grounding, draws one slot on demand, emits through the
+`wall-emit` seam, and exits — no separate model client, no polling, running on the parent's model
+tier. The drawing contract it needs lives in the base context (see `copilot.drawing`).
 ## Requirements
 ### Requirement: The producer is a fork of the main session
 

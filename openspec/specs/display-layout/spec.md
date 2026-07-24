@@ -1,7 +1,10 @@
 # display-layout Specification
 
 ## Purpose
-TBD - created by archiving change monitor-wall-display. Update Purpose after archive.
+How a monitor-wall window is composed and rendered: the three declarative layers
+(layout → box position → box) over a native CSS Grid substrate, per-box scroll / latest / paced
+behaviors, the payload-selected render types (`text`, `graph`, `chart`, `image`, `webpage`), and
+the visual grouping that gives the paced canvas distinct visuals to swap between.
 ## Requirements
 ### Requirement: Slot-based layout composition
 
