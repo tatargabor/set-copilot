@@ -18,6 +18,17 @@ Tests cover the pure logic only (config resolution, keyword matching, source glo
 
 `set-copilot doctor` is the fastest way to verify a change end-to-end: it probes the real audio chain (binary → device → bytes → signal level) rather than guessing, and reports whether Soniox credentials resolve.
 
+## OpenSpec workflow
+
+Spec-driven changes live in `openspec/changes/`; the applied source of truth is `openspec/specs/`. Drive this work through the **`/opsx:*` skills** (`/opsx:propose`, `/opsx:apply`, `/opsx:archive`, `/opsx:continue`, `/opsx:status`), **not** the raw `openspec` CLI by hand — the skills enforce the workflow (context-file reads, status/artifact ordering, sync-then-archive). The bare CLI is fine only for quick read-only inspection.
+
+**Commit at each step.** An `/opsx:apply` (implementation) and an `/opsx:archive` (spec sync + move) are each a commit-worthy unit — commit after each rather than batching many changes into one. Doing it after the fact is fine when a run got ahead of its commits, but the default is one commit per apply and one per archive.
+
+Two archive-time invariants, each learned from a real abort:
+
+1. **Archive in dependency order.** A change that `## MODIFIED`s a requirement can only archive *after* the change that `## ADDED` it — the base spec must exist first. If an archive fails with "target spec does not exist", archive the originating change first.
+2. **A MODIFIED requirement must carry forward every base scenario.** The archiver refuses to silently drop a scenario. If a scenario is genuinely obsolete, don't just delete it — reframe it to its surviving intent or move it under a `## REMOVED` requirement. And a delta that removes *every* requirement from a spec leaves it empty (invalid): retire the capability with a single tombstone `## ADDED` requirement that redirects to its successor, so the audit trail and the removal reasons survive.
+
 ## Architecture
 
 A CLI + library that captures audio, streams it to Soniox for speech-to-text, and writes sentence-level JSONL that a **Claude Code session** reads. There is no server and no second AI: the "copilot intelligence" is the Claude Code session running the skills in `skills/`.
@@ -39,13 +50,28 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
 - **`src/copilot-prompt.ts`** — renders `copilot.alerts` + `copilot.instructions` into the policy markdown that `set-copilot prompt` prints and the skill loads at session start.
 - **`src/knowledge/`** — the knowledge-adapter layer. `run-digest.ts` resolves `knowledge.adapter` ("markdown" built-in, or a path to a module default-exporting a `(ctx) => KnowledgeAdapter` factory) and writes three artifacts into the runtime dir: `keyword-index.json`, `knowledge-context.json`, `knowledge-digest.md`. Capture reads the keyword index; the skills read the other two. `sources.ts` resolves `knowledge.sources` (dirs, files, globs) with a small dependency-free glob.
 
+- **`src/wall/`** — the monitor wall: a local HTTP+SSE server (`server.ts`) rendering a category-tagged event stream that producers append to `<runtimeDir>/wall-events.jsonl` via `wall-emit` (`emit.ts`). The producer is a *fork* of the main session, not a second model.
+
+### The wall's display model: window → layout → box position → box
+
+Three layers, deliberately separate — collapsing them is what the `wall-layout-and-box-policy` change undid:
+
+- A **layout** (`wall.layouts`) is geometry only: named box positions and their grid arrangement. `layout.ts` resolves a window against it; `wall-core.mjs` derives the CSS Grid template. There is no fixed column count — `stacked` and `third-two-thirds` are both just config, and a window is reshaped by swapping an id.
+- A **box** (`window.boxes`) is content only: `behavior`, `pacing`, category subscriptions, and an optional `policy`. Moving a box to another position must not change how it behaves.
+- The **renderer follows the event's payload**, not the box or the category. `render` on a category is only a default. That is what lets one presentation box hold a graph, then a chart, then an image. The vocabulary (`text`/`graph`/`chart`/`image`/`webpage`) is closed in `RenderType`: extending it is an engine change, never a config one.
+
+A window's legacy `slots` list still resolves (onto `stacked`), so an old config keeps working and keeps looking the same.
+
+**Public-zone redaction** (`redaction.ts`) runs server-side at ingest, on the funnel every producer shares — a producer-side filter fails open. Two rules deliberately break the wall's usual "drop it with a warning and carry on" posture, because here a mistake is *published* rather than logged: a redaction error **withholds** the event, and an uncompilable pattern is warned about loudly. It is a shape-matcher, not a classifier and not a security boundary — `zone: "private"` remains the only reliable way to keep something off the wall. The private view marks what the public wall did not get, so a silent redaction is never mistaken for one that did not run.
+
 ### Everything project-specific is config, not code
 
-This package was extracted from one ERP project, and the recurring failure mode is that project leaking back into the engine. Three seams exist to prevent it — when a behavior feels domain-specific, it belongs behind one of them, not in a regex in `src/`:
+This package was extracted from one ERP project, and the recurring failure mode is that project leaking back into the engine. Four seams exist to prevent it — when a behavior feels domain-specific, it belongs behind one of them, not in a regex in `src/`:
 
 - **`copilot.alerts`** — the alert taxonomy (⚠ contradiction / 📋 context / ✏ new decision / ❓ question) is *data with defaults in `config.ts`*, not prose in the skill. `SKILL.md` owns the mechanics; the policy comes from `set-copilot prompt`. Adding a category must never mean editing the skill.
 - **`detect.urgency` / `detect.question`** — the regexes behind the per-line flags. Defaults cover English + Hungarian; anything else is configured, and a user-supplied bad regex is dropped with a warning rather than killing the capture.
 - **`knowledge.keywords` + `autoKeywords`** — a flat `[{topic, stems}]` list (named groups are flattened for back-compat), with topics auto-derived from page titles, `##` headings, and frontmatter tags.
+- **`copilot.drawing` (the drawing contract)** — the knowledge a producer fork needs to draw the wall: the category-registry summary, the `wall-emit` payload shapes, the render types, and the when-to-graph/chart/text conventions. Like `copilot.alerts`, it is *data with defaults in `config.ts`*, rendered into `set-copilot prompt` as its own block — so a project can rename its categories or reshape what gets drawn without forking the skill. It lives in the base context (loaded once, cache-warm) precisely because every draw needs it; the per-draw fork prompt stays a one-line mandate.
 
 Word boundaries are Unicode (`\p{L}\p{N}`), never `\b` or an enumerated Latin+Hungarian character class — `\b` treats `á` as a boundary and silently breaks every accented language.
 

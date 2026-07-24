@@ -97,6 +97,24 @@ A mód-váltás cél-állapotai: *teljes jegyzet* · *súgó/rövid* · *csak ri
 > megmarad, mert a fő session **spec-et emittál, nem rajzot** (a render ~10 ms JS a kliensen), és csak
 > amikor indokolt. A `meeting-copilot` skill Phase 5-je tanítja a sessiont az emittálásra.
 
+> **Állapot — fork-producer (a rajzoló lekerül a chat hot-pathjáról).** A `fork-wall-producer` change
+> a producert a fő session **forkjává** tette (`subagent_type: "fork"`): a fork örökli a teljes
+> beszélgetési kontextust (ez a grounding, ami a Haiku-workerből hiányzott), háttérben rajzol, `wall-emit`-tel
+> emittál, és kilép — így a **chat nem áll meg**, amíg a fal frissül. Modell-mintázat három rétegen:
+> **emisszió-per-igény** (nem long-poll, nem tickenként), **szekciónkénti szűk megbízás** (egy fork = egy slot,
+> párhuzamosan indíthatók), és a rajzolási tudás (kategória-registry, `wall-emit` payload-alakok, render-típusok,
+> konvenciók) a **bázis-kontextusba** kerül egyszer, cache-elve — a fork-prompt csak egy-két mondatos megbízás.
+> A fork a szülő modell-tierjén fut (Opus 4.8; a `model` override-ot a fork ignorálja) — tudatosan vállalt,
+> mert értelmes agenthez a Haiku kevés volt, és a fork rövid életű + túlnyomórészt cache-read a bemenete.
+> A wall-út **modell-SDK-mentes** (a `@anthropic-ai/sdk`, a `graph-worker.ts`/`run-feed.ts` holt kód és a
+> `wall-feed` subcommand törölve — a build friss klónon átmegy).
+>
+> _Mért latency-profil (élő fork-sessionökből, `wall-layout-and-box-policy` design):_ egy rajzoló fork
+> **16–62 mp** és **47–76k token**; a forrást is olvasó fork a lassú vég (**42–62 mp**), a csak komponáló
+> **~17 mp**, a közvetlen `wall-emit` (szöveges jegyzet, fork nélkül) **~1 mp**. Tanulság a promptolásra: egy
+> pontos, szűk megbízás megspórolja a forknak a forrásolvasást — ezért éri meg a doboz-policynek pontosnak lennie.
+> A `wall-feed` spec „Latency budget"-je ezért **mérésre hivatkozik**, nem a régi Haiku-becslésre (1–4 mp).
+
 A #4 output-sink csúcsra járatott változata. Egy **lokál HTML fal**, amit a CLI szolgál ki, és ami:
 
 - **Kétnézetes**: **privát** zóna (amit csak én nézek — súgás, mit mondjak, ellentmondás-riasztás, következő pont) és **publikus** zóna (amit szándékosan kifelé mutatok — megbeszélésben képernyő-megosztva vagy megosztható URL-en). A `mic`/`system` primitív eleve tudja, mi az „enyém" és mi „mindenkié".
@@ -229,6 +247,31 @@ Javaslat: **hibrid** — a *tudás-delta* mindig szöveg-overlay; a *viselkedés
 
 **Van hasonló?** A meeting-AI-k (Otter, Granola, Fireflies) *fix* beállításokkal futnak; menet közben, hangból/chatből tanuló és a tudását következő ülésre átvivő copilot — a `mic`/`system` scoping-gal védve — nincs termékként. A #5 (personák) *statikus* módjaival szemben ez a **futásidejű, tanuló** változat.
 
+### 9. CC-natív felület-kihasználtság — kihagyott Claude Code funkciók ⭐
+
+A copilot „intelligenciája" egy Claude Code session — így a CC saját felület-funkciói ingyen platform-képességek, amiket ma csak részben használunk ki. (Kutatás: 2026-07-24.)
+
+**Amit már használunk** (nem cél): hookok (`.claude/settings.json` → a személyes `set-hook-*` bin-ek: `SessionStart`/`Stop`/`SubagentStop`/…), OS-szintű desktop notify (`detect … notify: true` → `notify-send`/`osascript`), fork-producer (`subagent_type: "fork"`), Monitor-alapú `poll` loop.
+
+**Amit nem használunk ki — prioritás szerint:**
+
+1. **Csatlakoztatott claude.ai MCP-k *fogyasztása* groundingként** ⭐ (legnagyobb nyereség). A sessionben él a **Google Calendar / Gmail / Drive** connector, de a `meeting-copilot` skill egyiket sem érinti — a copilot nem tudja, *kinek* a meetingje, kik a résztvevők, mi a linkelt napirend-doksi; csak a diktált szövegből + lokális `knowledge.sources`-ből groundol. Bekötés: a `start` fázisban lekérni az aktuális naptáresemény címét/résztvevőit + a csatolt Drive-doksit, és knowledge-kontextusként betolni. Illik a „domain-tudás = config" elvbe: egy `knowledge.adapter`, ami MCP-ből olvas. **Megkülönböztetés a #7-től:** a #7 set-copilot *mint* MCP szerver (kimenet, gépi *olvasó* felénk); ez **bemenet** (mi fogyasztunk külső MCP-t). A kettő ortogonális.
+2. **Statusline** — ma nulla config. Egy `🔴 capture active · N sor · utolsó: <téma>` a CC statusline-on ambient állapotot ad anélkül, hogy a wallt kéne nézni. Van rá `statusline-setup` agent.
+3. **`PushNotification` (CC cross-surface push)** — ma csak *lokális* `notify-send` van. A CC push eléri a usert akkor is, ha nincs a gép előtt — heads-down meetingnél egy urgent/question detektre ez a helyes csatorna.
+4. **Hook-bővítés: árva-process takarítás** — a `SessionStart`-ot már használjuk; egy session-végi hook garantálná a `capture`+`wall` leállítását, hogy egy elfelejtett `/dd` vagy összeomló session ne hagyjon árva, még felvevő processzt / élő wall-szervert. (Ebből a `wall-stop` rész **először implementálva** — lásd lentebb.)
+
+**Cowork-hordozhatóság.** A set-copilot *capture-szíve lokális-only*: kell **mikrofon + lokális audio-bináris** (`parec`/`sox`), lokális runtime-dir + PID-életciklus, és a wall egy **lokális HTTP+SSE szerver monitoron**. Felhős/cowork környezetben nincs mikrofon/audio-eszköz/lokál monitor → **a capture inherensen nem fut cowork-ban.** A fenti javaslatok viszont megoszlanak:
+
+| Feature | Cowork | Miért |
+|---|---|---|
+| MCP grounding (Calendar/Drive) | ✅ cowork-native | claude.ai connector — ott él natívan (interaktív auth headless/cron alatt hiányozhat) |
+| PushNotification | ✅ cross-surface | CC-felületek közt megy |
+| Statusline | ❌ terminál-CC-only | web/cowork UI nem így rendereli |
+| Hookok (`settings.json`) | ⚠️ nagyrészt lokál-CC | shell-hook a lokális gépen fut |
+| Fork-producer | ✅ bárhol, ahol CC fut | harness-szintű |
+
+**Következő lépés (ha ez a szál jön):** az **MCP-grounding adapter** — egyszerre a legnagyobb funkcionális nyereség *és* az egyetlen cowork-kompatibilis irány (sőt, ott van igazán otthon).
+
 ## Usage receptek (tervezett docs)
 - **Teams / Google Meet mellett:** system audio routing (BlackHole aggregate device), privát second-monitor súgógép setup, „mikor mit lát a másik fél".
 - Sink → forgatókönyv térkép: súgógép = privát; Artifact URL = megosztott jegyzet; teleprompter oldal = képernyő-megosztás.
@@ -243,6 +286,7 @@ Javaslat: **hibrid** — a *tudás-delta* mindig szöveg-overlay; a *viselkedés
 - **Nincs npm `postinstall` hook a sox-ra** — Linuxon/CI-n/no-brew gépen törne; a `npm i -g` user nem is kapja a repo-fájlokat. Helyette: `doctor` kiírja a `brew install sox`-ot, a repót klónozóknak `Brewfile` + `brew bundle`.
 - **Soniox kulcs helye:** user-szintű `~/.config/set-copilot/.env` (0600), a `.env.example` a commitolt sablon; a kulcs sosem kerül a repóba.
 - **A `mic`/`system` tagelés a fő primitív** — új feature-öket erre építünk, nem új capture-re.
+- **Az autonóm Haiku gráf-worker prototípus törölve — ne építsd újra.** A `wall-producers` egy külön, autonóm, kis-modellű (Haiku) workert épített, ami maga figyelte a transcriptet és húzta ki a gráf-deltát. *Mechanikusan működött*, de **grounding és szándék nélkül túl-gyűjtött**: egy 47-node-os hairballt rajzolt, mert nem tudta eldönteni, mi számít (`wall-producers` D9). A `fork-wall-producer` a kódot (`graph-worker.ts`, `run-feed.ts`, a `wall-feed` subcommand, az `@anthropic-ai/sdk` dependency) törölte. **Tanulság:** a groundingot nem lehet olcsón kívülről pótolni (context-hint) — egy fork, ami örökli a fő session kontextusát, definíció szerint viszi a megértést, egy külön kliens nem. A modell-tier is része volt a bajnak: értelmes rajzoló agenthez **minimum Sonnet** kell, a Haiku kevés. Aki legközelebb „olcsóbb külön modell a rajzhoz"-ban gondolkodik, előbb olvassa el ezt: a kód a git-történetben marad (`8fa425f`), életben tartani emlékeztetőnek nem kell.
 
 ## Nyitott kérdések
 - whisper engine + streaming megközelítés?
