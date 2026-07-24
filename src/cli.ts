@@ -10,7 +10,7 @@
  *   digest                   (re)build the knowledge index/context/digest
  *   prompt                   print the copilot policy (alert categories + instructions)
  *   poll [seconds]           long-poll the transcript for the copilot monitor
- *   wall [--port N] [--no-fake-feed]  start the local monitor-wall display server
+ *   wall [--port N] [--no-fake-feed] [--reset]  start the local monitor-wall display server
  *   wall-stop                stop the wall serving this runtime dir (via wall.pid)
  *   wall-shot <url>          screenshot a URL (headless Chromium) onto the wall
  *   sources                  list audio input devices
@@ -73,6 +73,7 @@ async function main(): Promise<void> {
       await runWall(loadConfig(), {
         port: portRaw ? parseInt(portRaw, 10) : undefined,
         fakeFeed: !args.includes("--no-fake-feed"),
+        reset: args.includes("--reset"),
       });
       return; // server keeps the process alive; Ctrl-C stops it
     }

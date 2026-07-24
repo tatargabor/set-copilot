@@ -145,6 +145,8 @@ export interface WallServerOptions {
    * default (an empty pattern list falls back), so the CLI path is always covered.
    */
   redaction?: RedactionConfig;
+  /** Recent lines per `scroll` category kept for connect-time replay (default 20). */
+  scrollHistory?: number;
 }
 
 export class WallServer {
@@ -170,12 +172,24 @@ export class WallServer {
   private readonly pacing = new Map<string, Pacing>();
   /** Category ids whose last event is kept for replay to a late-joining client. */
   private readonly pinnedCats = new Set<string>();
+  /** Category ids rendered by a `scroll` box — their recent lines are replayed, not just the last. */
+  private readonly scrollCats = new Set<string>();
+  /**
+   * category → recent scroll lines, split by zone (wall-scroll-replay). A ring bounded
+   * at `scrollN`: a reloading window replays the last N lines of each scroll lane, and a
+   * restart rebuilds the ring from the canonical log through the same accumulate path.
+   */
+  private readonly scrollPrivate = new Map<string, DisplayEvent[]>();
+  private readonly scrollPublic = new Map<string, DisplayEvent[]>();
+  /** How many recent scroll lines per category to keep and replay. */
+  private readonly scrollN: number;
   /** The compiled redaction taxonomy (null when no redaction configured). */
   private readonly redactor: CompiledRedactor | null;
 
   constructor(opts: WallServerOptions) {
     this.opts = opts;
     this.redactor = opts.redaction ? compileRedactor(opts.redaction) : null;
+    this.scrollN = opts.scrollHistory && opts.scrollHistory > 0 ? Math.floor(opts.scrollHistory) : 20;
     this.indexBoxes();
   }
 
@@ -198,6 +212,7 @@ export class WallServer {
             if (!this.canvases.has(cat)) this.canvases.set(cat, emptyCanvas());
             if (!this.pacing.has(cat)) this.pacing.set(cat, box.pacing);
           }
+          if (box.behavior === "scroll") this.scrollCats.add(cat);
           this.pinnedCats.add(cat);
         }
       }
@@ -326,10 +341,24 @@ export class WallServer {
       return; // graphs replay through the accumulated-visual path, not `latest`
     }
 
-    if (this.pinnedCats.has(priv.category)) {
+    // A scroll category keeps a bounded ring of recent lines (replayed on connect);
+    // a non-scroll pinned category keeps only its single latest. Both split by zone so
+    // a public join never replays a line the public zone never received.
+    if (this.scrollCats.has(priv.category)) {
+      if (reachesPrivate(priv.zone)) this.pushScroll(this.scrollPrivate, priv.category, priv);
+      if (pub && reachesPublic(pub.zone)) this.pushScroll(this.scrollPublic, priv.category, pub);
+    } else if (this.pinnedCats.has(priv.category)) {
       if (reachesPrivate(priv.zone)) this.latestPrivate.set(priv.category, priv);
       if (pub && reachesPublic(pub.zone)) this.latestPublic.set(priv.category, pub);
     }
+  }
+
+  /** Append to a scroll ring, evicting the oldest beyond the configured cap. */
+  private pushScroll(ring: Map<string, DisplayEvent[]>, cat: string, ev: DisplayEvent): void {
+    let lines = ring.get(cat);
+    if (!lines) ring.set(cat, (lines = []));
+    lines.push(ev);
+    if (lines.length > this.scrollN) lines.splice(0, lines.length - this.scrollN);
   }
 
   // ---- director ----
@@ -424,6 +453,15 @@ export class WallServer {
   private replay(client: Client): void {
     const isPub = this.isPublicClient(client);
     const reaches = (ev: DisplayEvent) => zoneMatches(ev.zone, client.zones) && client.cats.has(ev.category);
+
+    // Recent scroll-history per scroll category, oldest→newest so the lane reads in
+    // order — from the zone-appropriate ring, so a public join never replays a private
+    // line (wall-scroll-replay). Sent before the pinned latest, mirroring live arrival.
+    for (const lines of (isPub ? this.scrollPublic : this.scrollPrivate).values()) {
+      for (const ev of lines) {
+        if (reaches(ev)) client.res.write(`data: ${JSON.stringify(ev)}\n\n`);
+      }
+    }
 
     // Pinned latest items — from the zone-appropriate store, so a public join never
     // reconstructs from an event the public store never received.

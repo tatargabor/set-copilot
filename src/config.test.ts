@@ -289,3 +289,15 @@ describe("wall.redaction config (safety seam)", () => {
     expect(loadConfig(project).wall.redaction.patterns).toEqual(["(a+)+$", "Project\\s+Hush"]);
   });
 });
+
+describe("wall.scrollHistory config", () => {
+  it("defaults to 20", () => {
+    expect(loadConfig(project).wall.scrollHistory).toBe(20);
+  });
+  it("honours a positive override and ignores a bad one", () => {
+    writeCfg(project, { wall: { scrollHistory: 5 } });
+    expect(loadConfig(project).wall.scrollHistory).toBe(5);
+    writeCfg(project, { wall: { scrollHistory: -3 } });
+    expect(loadConfig(project).wall.scrollHistory).toBe(20);
+  });
+});

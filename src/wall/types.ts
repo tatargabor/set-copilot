@@ -332,6 +332,13 @@ export interface WallConfig {
   /** Public-zone redaction taxonomy (patterns + marking convention). Engine is `redaction.ts`. */
   redaction: RedactionConfig;
   /**
+   * How many recent lines per `scroll`-behavior category the server keeps for
+   * connect-time replay, so a reloading window sees recent text instead of a blank
+   * lane (wall-scroll-replay). Default 20. Bounded on purpose: unbounded history
+   * would grow without limit.
+   */
+  scrollHistory: number;
+  /**
    * Optional path (relative to project root) to a `categories.mjs` module that
    * default-exports `(ctx) => Category[]`, mirroring the `knowledge.adapter` seam.
    */

@@ -444,10 +444,14 @@ export const DEFAULT_REDACTION: RedactionConfig = {
   maxInputLength: 1_000,
 };
 
+/** Recent scroll lines per category kept for connect-time replay (wall-scroll-replay). */
+export const DEFAULT_SCROLL_HISTORY = 20;
+
 export const DEFAULT_WALL: WallConfig = {
   port: 4180,
   categories: DEFAULT_CATEGORIES,
   redaction: DEFAULT_REDACTION,
+  scrollHistory: DEFAULT_SCROLL_HISTORY,
   layouts: DEFAULT_LAYOUTS,
   windows: DEFAULT_WINDOWS,
 };
@@ -668,6 +672,10 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       port: typeof wall.port === "number" && wall.port > 0 ? wall.port : DEFAULT_WALL.port,
       categories: Array.isArray(wall.categories) ? wall.categories : DEFAULT_WALL.categories,
       categoriesModule: wall.categoriesModule,
+      scrollHistory:
+        typeof wall.scrollHistory === "number" && wall.scrollHistory > 0
+          ? Math.floor(wall.scrollHistory)
+          : DEFAULT_WALL.scrollHistory,
       // Redaction is validated (patterns compiled, bad ones dropped) where it is
       // consumed, in `compileRedactor`; here we only resolve the shape. A supplied
       // non-empty `patterns` replaces the default marking convention wholesale. But an

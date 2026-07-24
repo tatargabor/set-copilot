@@ -92,6 +92,7 @@ Two rules are load-bearing and were each fixed after a real failure; don't regre
 
 1. **A transcript is handed over exactly once.** `stop --print` prints, then renames the file to `<name>-<timestamp>.jsonl`. Without the archive step a double `/dd` replays the previous dictation as if freshly spoken and Claude acts on it twice. `capture` likewise archives (never truncates) an unconsumed transcript it finds.
 2. **A second capture in the same runtime dir is refused** while one is live. Overwriting the PID file would orphan the first process — still recording, nothing able to stop it.
+3. **The wall event log is rotated, never truncated.** `wall-events.jsonl` is the canonical rebuild source for the accumulated state (graphs, pinned latest, and the scroll rings replayed to a reloading window). `wall --reset` archives it to `wall-events-<timestamp>.jsonl` — mirroring the transcript hand-over — and only *after* the live-wall check, so a running wall's log is never rotated out from under it. During a live session don't truncate the log or restart mid-session; a fresh run either uses a new scoped runtime dir or this deliberate `--reset`.
 
 ### Skills
 

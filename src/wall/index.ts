@@ -15,7 +15,7 @@
  * file is overwritten and the first server can never be stopped through it.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -51,6 +51,27 @@ export interface RunWallOptions {
   port?: number;
   /** Turn off the scripted demo feed (e.g. when real producers drive the wall). */
   fakeFeed?: boolean;
+  /**
+   * Rotate the canonical event log aside before starting a fresh run
+   * (wall-scroll-replay). Rename-not-truncate, mirroring the transcript hand-over
+   * invariant, so the accumulated state's rebuild source is never silently lost.
+   */
+  reset?: boolean;
+}
+
+/**
+ * Rotate `wall-events.jsonl` aside with a timestamp — never truncate it. The log is
+ * the canonical rebuild source for the accumulated state (graphs, pinned latest, and
+ * the scroll rings), so a fresh run archives it exactly as `stop` archives a
+ * transcript rather than destroying it in place.
+ */
+function rotateEventLog(cfg: CopilotConfig): void {
+  const log = wallEventsPath(cfg);
+  if (!existsSync(log) || statSync(log).size === 0) return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const archived = log.replace(/\.jsonl$/, "") + `-${stamp}.jsonl`;
+  renameSync(log, archived);
+  console.log(`[set-copilot] wall: rotated event log aside → ${archived}`);
 }
 
 /** True when a wall is already live in this runtime dir (a stale PID file does not count). */
@@ -82,6 +103,11 @@ export async function runWall(cfg: CopilotConfig, opts: RunWallOptions = {}): Pr
     throw new Error(`[set-copilot] wall: a wall is already running (pid ${live}) in ${cfg.runtimeDir} — stop it first (set-copilot wall-stop)`);
   }
 
+  // Only AFTER confirming no wall is live: a `--reset` rotates the log aside for a
+  // fresh run. Doing it before the live-check could rotate the log out from under a
+  // running wall that is still tailing it — a live log is never disturbed mid-session.
+  if (opts.reset) rotateEventLog(cfg);
+
   // Try the requested port, then walk forward until one binds. Concurrent sessions
   // each derive their own start port, but a collision (or a leftover socket) must
   // not be fatal: the wall is meant to "just come up".
@@ -89,7 +115,7 @@ export async function runWall(cfg: CopilotConfig, opts: RunWallOptions = {}): Pr
   let port = startPort;
   for (let attempt = 0; attempt < PORT_FALLBACK_TRIES; attempt++) {
     port = startPort + attempt;
-    const candidate = new WallServer({ port, windows, registry, publicDir, projectRoot: cfg.projectRoot, redaction: cfg.wall.redaction });
+    const candidate = new WallServer({ port, windows, registry, publicDir, projectRoot: cfg.projectRoot, redaction: cfg.wall.redaction, scrollHistory: cfg.wall.scrollHistory });
     candidate.addSource(jsonlTailSource(wallEventsPath(cfg)));
     if (opts.fakeFeed !== false) candidate.addSource(fakeFeedSource());
     try {
