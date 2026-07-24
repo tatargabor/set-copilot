@@ -232,9 +232,15 @@ SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-co
 ```
 Stop both: the capture, and the wall this session started (`wall-stop` is a no-op if none was
 started, and only ever stops the wall in THIS runtime dir — never another project's). The
-Monitor exits on its own (the in-flight poll returns `{"type":"capture-dead"}`). Then report a
-summary: meeting duration, alert counts by type (⚠/📋/✏/❓), and any new decisions detected
-(for post-meeting processing).
+Monitor exits on its own (the in-flight poll returns `{"type":"capture-dead"}`).
+
+`stop` archives the live meeting transcript exactly once (no `--print` — that would replay the
+whole transcript into the session as if freshly spoken) and prints the saved path as
+`[set-copilot] Transcript saved: <path>`. Capture that line.
+
+Then report a summary: meeting duration, alert counts by type (⚠/📋/✏/❓), any new decisions
+detected, and the **saved transcript path** from that line (so a post-meeting step can find the
+full transcript).
 
 ### `/meeting-copilot status`
 

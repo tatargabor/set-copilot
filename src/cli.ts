@@ -23,7 +23,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import {
-  cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, rmSync, statSync,
+  cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync,
 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
@@ -32,6 +32,7 @@ import {
   loadConfig, userConfigDir, CONFIG_FILENAME, keywordIndexPath, enrichedContextPath,
   digestMarkdownPath, type CopilotConfig,
 } from "./config.js";
+import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce } from "./handover.js";
 import { playTone } from "./tones.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -185,31 +186,6 @@ function pidFile(): string {
   return join(loadConfig().runtimeDir, "capture.pid");
 }
 
-/**
- * The transcript the last capture in this runtime dir wrote. The capture records
- * it, because only the capture knows whether it ran in dictation or meeting mode.
- */
-function lastTranscript(cfg: CopilotConfig): string {
-  const marker = join(cfg.runtimeDir, "capture.output");
-  if (existsSync(marker)) return readFileSync(marker, "utf-8").trim();
-  return cfg.dictationOutput;
-}
-
-/**
- * Print the transcript, then archive it — handing it over consumes it.
- *
- * Without the archive step a second `stop --print` (a double /dd, or one after the
- * capture already self-stopped on its timer) would replay the previous dictation as
- * if it were freshly spoken, and Claude would act on it twice.
- */
-function printTranscriptOnce(cfg: CopilotConfig): void {
-  const out = lastTranscript(cfg);
-  if (!existsSync(out) || statSync(out).size === 0) return;
-  process.stdout.write(readFileSync(out, "utf-8"));
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  renameSync(out, `${out.replace(/\.jsonl$/, "")}-${stamp}.jsonl`);
-}
-
 function cmdStop(print = false): void {
   const cfg = loadConfig();
   const pf = pidFile();
@@ -218,8 +194,8 @@ function cmdStop(print = false): void {
     // that found nothing to stop must stay silent — otherwise every /clear beeps.
     console.log("[set-copilot] No capture running");
     // A capture that hit its --max-minutes limit removed its own PID file, but its
-    // transcript is still waiting to be read — so print even with nothing to kill.
-    if (print) printTranscriptOnce(cfg);
+    // transcript is still waiting to be handed over — so hand over even with nothing to kill.
+    handoverAtStop(cfg, print);
     return;
   }
   const pid = parseInt(readFileSync(pf, "utf-8").trim(), 10);
@@ -239,7 +215,22 @@ function cmdStop(print = false): void {
     console.log("[set-copilot] Capture already stopped");
   }
   beep("end"); // async — does not delay the caller
-  if (print) printTranscriptOnce(cfg);
+  handoverAtStop(cfg, print);
+}
+
+/**
+ * Hand the just-stopped transcript over exactly once. Dictation (`--print`) emits
+ * the contents as the user's message; the meeting path archives WITHOUT reprinting
+ * and reports where the file landed — so the copilot flow never replays the whole
+ * transcript into the session as if freshly spoken, yet can still point a
+ * post-meeting step at the saved artifact.
+ */
+function handoverAtStop(cfg: CopilotConfig, print: boolean): void {
+  if (print) { printTranscriptOnce(cfg); return; }
+  const saved = handoverTranscriptOnce(cfg);
+  console.log(saved
+    ? `[set-copilot] Transcript saved: ${saved}`
+    : "[set-copilot] Nothing to hand over");
 }
 
 // ---- wall lifecycle --------------------------------------------------------
