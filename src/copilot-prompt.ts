@@ -133,6 +133,8 @@ export function renderDrawingContract(categories: Category[], conventions: strin
     '{"category":"<chart-cat>","chart":{"type":"bar","title":"…","unit":"%","data":[{"label":"…","value":1}]}}',
     "```",
     "",
+    "**Public zone & internal content.** Anything `public` or `both` can reach a wall a live audience sees. Before it does, the server runs public-zone redaction over the whole payload. To keep an internal detail off the public wall, either use `zone:\"private\"` (the only reliable guarantee), or mark the sensitive span **`[belső]`** — the server scrubs from the marker to the end of that string, or withholds the event if the marker lands in an `image.src`/`webpage.url`. Redaction is a backstop, not a license: when in doubt, mark it `[belső]` or leave it out. A redaction failure withholds the event from the public zone, never leaks it.",
+    "",
   );
 
   if (conventions.length) {

@@ -73,6 +73,12 @@ function onEvent(ev) {
  * every line would make the log useless.
  */
 function applyToBox(entry, render, cat, ev) {
+  // Redaction observability (public-redaction D7): the server sets `ev.redaction`
+  // only on the PRIVATE copy of an event whose public variant was scrubbed or
+  // withheld. Mark the box regardless of payload type, so a redacted graph label or
+  // chart title is as visible to the operator as a redacted text line.
+  markRedaction(entry, ev);
+
   if (render === "text") {
     show(entry, "text");
     renderText(paneFor(entry, "text"), entry.box, cat, ev);
@@ -173,11 +179,36 @@ function onShow(cmd) {
 
 // ---- text renderers (scroll / latest) ----
 
+/**
+ * Toggle a corner badge on a box when an event carries a redaction marker
+ * (public-redaction D7). Payload-agnostic on purpose: a graph or chart cannot mark
+ * an individual leaf, so the whole box gets the badge — the operator sees *that*
+ * something on this box went out scrubbed or withheld to the public wall.
+ *
+ * `ev.redaction` is present only on the private copy the server sends to a private
+ * view, so this never fires on the public wall itself.
+ */
+function markRedaction(entry, ev) {
+  if (!ev || !ev.redaction) return;
+  let badge = entry.el.querySelector(":scope > .redaction-badge");
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.className = "redaction-badge";
+    entry.el.appendChild(badge);
+  }
+  const withheld = ev.redaction === "withheld";
+  badge.textContent = withheld ? "⊘ visszatartva" : "✂ redaktálva";
+  badge.title = withheld
+    ? "A publikus falon ez az esemény nem jelent meg."
+    : "A publikus falon ez az esemény kitakarva jelent meg.";
+}
+
 function renderText(el, box, cat, ev) {
   const line = document.createElement("div");
   line.className = "line";
   if (ev.speaker) line.classList.add(`speaker-${ev.speaker}`); // mic="én" vs system
   if (ev.priority === "immediate") line.classList.add("immediate");
+  if (ev.redaction) line.classList.add(`redaction-${ev.redaction}`); // private-view marker
   line.innerHTML = `<span class="time"></span><span class="icon">${cat.icon ?? ""}</span><span class="txt"></span>`;
   line.querySelector(".time").textContent = clock();
   line.querySelector(".txt").textContent = ev.text ?? "";

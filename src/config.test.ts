@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { loadConfig, normalizeKeywords, namePattern, DEFAULT_ALERTS, CONFIG_FILENAME } from "./config.js";
+import { loadConfig, normalizeKeywords, namePattern, DEFAULT_ALERTS, DEFAULT_REDACTION, CONFIG_FILENAME } from "./config.js";
 
 /** loadConfig() reads the real user config dir — point it at an empty temp dir so
  *  the developer's own ~/.config/set-copilot cannot leak into the assertions. */
@@ -247,5 +247,45 @@ describe("namePattern", () => {
     const re = new RegExp(namePattern("tesa"), "iu");
     expect(re.test("tesa, nézd")).toBe(true);
     expect(re.test("tesám, nézd")).toBe(false);
+  });
+});
+
+describe("wall.redaction config (safety seam)", () => {
+  it("ships the domain-neutral default when nothing is configured", () => {
+    const cfg = loadConfig(project);
+    expect(cfg.wall.redaction.patterns).toEqual(["\\[(?:belső|internal)[^\\]]*\\][^\\n]*"]);
+    expect(cfg.wall.redaction.replacement).toBe("[…]");
+  });
+
+  it("falls back to the default on an EMPTY pattern list (fail-safe, not fail-open)", () => {
+    // A safety seam whose "no rules" state means "publish everything raw" is the
+    // wrong sign — an empty list must not silently disable redaction while the public
+    // narration box keeps shipping.
+    writeCfg(project, { wall: { redaction: { patterns: [] } } });
+    expect(loadConfig(project).wall.redaction.patterns.length).toBeGreaterThan(0);
+  });
+
+  it("honours a project's own non-empty patterns wholesale", () => {
+    writeCfg(project, { wall: { redaction: { patterns: ["Project\\s+Hush"], replacement: "[x]" } } });
+    const cfg = loadConfig(project);
+    expect(cfg.wall.redaction.patterns).toEqual(["Project\\s+Hush"]);
+    expect(cfg.wall.redaction.replacement).toBe("[x]");
+  });
+
+  it("falls back to the default when patterns are all invalid or all ReDoS-rejected", () => {
+    // These pass a `typeof string` filter (non-empty) but COMPILE to zero — the
+    // subtle fail-open a config author hits by typing one bad or catastrophic pattern.
+    // The fallback is keyed on the compiled count, so the public zone is never left raw.
+    for (const patterns of [["(", "(unclosed", "*bad"], ["(a+)+$", "(b*)*$"], ["(([a-z])+)+$"]]) {
+      writeCfg(project, { wall: { redaction: { patterns } } });
+      expect(loadConfig(project).wall.redaction.patterns).toEqual(DEFAULT_REDACTION.patterns);
+    }
+  });
+
+  it("keeps a partly-valid list (drops the bad ones at compile, no fallback)", () => {
+    writeCfg(project, { wall: { redaction: { patterns: ["(a+)+$", "Project\\s+Hush"] } } });
+    // One survives compilation, so the operator's intent is honoured (the ReDoS one is
+    // dropped with a warning by the server's real compile).
+    expect(loadConfig(project).wall.redaction.patterns).toEqual(["(a+)+$", "Project\\s+Hush"]);
   });
 });

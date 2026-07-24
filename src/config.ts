@@ -3,7 +3,8 @@ import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 
 import type { AlertCategory, KeywordPattern } from "./knowledge/types.js";
-import type { WallConfig, Category, WallLayout, WallWindow } from "./wall/types.js";
+import type { WallConfig, Category, WallLayout, WallWindow, RedactionConfig } from "./wall/types.js";
+import { compileRedactor } from "./wall/redaction.js";
 
 export interface KnowledgeConfig {
   /** "markdown" (built-in) or a path to a module exporting a KnowledgeAdapter factory */
@@ -305,6 +306,10 @@ export const DEFAULT_DEFERRED_MARKERS = [
 export const DEFAULT_CATEGORIES: Category[] = [
   { id: "súgás", label: "Súgás", icon: "💡", render: "text" },
   { id: "riasztás", label: "Riasztás", icon: "⚠", render: "text" },
+  // The public narration box's category — the private hint box's counterpart. Its
+  // output is *processed* (condensed, filtered), never a raw transcript, and it goes
+  // out through public-zone redaction. See DEFAULT_WINDOWS and the box-policy spec.
+  { id: "narráció", label: "Narráció", icon: "🗣", render: "text" },
   { id: "architektúra", label: "Architektúra", icon: "🕸", render: "graph" },
   { id: "metrika", label: "Metrika", icon: "📊", render: "chart" },
 ];
@@ -330,17 +335,18 @@ export const DEFAULT_LAYOUTS: WallLayout[] = [
  * legal, and the point of the change, because the renderer follows the event's
  * payload rather than the box's subscription.
  *
- * The private view (`/`) gets the text box; the public wall (`/wall`) is
- * graph + chart only, exactly as before. A public TEXT box was prototyped, then
- * pulled: it would narrate the meeting to an audience, which only makes sense
- * together with public-zone redaction — and that was deferred to its own change
- * after an adversarial pass found the redactor leaky. Until it lands, no text and
- * no `both`-zone content is safe to auto-publish, so `/wall` shows only what a
- * producer deliberately marks for it.
+ * The private view (`/`) gets a hint text box; the public wall (`/wall`) gets a
+ * NARRATION text box plus the presentation. The public text box was pulled once —
+ * it only makes sense with public-zone redaction, which an adversarial pass had
+ * found leaky — and returns here now that the `public-redaction` capability lands
+ * with it: every `both`/`public` event the narration box emits passes through the
+ * server-side redactor before any public client sees it (box-policy: "A public
+ * narration box narrates processed output").
  *
- * The private box carries a `policy`: it checks what the speaker says and surfaces
- * what they may not know. Per-box policy is the general mechanism (design D5); the
- * private box is its first user.
+ * Both text boxes carry a `policy`, and they differ in *mandate*, not just zone
+ * (design D5): the private one checks and surfaces contradictions; the public one
+ * narrates *processed* output — condensed, filtered, redaction-safe — never the raw
+ * transcript, preserving the "wall shows only processed output" invariant above.
  */
 export const DEFAULT_WINDOWS: WallWindow[] = [
   {
@@ -368,10 +374,21 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
     name: "fal",
     route: "/wall",
     zones: ["public", "both"],
-    layout: "prezentáció-teljes",
+    layout: "third-two-thirds",
     boxes: {
-      // No text box yet — see the note above. The presentation fills the wall until
-      // public narration + redaction ship together.
+      szöveg: {
+        behavior: "scroll",
+        cats: ["narráció"],
+        policy: {
+          // Mandate, not zone, is what distinguishes this box from the private one
+          // (box-policy). Its output is *processed* — condensed and filtered — and it
+          // relies on the server-side redactor for safety, not on being careful.
+          engagement: "reactive",
+          instructions:
+            "Ez a nyilvános narráló doboz — élő közönség láthatja. Foglald össze tömören, közönség-barátul, amiről szó van; ne a nyers átiratot közvetítsd. Belső részletet SOHA ne írj ki nyersen: jelöld `[belső]`-vel (a szerver kitakarja), vagy hagyd ki. Kétség esetén hagyd ki.",
+          maxLines: 2,
+        },
+      },
       prezentáció: {
         behavior: "latest",
         cats: ["architektúra", "metrika"],
@@ -396,9 +413,41 @@ export const DEFAULT_DRAWING_CONVENTIONS: string[] = [
   "A number is a chart only when it is comparable to another number. A single figure belongs in text.",
 ];
 
+/**
+ * The shipped redaction taxonomy — deliberately domain-neutral (public-redaction:
+ * "The default carries no project-specific vocabulary"). It matches only a *marking
+ * convention*: an operator or the producer flags an internal span with `[belső]` /
+ * `[internal]` (design D8, taught to the producer in the drawing contract), and
+ * everything from the marker to the end of that string leaf is scrubbed on the way
+ * to the public wall. No project names, no PII heuristics — a richer taxonomy is
+ * opt-in `wall.redaction` config, so a fresh project never redacts against another
+ * project's assumptions.
+ *
+ * The pattern uses literal brackets, not `\b`, so it is accent-safe by construction;
+ * the engine compiles it with the `u` flag regardless.
+ */
+export const DEFAULT_REDACTION: RedactionConfig = {
+  patterns: ["\\[(?:belső|internal)[^\\]]*\\][^\\n]*"],
+  replacement: "[…]",
+  // The length cap is the second half of the ReDoS bound (the first is the engine's
+  // group-rejection + ≤2-unbounded-quantifier limit, which caps a pattern's worst-case
+  // backtracking at quadratic). Quadratic × 1000² keeps even a deliberately
+  // overlapping-quantifier config pattern (`\d+\d+$`) to a fraction of a second per leaf
+  // — bounded, not the multi-second/minute stalls an unbounded pattern produces. A
+  // content leaf longer than this is withheld fail-closed, which is fine: narration,
+  // labels, captions, and titles are short; a 1000-char leaf is anomalous.
+  //
+  // Note: redaction patterns come only from config (never a producer or the transcript),
+  // so this bounds a self-inflicted operator footgun, not a remote input. A project that
+  // wants a HARD linear guarantee can swap the regex engine for a linear one (re2); the
+  // taxonomy is config, the engine choice is a localized change in `redaction.ts`.
+  maxInputLength: 1_000,
+};
+
 export const DEFAULT_WALL: WallConfig = {
   port: 4180,
   categories: DEFAULT_CATEGORIES,
+  redaction: DEFAULT_REDACTION,
   layouts: DEFAULT_LAYOUTS,
   windows: DEFAULT_WINDOWS,
 };
@@ -527,6 +576,27 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
     : DEFAULT_NAMES;
   const detect = { ...userCfg.detect, ...projCfg.detect };
   const wall = { ...userCfg.wall, ...projCfg.wall };
+  // Resolve redaction patterns fail-SAFE: this is a safety seam feeding a public
+  // narration box that ships enabled, so it must never resolve to "no redaction". An
+  // empty list is the obvious case; the subtler one is a non-empty list whose entries
+  // are all regex-invalid or all repeated-group (ReDoS) — those pass a `typeof string`
+  // filter but COMPILE to zero, which would silently publish raw. So the fallback is
+  // keyed on the effective COMPILED count, not on the string count: if nothing usable
+  // survives, fall back to the shipped marking convention (which compiles to one), loudly.
+  const stringPatterns = Array.isArray(wall.redaction?.patterns)
+    ? wall.redaction!.patterns.filter((p): p is string => typeof p === "string")
+    : [];
+  const candidatePatterns = stringPatterns.length ? stringPatterns : DEFAULT_REDACTION.patterns;
+  const compiledCount = compileRedactor(
+    { patterns: candidatePatterns, replacement: "", maxInputLength: 1 },
+    () => { /* warnings are surfaced when the server compiles for real */ },
+  ).patternCount;
+  const resolvedPatterns = compiledCount > 0 ? candidatePatterns : DEFAULT_REDACTION.patterns;
+  if (compiledCount === 0) {
+    console.warn(
+      "[set-copilot] wall.redaction: no usable pattern survived compilation (all invalid or ReDoS-rejected) — falling back to the default [belső]/[internal] marking convention so the public zone is never left unredacted",
+    );
+  }
 
   const runtimeDir = process.env.SET_COPILOT_DIR || fileCfg.runtimeDir || DEFAULTS.runtimeDir;
   const mode = process.env.SONIOX_MODE || fileCfg.sonioxMode || DEFAULTS.sonioxMode;
@@ -598,6 +668,25 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       port: typeof wall.port === "number" && wall.port > 0 ? wall.port : DEFAULT_WALL.port,
       categories: Array.isArray(wall.categories) ? wall.categories : DEFAULT_WALL.categories,
       categoriesModule: wall.categoriesModule,
+      // Redaction is validated (patterns compiled, bad ones dropped) where it is
+      // consumed, in `compileRedactor`; here we only resolve the shape. A supplied
+      // non-empty `patterns` replaces the default marking convention wholesale. But an
+      // EMPTY (or all-invalid) list falls back to the default, never to "no patterns":
+      // this is a SAFETY seam and its default must be fail-safe — a public narration
+      // box ships enabled, so an empty list would silently publish raw `both`/`public`
+      // text. Unlike `detect.*`, "no rules" here means "publish everything," which is
+      // the one thing this mechanism exists to prevent.
+      redaction: {
+        patterns: resolvedPatterns,
+        replacement:
+          typeof wall.redaction?.replacement === "string"
+            ? wall.redaction.replacement
+            : DEFAULT_REDACTION.replacement,
+        maxInputLength:
+          typeof wall.redaction?.maxInputLength === "number" && wall.redaction.maxInputLength > 0
+            ? Math.floor(wall.redaction.maxInputLength)
+            : DEFAULT_REDACTION.maxInputLength,
+      },
       // A project supplying its own layouts still gets the built-ins appended, so
       // `stacked` (the rollback arrangement) can never be configured away by accident.
       layouts: Array.isArray(wall.layouts)

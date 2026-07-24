@@ -22,10 +22,12 @@ import {
 } from "./director.js";
 import { normalizeEvent } from "./emit.js";
 import type { EventSource } from "./event-source.js";
+import { compileRedactor, splitForZones, type CompiledRedactor, type EventVariants } from "./redaction.js";
 import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
-  type DisplayEvent, type GraphEdge, type GraphNode, type Pacing,
-  type ResolvedWindow, type ShowCommand, type WireMessage, type Zone, isShowCommand,
+  type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Pacing, type RedactionConfig,
+  type ResolvedWindow, type ShowCommand, type WireMessage, type Zone,
+  isShowCommand, reachesPrivate, reachesPublic,
 } from "./types.js";
 
 const MIME: Record<string, string> = {
@@ -71,12 +73,47 @@ interface Client {
   cats: Set<string>;
 }
 
-/** The server's running accumulation of one visual: nodes by id, edges in order. */
-interface AccumulatedGraph {
+/**
+ * One zone's slice of an accumulated visual: nodes by id, edges in order.
+ *
+ * A visual no longer carries a single zone (public-redaction D3). Its deltas are
+ * accumulated into TWO zone slices — the `private` slice gets the original deltas,
+ * the `public` slice gets the SCRUBBED deltas, and only when they reach that zone.
+ * That is what closes the replay-laundering bug at its root: a public join replays
+ * from the `public` slice, which never received the private deltas, so there is no
+ * per-delta filtering to get wrong later.
+ */
+interface ZoneAccum {
   nodes: Map<string, GraphNode>;
   edges: GraphEdge[];
-  /** The zone the visual's events carried — so replay filters it like the live stream did. */
-  zone: Zone;
+  /** A contributing delta was scrubbed — drives the private-view redaction marker on replay. */
+  redacted: boolean;
+  /** At least one delta fed this slice (an empty slice is not replayed). */
+  present: boolean;
+}
+
+/** The server's running accumulation of one visual, split by zone. */
+interface AccumulatedGraph {
+  private: ZoneAccum;
+  public: ZoneAccum;
+}
+
+function emptyAccum(): ZoneAccum {
+  return { nodes: new Map(), edges: [], redacted: false, present: false };
+}
+
+/** Fold one delta into a zone slice. `reset` starts the slice fresh (topic boundary). */
+function applyDelta(acc: ZoneAccum, delta: GraphDelta, redacted: boolean): void {
+  if (delta.op === "reset") {
+    acc.nodes = new Map();
+    acc.edges = [];
+    acc.redacted = false;
+    acc.present = false;
+  }
+  for (const n of delta.nodes ?? []) if (n && typeof n.id === "string") acc.nodes.set(n.id, n);
+  for (const e of delta.edges ?? []) acc.edges.push(e);
+  acc.present = true;
+  if (redacted) acc.redacted = true;
 }
 
 export interface WallServerOptions {
@@ -97,6 +134,17 @@ export interface WallServerOptions {
   directorTickMs?: number;
   /** Project root — the confinement boundary for `image` payloads served over `/media`. */
   projectRoot?: string;
+  /**
+   * Public-zone redaction taxonomy. Compiled once into the server's redactor; a
+   * `both`/`public` event is scrubbed or withheld before any public client sees it.
+   *
+   * Omitting it runs with NO redaction — public-bound events pass unchanged. The
+   * shipped default `/wall` carries a public narration TEXT box, so a caller that
+   * reuses `cfg.wall.windows` MUST also pass `cfg.wall.redaction` (as `runWall` does),
+   * or raw narration reaches the public wall. `loadConfig` always resolves a fail-safe
+   * default (an empty pattern list falls back), so the CLI path is always covered.
+   */
+  redaction?: RedactionConfig;
 }
 
 export class WallServer {
@@ -107,19 +155,27 @@ export class WallServer {
   private directorTimer?: NodeJS.Timeout;
 
   // ---- accumulated display state (for replay + the director) ----
-  /** category → visual id → accumulated graph (nodes deduped by id, edges appended). */
+  /** category → visual id → accumulated graph, split into private/public zone slices. */
   private readonly graphs = new Map<string, Map<string, AccumulatedGraph>>();
-  /** category → last event for a pinned `latest` (non-paced) category. */
-  private readonly latest = new Map<string, DisplayEvent>();
+  /**
+   * category → last pinned `latest` event, split by zone: the private store keeps the
+   * original (marked if redacted), the public store keeps the SCRUBBED copy. A late
+   * public join replays only what the public store ever received.
+   */
+  private readonly latestPrivate = new Map<string, DisplayEvent>();
+  private readonly latestPublic = new Map<string, DisplayEvent>();
   /** category → director canvas state, for categories that appear in a paced slot. */
   private readonly canvases = new Map<string, CanvasState>();
   /** category → the pacing config of its canvas slot. */
   private readonly pacing = new Map<string, Pacing>();
   /** Category ids whose last event is kept for replay to a late-joining client. */
   private readonly pinnedCats = new Set<string>();
+  /** The compiled redaction taxonomy (null when no redaction configured). */
+  private readonly redactor: CompiledRedactor | null;
 
   constructor(opts: WallServerOptions) {
     this.opts = opts;
+    this.redactor = opts.redaction ? compileRedactor(opts.redaction) : null;
     this.indexBoxes();
   }
 
@@ -180,6 +236,12 @@ export class WallServer {
     });
   }
 
+  /** The port actually bound — useful when constructed with port 0 (tests, fallback). */
+  boundPort(): number {
+    const addr = this.http?.address();
+    return addr && typeof addr === "object" ? addr.port : this.opts.port;
+  }
+
   stop(): void {
     for (const s of this.sources) s.stop();
     if (this.directorTimer) clearInterval(this.directorTimer);
@@ -220,37 +282,54 @@ export class WallServer {
     // "Drop an unknown category").
     if (!resolveEventCategory(msg, this.opts.registry)) return;
 
-    this.accumulate(msg);
-    this.broadcast(msg);
+    // Split the event into its private and public variants ONCE, here in the shared
+    // funnel, before any broadcast or accumulation (public-redaction: "Redaction runs
+    // in the shared ingest funnel, before broadcast"). The JSONL tailer feeds this
+    // same method, so a tailer-ingested event is redacted on identical terms.
+    const variants = splitForZones(msg, this.redactor);
+
+    this.accumulate(variants);
+    this.broadcastEvent(variants);
 
     // A graph reset (new visual) offers a candidate to the director; an immediate
-    // one overrides the dwell and shows now.
+    // one overrides the dwell and shows now. Keyed on the ORIGINAL event's zone/visual.
     if (msg.graph?.op === "reset" && msg.visual && this.canvases.has(msg.category)) {
       const canvas = this.canvases.get(msg.category)!;
       const now = Date.now();
       if (msg.priority === "immediate") {
         overrideSwap(canvas, msg.visual, now);
-        this.broadcast({ kind: "show", cat: msg.category, id: msg.visual });
+        this.emitShow(msg.category, msg.visual, "immediate");
       } else {
         offerCandidate(canvas, msg.visual, now);
       }
     }
   }
 
-  private accumulate(ev: DisplayEvent): void {
-    if (ev.graph && ev.visual) {
-      let byVisual = this.graphs.get(ev.category);
-      if (!byVisual) this.graphs.set(ev.category, (byVisual = new Map()));
-      if (ev.graph.op === "reset") byVisual.set(ev.visual, { nodes: new Map(), edges: [], zone: ev.zone });
-      let g = byVisual.get(ev.visual);
-      if (!g) byVisual.set(ev.visual, (g = { nodes: new Map(), edges: [], zone: ev.zone }));
-      g.zone = ev.zone;
-      for (const n of ev.graph.nodes ?? []) if (n && typeof n.id === "string") g.nodes.set(n.id, n);
-      for (const e of ev.graph.edges ?? []) g.edges.push(e);
+  /**
+   * Fold an event's zone variants into the accumulation. The private slice gets the
+   * ORIGINAL delta (only when it reaches private); the public slice gets the SCRUBBED
+   * delta (only when the public variant survived redaction and reaches public). A
+   * withheld public variant simply never touches the public slice — which is exactly
+   * why a later public join cannot replay it.
+   */
+  private accumulate(variants: EventVariants): void {
+    const priv = variants.private;
+    const pub = variants.public;
+
+    if (priv.graph && priv.visual) {
+      let byVisual = this.graphs.get(priv.category);
+      if (!byVisual) this.graphs.set(priv.category, (byVisual = new Map()));
+      let g = byVisual.get(priv.visual);
+      if (!g) byVisual.set(priv.visual, (g = { private: emptyAccum(), public: emptyAccum() }));
+      if (reachesPrivate(priv.zone)) applyDelta(g.private, priv.graph, variants.redacted);
+      if (pub?.graph && reachesPublic(pub.zone)) applyDelta(g.public, pub.graph, false);
+      return; // graphs replay through the accumulated-visual path, not `latest`
     }
-    // Graph events replay through the accumulated-visual path below, so keeping
-    // them here too would replay the same picture twice.
-    if (this.pinnedCats.has(ev.category) && !ev.graph) this.latest.set(ev.category, ev);
+
+    if (this.pinnedCats.has(priv.category)) {
+      if (reachesPrivate(priv.zone)) this.latestPrivate.set(priv.category, priv);
+      if (pub && reachesPublic(pub.zone)) this.latestPublic.set(priv.category, pub);
+    }
   }
 
   // ---- director ----
@@ -261,60 +340,122 @@ export class WallServer {
       const target = nextSwap(canvas, pacing, now);
       if (target && target !== canvas.current?.id) {
         commitSwap(canvas, target, now);
-        this.broadcast({ kind: "show", cat, id: target });
+        this.emitShow(cat, target);
       }
     }
   }
 
   // ---- broadcast + replay ----
   //
-  // Zone filtering is the whole confidentiality story for now: a `private`/`both`
-  // event never reaches a `public`-only window. Automatic PUBLIC-ZONE REDACTION
-  // (scrubbing a `both` event on its way to the public wall) was designed and
-  // prototyped here, then pulled — an adversarial pass showed the field-list
-  // scrubber leaked free-form payload keys, URLs, and replayed private graph
-  // history. It is deferred to its own change (see `wall-public-redaction`), and
-  // until it lands the shipped default wall is private-only.
+  // Two confidentiality layers now. Zone filtering routes an event to the windows
+  // whose zones match (a `private` event never reaches a public window). ON TOP of
+  // that, PUBLIC-ZONE REDACTION (public-redaction capability) scrubs or withholds a
+  // `both`/`public` event's payload before a public client sees it — the earlier
+  // field-list scrubber leaked, so this one walks the whole payload, withholds on a
+  // matching URL, fails closed, and accumulates per-zone so a public join can never
+  // replay private history. It is a shape-matcher, not a security boundary: `zone:
+  // "private"` remains the only reliable way to keep something off the public wall.
 
-  private broadcast(msg: WireMessage): void {
-    const payload = `data: ${JSON.stringify(msg)}\n\n`;
+  /** Is this a public-facing client — a window with no `private` in its zone filter? */
+  private isPublicClient(client: Client): boolean {
+    return !client.zones.includes("private");
+  }
+
+  /** Broadcast a display event's zone-appropriate variant to each client. */
+  private broadcastEvent(variants: EventVariants): void {
+    const privStr = `data: ${JSON.stringify(variants.private)}\n\n`;
+    const pubStr = variants.public ? `data: ${JSON.stringify(variants.public)}\n\n` : null;
     for (const c of this.clients) {
-      // Show commands reach every window (they carry no content, only a swap).
-      if (isShowCommand(msg)) { c.res.write(payload); continue; }
+      const isPub = this.isPublicClient(c);
+      const ev = isPub ? variants.public : variants.private;
+      if (!ev) continue; // withheld from the public zone
       // A display event must clear BOTH gates: its zone reaches the window, and the
       // window actually has a box for its category. The category gate matters even
-      // with the wall private: a `both`-zone hint would otherwise sit on the public
-      // window's wire with no box to render it — data on the socket is data leaked,
-      // rendered or not.
-      if (!zoneMatches(msg.zone, c.zones)) continue;
-      if (!c.cats.has(msg.category)) continue;
+      // apart from redaction: a `both` event no box asked for would otherwise sit on
+      // a window's wire unrendered — data on the socket is data delivered.
+      if (!zoneMatches(ev.zone, c.zones)) continue;
+      if (!c.cats.has(ev.category)) continue;
+      c.res.write(isPub ? pubStr! : privStr);
+    }
+  }
+
+  /**
+   * Emit a `show` for (cat, visual), zoned to where the visual actually lives
+   * (public-redaction D4). The zone is derived from which accumulation slices the
+   * visual has content in; and if the visual *id* itself matches redaction, the show
+   * is kept off the public zone entirely — a sensitive id must not ride a public
+   * show even on a visual that has public content.
+   */
+  private emitShow(cat: string, visual: string, priority?: "immediate"): void {
+    let zone = this.showZoneFor(cat, visual);
+    if (zone && reachesPublic(zone) && this.idMatchesRedaction(visual)) zone = "private";
+    const show: ShowCommand = { kind: "show", cat, id: visual };
+    if (priority) show.priority = priority;
+    if (zone) show.zone = zone;
+    this.broadcastShow(show);
+  }
+
+  /** Zone a `show` should carry: derived from which accumulation slices hold this visual. */
+  private showZoneFor(cat: string, visual: string): Zone | undefined {
+    const g = this.graphs.get(cat)?.get(visual);
+    if (!g) return undefined;
+    if (g.private.present && g.public.present) return "both";
+    if (g.public.present) return "public";
+    if (g.private.present) return "private";
+    return undefined;
+  }
+
+  /** Does a visual id match a redaction pattern? Fail-closed: an evaluation error counts as a match. */
+  private idMatchesRedaction(id: string): boolean {
+    if (!this.redactor) return false;
+    try { return this.redactor.matches(id); } catch { return true; }
+  }
+
+  /** Broadcast a `show` command, filtered by its zone (an absent zone reaches everyone). */
+  private broadcastShow(show: ShowCommand): void {
+    const payload = `data: ${JSON.stringify(show)}\n\n`;
+    for (const c of this.clients) {
+      if (show.zone && !zoneMatches(show.zone, c.zones)) continue;
       c.res.write(payload);
     }
   }
 
   /** Send the current display state to a freshly-connected client (its zones + categories only). */
   private replay(client: Client): void {
+    const isPub = this.isPublicClient(client);
     const reaches = (ev: DisplayEvent) => zoneMatches(ev.zone, client.zones) && client.cats.has(ev.category);
-    // Pinned latest text items.
-    for (const ev of this.latest.values()) {
+
+    // Pinned latest items — from the zone-appropriate store, so a public join never
+    // reconstructs from an event the public store never received.
+    for (const ev of (isPub ? this.latestPublic : this.latestPrivate).values()) {
       if (reaches(ev)) client.res.write(`data: ${JSON.stringify(ev)}\n\n`);
     }
-    // Current graph per category: the shown visual's accumulated nodes/edges as one add.
+
+    // Current graph per paced category: the shown visual's accumulated slice as one add.
     for (const [cat, canvas] of this.canvases) {
       const shown = canvas.current?.id;
-      const byVisual = this.graphs.get(cat);
-      if (!shown || !byVisual) continue;
-      const g = byVisual.get(shown);
+      if (!shown) continue;
+      const g = this.graphs.get(cat)?.get(shown);
       if (!g) continue;
-      // Reconstruction, not a live swap: mark it immediate so the client renders it
-      // at once. Without this, a box that had also shown a chart puts the replayed
-      // graph behind the paced dwell — the graph `add` is deferred, the `show` that
-      // follows finds no graph slot built yet and is dropped, and the box comes back
-      // blank on refresh even though the graph is still current.
-      const ev: DisplayEvent = { category: cat, zone: g.zone, visual: shown, priority: "immediate", graph: { op: "add", nodes: [...g.nodes.values()], edges: g.edges } };
+      const acc = isPub ? g.public : g.private;
+      if (!acc.present) continue; // this zone has nothing for this visual (D3: no laundering)
+      // The visual id is producer text keyed on the ORIGINAL (unscrubbed) value, and
+      // can itself be sensitive (D4). Live broadcast zones the show by id via emitShow;
+      // replay must apply the SAME guard, or a late public join gets the raw id back in
+      // both the reconstructed event's `visual` and its `show`. Fail-closed: skip it.
+      if (isPub && this.idMatchesRedaction(shown)) continue;
+      // The reconstructed event is routed to THIS client, so label it with a zone
+      // that reaches this client. Mark it immediate so it renders at once (a deferred
+      // graph add would leave the show with no slot built yet — the box came back blank).
+      const zone: Zone = isPub ? "public" : "private";
+      const ev: DisplayEvent = {
+        category: cat, zone, visual: shown, priority: "immediate",
+        graph: { op: "add", nodes: [...acc.nodes.values()], edges: acc.edges },
+      };
+      if (!isPub && acc.redacted) ev.redaction = "redacted"; // private-view marker
       if (reaches(ev)) {
         client.res.write(`data: ${JSON.stringify(ev)}\n\n`);
-        client.res.write(`data: ${JSON.stringify({ kind: "show", cat, id: shown } satisfies ShowCommand)}\n\n`);
+        client.res.write(`data: ${JSON.stringify({ kind: "show", cat, id: shown, zone } satisfies ShowCommand)}\n\n`);
       }
     }
   }

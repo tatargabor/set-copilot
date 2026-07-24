@@ -100,3 +100,24 @@ body {
 .pane { height: 100%; min-height: 0; min-width: 0; }
 .pane[hidden] { display: none; }
 .pane-graph { position: relative; }
+
+/* Redaction observability (public-redaction D7). These only ever render on a
+   PRIVATE view — the server strips the marker from the public copy — so the
+   operator can see what the audience did not. */
+.slot { position: relative; }
+.redaction-badge {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 5;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--alert) 22%, var(--panel));
+  color: var(--alert);
+  border: 1px solid color-mix(in srgb, var(--alert) 45%, transparent);
+  pointer-events: none;
+}
+.line.redaction-redacted .txt { text-decoration: underline dotted var(--alert); }
+.line.redaction-withheld { opacity: 0.7; }
+.line.redaction-withheld .icon::after { content: " ⊘"; color: var(--alert); }

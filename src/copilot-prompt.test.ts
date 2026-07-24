@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { renderAlerts, renderCopilotPrompt, renderDrawingContract } from "./copilot-prompt.js";
+import { compileRedactor } from "./wall/redaction.js";
 import {
   DEFAULT_ALERTS,
   DEFAULT_CATEGORIES,
   DEFAULT_DRAWING_CONVENTIONS,
+  DEFAULT_REDACTION,
   type CopilotConfig,
 } from "./config.js";
 import type { AlertCategory } from "./knowledge/types.js";
@@ -180,6 +182,20 @@ describe("renderDrawingContract", () => {
 
   it("renders nothing at all when there are no categories", () => {
     expect(renderDrawingContract([], ["ignored"])).toEqual([]);
+  });
+
+  it("teaches the [belső] marking convention, and it matches the shipped redaction default (D8 / 7.2)", () => {
+    const out = renderDrawingContract(cats, []).join("\n");
+    // The producer must actually be told the convention the default pattern relies on
+    // (before this change it was a phantom convention nobody taught).
+    expect(out).toContain("[belső]");
+    expect(out).toContain('zone:"private"');
+
+    // And the taught convention must really be redacted by the shipped default — a
+    // marked span is scrubbed, so what the producer is told is what the engine does.
+    const r = compileRedactor(DEFAULT_REDACTION, () => {});
+    expect(r.scrub("public [belső] secret tail")).toBe("public […]");
+    expect(r.scrub("nothing marked here")).toBe("nothing marked here");
   });
 });
 

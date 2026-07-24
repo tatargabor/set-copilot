@@ -89,7 +89,7 @@ export async function runWall(cfg: CopilotConfig, opts: RunWallOptions = {}): Pr
   let port = startPort;
   for (let attempt = 0; attempt < PORT_FALLBACK_TRIES; attempt++) {
     port = startPort + attempt;
-    const candidate = new WallServer({ port, windows, registry, publicDir, projectRoot: cfg.projectRoot });
+    const candidate = new WallServer({ port, windows, registry, publicDir, projectRoot: cfg.projectRoot, redaction: cfg.wall.redaction });
     candidate.addSource(jsonlTailSource(wallEventsPath(cfg)));
     if (opts.fakeFeed !== false) candidate.addSource(fakeFeedSource());
     try {

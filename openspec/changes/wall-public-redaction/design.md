@@ -109,6 +109,28 @@ esemény sem foghatja meg a szerver egyetlen szálát.
 (c) worker-thread időkorláttal. A `re2` a legtisztább (lineáris garancia), cserébe egy natív függőség.
 A tervezés eldönti — a spec csak a *korlátozottságot* követeli, a mechanizmust nem.
 
+**Eldöntve (implementáció): (a) — strukturális elutasítás config-időben + per-levél hossz-korlát,
+függőség nélkül.** Három adverzariális kör bizonyította, hogy a „veszélyes mintát felismerő" heurisztika
+elvből kikerülhető (exponenciális → alternáció-átfedés → beágyazott csoport → szekvenciális kvantor). A
+tanulság: nem a veszélyeseket kell detektálni, hanem a *strukturális osztályt* korlátozni. Két invariáns,
+mindkettő bizonyítható, `redaction.ts`:
+
+1. **Nincs ismételt csoport** (`isCatastrophic`): egy `)` után `+`/`*`/`{` betöltéskor eldobva. Az
+   exponenciális ReDoS strukturálisan ismételt csoportot IGÉNYEL (egy kvantor egy másik kvantor
+   hatókörében), ezért ezek tiltása az exponenciális osztályt *lehetetlenné* teszi. Konzervatív: egy fix
+   törzsű `(ab)+` is elesik — a redakciós taxonómia úgysem használ ismételt csoportot.
+2. **Legfeljebb 2 korlátlan kvantor** (`unboundedQuantifierCount ≤ MAX_UNBOUNDED_QUANTIFIERS`): a
+   szekvenciális kvantorok `C(n-1, k-1)` szerint lépnek vissza; `k` a támadó által hangolható fok, ezért a
+   `\d+\d+…\d+$` a hossz-korláttól függetlenül percekig fut (mérve: `\d+`×14 → 33 s, 37 karakteren). `k ≤ 2`
+   a fokot kvadratikusra korlátozza, amit a `maxInputLength` (default 1000) ténylegesen behatárol (< 1 s
+   per levél). A default minta 2 kvantora **nem átfedő** (`\]` választja el) → lineáris.
+
+Az `re2`-t (lineáris garancia, natív függőség) és a worker-thread időkorlátot elvetettük: a minták
+**kizárólag configból** jönnek (sosem producer/átirat), így ez egy operátori config-footgunt korlátoz, nem
+távoli inputot. A maradék — egy szándékosan átfedő-kvantoros config-minta ~sub-second kvadratikusa — tudatosan
+elfogadott; egy kemény lineáris garancia útja az `re2` egy lokalizált motorcseréje `redaction.ts`-ben.
+*Ezt a mechanizmust négy + egy fókuszált adverzariális kör mérte és zárta.*
+
 ### D7 — Megfigyelhetőség payload-típustól függetlenül
 
 A redaktált-jelölés a `DisplayEvent` szintjén ül (nem a szöveg-payloadon belül), így egy redaktált

@@ -13,6 +13,16 @@
 /** Which windows an event is allowed to reach. `both` shows everywhere. */
 export type Zone = "private" | "public" | "both";
 
+/** Does an event of this zone reach the private view? (`private` and `both` do.) */
+export function reachesPrivate(zone: Zone): boolean {
+  return zone === "private" || zone === "both";
+}
+
+/** Does an event of this zone reach the public wall? (`public` and `both` do.) */
+export function reachesPublic(zone: Zone): boolean {
+  return zone === "public" || zone === "both";
+}
+
 /**
  * How a category is drawn.
  *  - `text`    → a DOM lane (súgás, riasztás)
@@ -124,6 +134,14 @@ export interface DisplayEvent {
   image?: ImageSpec;
   /** Embedded-page payload. */
   webpage?: WebpageSpec;
+  /**
+   * Set by the SERVER (never a producer) on the PRIVATE copy of a `both`/`public`
+   * event whose public variant was scrubbed or withheld (public-redaction D7). The
+   * private view renders a marker from it, so the operator sees what the audience
+   * did not — regardless of payload type. Absent on the public copy and on anything
+   * that passed through unredacted.
+   */
+  redaction?: "redacted" | "withheld";
 }
 
 /**
@@ -155,6 +173,14 @@ export interface ShowCommand {
   /** The `visual` id to show. */
   id: string;
   priority?: "immediate";
+  /**
+   * The referenced visual's zone (public-redaction D4). A `show` carries a `visual`
+   * id that is free producer text and can itself be sensitive, so it is broadcast
+   * only to clients whose zone matches — a `private` visual's `show` never reaches a
+   * public client. Omitted only for legacy paths; broadcast treats an absent zone as
+   * `both` (reaches everyone), which is why the server always sets it.
+   */
+  zone?: Zone;
 }
 
 /** Anything that can appear on the `/events` stream. */
@@ -269,12 +295,42 @@ export interface ResolvedWindow {
   boxes: ResolvedBox[];
 }
 
+/**
+ * The public-zone redaction *taxonomy* — config, never `src/` (public-redaction:
+ * "The redaction taxonomy is config, never code"). The *mechanism* (recursive walk,
+ * URL withholding, fail-closed, ReDoS bound) is engine, in `redaction.ts`; this is
+ * the project-specific part: which patterns mark something sensitive.
+ *
+ * The shipped default is domain-neutral — a marking convention (`[belső]` /
+ * `[internal]`), not one project's names — so a fresh project never silently
+ * redacts, or fails to redact, against another project's vocabulary.
+ */
+export interface RedactionConfig {
+  /**
+   * Regex sources applied to every string leaf of a public-bound event. Authored
+   * with Unicode classes (`\p{L}\p{N}`), never `\b` — `\b` treats `á` as a boundary
+   * and breaks every accented language. Compiled with the `u` flag; an invalid or
+   * catastrophic-backtracking pattern is dropped at load with a conspicuous warning.
+   */
+  patterns: string[];
+  /** What a matched span in a content string becomes. Default `[…]`. */
+  replacement: string;
+  /**
+   * Longest string leaf the redactor will evaluate. A longer leaf on a public-bound
+   * event is withheld rather than scanned (fail-closed) — one half of the ReDoS
+   * bound, the other being static rejection of nested quantifiers at load.
+   */
+  maxInputLength: number;
+}
+
 /** The whole wall config section. Categories, layouts + windows are config/data, not `src/`. */
 export interface WallConfig {
   /** TCP port the local HTTP server binds. */
   port: number;
   /** Category registry (declarative). May be augmented by a categories module. */
   categories: Category[];
+  /** Public-zone redaction taxonomy (patterns + marking convention). Engine is `redaction.ts`. */
+  redaction: RedactionConfig;
   /**
    * Optional path (relative to project root) to a `categories.mjs` module that
    * default-exports `(ctx) => Category[]`, mirroring the `knowledge.adapter` seam.
