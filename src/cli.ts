@@ -214,7 +214,8 @@ function cmdStop(print = false): void {
   const cfg = loadConfig();
   const pf = pidFile();
   if (!existsSync(pf)) {
-    beep("end");
+    // No chime here: `stop` runs on every SessionEnd (including /clear), so a stop
+    // that found nothing to stop must stay silent — otherwise every /clear beeps.
     console.log("[set-copilot] No capture running");
     // A capture that hit its --max-minutes limit removed its own PID file, but its
     // transcript is still waiting to be read — so print even with nothing to kill.

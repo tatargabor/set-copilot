@@ -132,6 +132,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "SET_COPILOT_DIR=\"$CLAUDE_PROJECT_DIR/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}\" npx set-copilot stop",
+            "timeout": 15
+          },
+          {
+            "type": "command",
             "command": "SET_COPILOT_DIR=\"$CLAUDE_PROJECT_DIR/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}\" npx set-copilot wall-stop",
             "timeout": 10
           }
