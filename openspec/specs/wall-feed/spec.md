@@ -19,9 +19,13 @@ SHALL NOT block a fast one (no head-of-line blocking): each producer emits when 
 is ready. Producers SHALL NOT write directly to the SSE broadcast; they SHALL go through the
 event-source ingest so the server-side director stays authoritative.
 
+Each producer SHALL be a fork of the main session scoped to a single slot mandate (see
+`fork-producer`). Concurrency is therefore per-slot fork concurrency, not a fleet of
+independently-running worker processes.
+
 #### Scenario: A slow graph update does not delay an alert
 
-- **WHEN** a graph producer is mid-computation on an expensive delta and a text producer
+- **WHEN** a graph producer fork is mid-computation on an expensive delta and a text producer
   determines an alert is ready
 - **THEN** the alert is ingested and broadcast without waiting for the graph delta to finish
 
@@ -30,6 +34,24 @@ event-source ingest so the server-side director stays authoritative.
 - **WHEN** the real producers replace the scripted fake-feed
 - **THEN** they emit the same category-tagged event shape (per `monitor-wall-display` D6), so
   the display renders them with no change to the server core, SSE, director, or client render
+
+#### Scenario: Concurrent slot forks do not block each other
+
+- **WHEN** two slot mandates warrant an update at the same time
+- **THEN** two forks run concurrently and each emits independently as soon as its own output
+  is ready
+
+#### Scenario: Text reaches the wall within the render-hop budget
+
+- **WHEN** the main session (or a thin text loop) has a súgás/riasztás ready
+- **THEN** it is emitted directly to the event source with no intermediate LLM call, and the
+  added latency over in-session output is the SSE + render hop only
+
+#### Scenario: Alert bypasses the director's pacing
+
+- **WHEN** a `riasztás` event is emitted with `priority: "immediate"`
+- **THEN** the server-side director broadcasts it immediately without applying dwell/freshness
+  pacing (pacing applies only to the paced canvas swap)
 
 ### Requirement: Text path carries no model hop
 
@@ -51,41 +73,38 @@ path.
 - **THEN** the server-side director broadcasts it immediately without applying dwell/freshness
   pacing (pacing applies only to the paced canvas swap)
 
-### Requirement: Hybrid control — autonomous worker with sparse context hints
-
-The expensive graph modality SHALL be driven by an autonomous producer that watches the
-transcript itself, keeping the main session OUT of the per-tick critical path. The main
-session SHALL be able to supply sparse, cheap context hints (e.g. canonical component names
-from the knowledge base) on topic change rather than per tick, to ground the output without
-serializing the hot path.
-
-#### Scenario: Graph updates without the main session in the loop
-
-- **WHEN** the transcript advances with architecture-relevant content and no new context hint
-  has been issued
-- **THEN** the graph producer emits a delta on its own, without a round-trip through the main
-  session
-
-#### Scenario: Context hint grounds naming without per-tick cost
-
-- **WHEN** the main session detects a topic change and issues a context hint naming the
-  canonical entities
-- **THEN** subsequent graph deltas use those names, and the hint is consumed once (not
-  re-issued per transcript line)
-
 ### Requirement: Latency budget
 
-The feed SHALL meet a per-modality latency budget: the text path SHALL add only the render
-hop (single/double-digit milliseconds locally) over in-session output; the graph path SHALL
-land within the small-delta live budget (approximately 1–4 seconds per delta, per the
-research), and SHALL be faster than having the main model render the visual directly.
+The feed SHALL meet a per-modality latency budget. The text path SHALL add only the render hop
+(single/double-digit milliseconds locally) over in-session output.
+
+The graph path budget SHALL be established by live measurement on the fork producer, not
+inherited from the fast-tier research estimate. Because a producer fork runs on the parent
+session's model (see `fork-producer`), the previously specified 1–4 second small-model delta
+budget is not applicable and SHALL NOT be asserted without a recorded measurement.
+
+The governing user-facing property SHALL be that the main session is not blocked while a
+visual is produced: perceived responsiveness in chat SHALL NOT degrade when a fork is drawing.
+
+#### Scenario: Graph budget comes from measurement
+
+- **WHEN** the graph path latency is stated
+- **THEN** it cites a recorded live measurement of the fork producer, not the fast-tier research
+  estimate
+
+#### Scenario: Drawing does not stall the chat
+
+- **WHEN** a producer fork is drawing a visual
+- **THEN** the main session continues to respond in chat without waiting for the fork
 
 #### Scenario: Graph delta beats main-model rendering
 
 - **WHEN** a diagram update is needed
-- **THEN** the small-model delta path is used (≈1–4 s) rather than the main model generating
-  the full visual (10+ s), and the graph path runs in parallel with text so it never delays
-  text output
+- **THEN** the producer emits a compact structured spec (nodes/edges via `wall-emit`) that the
+  client renders deterministically (~10 ms), rather than the main session generating the full
+  visual inline (seconds), and the fork runs in parallel with the chat so it never delays text
+  output. The magnitude of the fork's own latency is not asserted here — it is deferred to
+  measurement (see "Graph budget comes from measurement").
 
 ### Requirement: Speaker and zone primitives preserved
 

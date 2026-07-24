@@ -47,6 +47,6 @@
 
 ## 8. Dokumentáció
 
-- [ ] 8.1 `docs/ROADMAP.md` #6: a producer-modell rögzítése (fork, emisszió-per-igény, szekciónkénti megbízás) és a mért latency-számok
-- [ ] 8.2 `CLAUDE.md`: a rajzolási szerződés felvétele a config-seamek listájába (`copilot.alerts`, `detect.*`, `knowledge.keywords` mellé) — ez a „minden projekt-specifikus dolog config, nem kód" elv negyedik varrata
-- [ ] 8.3 Feljegyezni, miért lett törölve a Haiku-worker prototípus, és mi volt a tanulsága — hogy egy későbbi iteráció ne építse újra ugyanazt
+- [x] 8.1 `docs/ROADMAP.md` #6: a producer-modell rögzítése (fork, emisszió-per-igény, szekciónkénti megbízás) és a mért latency-számok
+- [x] 8.2 `CLAUDE.md`: a rajzolási szerződés felvétele a config-seamek listájába (`copilot.alerts`, `detect.*`, `knowledge.keywords` mellé) — ez a „minden projekt-specifikus dolog config, nem kód" elv negyedik varrata (`copilot.drawing`)
+- [x] 8.3 Feljegyezni, miért lett törölve a Haiku-worker prototípus, és mi volt a tanulsága — hogy egy későbbi iteráció ne építse újra ugyanazt (ROADMAP „Döntések logja")

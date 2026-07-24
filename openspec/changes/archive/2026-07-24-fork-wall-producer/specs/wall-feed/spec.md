@@ -31,6 +31,18 @@ independently-running worker processes.
 - **THEN** two forks run concurrently and each emits independently as soon as its own output
   is ready
 
+#### Scenario: Text reaches the wall within the render-hop budget
+
+- **WHEN** the main session (or a thin text loop) has a súgás/riasztás ready
+- **THEN** it is emitted directly to the event source with no intermediate LLM call, and the
+  added latency over in-session output is the SSE + render hop only
+
+#### Scenario: Alert bypasses the director's pacing
+
+- **WHEN** a `riasztás` event is emitted with `priority: "immediate"`
+- **THEN** the server-side director broadcasts it immediately without applying dwell/freshness
+  pacing (pacing applies only to the paced canvas swap)
+
 ### Requirement: Latency budget
 
 The feed SHALL meet a per-modality latency budget. The text path SHALL add only the render hop
@@ -54,6 +66,15 @@ visual is produced: perceived responsiveness in chat SHALL NOT degrade when a fo
 
 - **WHEN** a producer fork is drawing a visual
 - **THEN** the main session continues to respond in chat without waiting for the fork
+
+#### Scenario: Graph delta beats main-model rendering
+
+- **WHEN** a diagram update is needed
+- **THEN** the producer emits a compact structured spec (nodes/edges via `wall-emit`) that the
+  client renders deterministically (~10 ms), rather than the main session generating the full
+  visual inline (seconds), and the fork runs in parallel with the chat so it never delays text
+  output. The magnitude of the fork's own latency is not asserted here — it is deferred to
+  measurement (see "Graph budget comes from measurement").
 
 ## REMOVED Requirements
 
