@@ -6,33 +6,33 @@ Purpose fills.
 
 ## 1. wall-feed delta
 
-- [ ] 1.1 `transcript`/`transzkript` removed from "Text path carries no model hop" and its
+- [x] 1.1 `transcript`/`transzkript` removed from "Text path carries no model hop" and its
   scenario retargeted onto a real category (`riasztás`), matching `config.ts:296-309`
-- [ ] 1.2 Latency claim corrected in "Modality-partitioned parallel producers",
+- [x] 1.2 Latency claim corrected in "Modality-partitioned parallel producers",
   "Text path carries no model hop", and "Latency budget" to name the ingest hop (append +
   tail-poll + spawn + SSE/render), sub-ms confined to the in-process fake-feed
-- [ ] 1.3 All base scenarios carried forward (none dropped) — archiver invariant
+- [x] 1.3 All base scenarios carried forward (none dropped) — archiver invariant
 
 ## 2. display-layout delta
 
-- [ ] 2.1 "Render types" graph mandate rewritten to the shipped A-path full redraw
+- [x] 2.1 "Render types" graph mandate rewritten to the shipped A-path full redraw
   (`wall.js:277-288`), with incremental `cy.add` kept as tracked future (task 9.13)
-- [ ] 2.2 "Incremental graph append" scenario renamed/rewritten to "Graph append redraws the
+- [x] 2.2 "Incremental graph append" scenario renamed/rewritten to "Graph append redraws the
   accumulated visual" reflecting the full redraw
-- [ ] 2.3 "Slot-based layout composition" composition scenario positions corrected
+- [x] 2.3 "Slot-based layout composition" composition scenario positions corrected
   `left`/`right` → `szöveg`/`prezentáció` (the shipped `third-two-thirds` positions)
-- [ ] 2.4 All base scenarios carried forward, legacy `slots` scenarios intact
+- [x] 2.4 All base scenarios carried forward, legacy `slots` scenarios intact
 
 ## 3. box-policy delta
 
-- [ ] 3.1 "A box's mandate is independent of its zone" reworded so zone is a window-level
+- [x] 3.1 "A box's mandate is independent of its zone" reworded so zone is a window-level
   property (`WallWindow.zones`); mandate stays `WallBox.policy`; independence preserved
-- [ ] 3.2 Both scenarios retargeted to change the *window's* zone, none dropped
+- [x] 3.2 Both scenarios retargeted to change the *window's* zone, none dropped
 
 ## 4. Validate
 
-- [ ] 4.1 `openspec validate spec-sync-corrections --strict` passes
-- [ ] 4.2 Re-read each delta against its cited source lines to confirm the spec now matches code
+- [x] 4.1 `openspec validate spec-sync-corrections --strict` passes
+- [x] 4.2 Re-read each delta against its cited source lines to confirm the spec now matches code
 
 ## 5. Post-archive Purpose fills (direct edits to applied specs)
 
