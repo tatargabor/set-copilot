@@ -1,7 +1,8 @@
 /**
  * The producer-agnostic event source (design D7). The server ingests from these
  * rather than from one hard-wired producer, so any number of producers — the
- * scripted fake-feed here, a real graph worker later — merge into one broadcast.
+ * scripted fake-feed here, fork-based producers appending JSONL later (see
+ * `fork-producer`) — merge into one broadcast.
  *
  * The cross-process seam is JSONL append-and-tail, mirroring the existing
  * `capture` → `transcript.jsonl` → `poll` pattern: out-of-process producers
