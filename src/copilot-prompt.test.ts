@@ -329,6 +329,33 @@ describe("renderBoxPolicies", () => {
   it("does not throw on a config with no wall section at all", () => {
     expect(() => renderCopilotPrompt({ projectRoot: root, copilot: { alerts: DEFAULT_ALERTS } } as CopilotConfig)).not.toThrow();
   });
+
+  it("renders the predictive mandate from the staging box policy, and nothing when absent", () => {
+    // The predictive mandate is box policy (predictive-staging D5): renderBoxPolicies
+    // surfaces it in the box's section, so it needs no dedicated renderer.
+    const withMandate = renderCopilotPrompt(
+      wallCfg([
+        {
+          name: "én", route: "/", zones: ["private"], layout: "third-two-thirds",
+          boxes: { szöveg: { behavior: "latest", cats: ["előrejelzés"], policy: { instructions: "Rajzold ELŐRE a valószínű következő vizuált, staged." } } },
+        },
+      ]),
+    );
+    expect(withMandate).toContain("Rajzold ELŐRE");
+
+    // A box that declares no predictive mandate shows none — the mandate is config, not
+    // baked into the engine.
+    const withoutMandate = renderCopilotPrompt(
+      wallCfg([
+        {
+          name: "én", route: "/", zones: ["private"], layout: "third-two-thirds",
+          boxes: { szöveg: { behavior: "scroll", cats: ["előrejelzés"] } },
+        },
+      ]),
+    );
+    expect(withoutMandate).not.toContain("Rajzold ELŐRE");
+    expect(withoutMandate).not.toContain("## Per-box policy");
+  });
 });
 
 describe("narration mandate (live-narration)", () => {

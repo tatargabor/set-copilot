@@ -343,3 +343,25 @@ describe("copilot.narration config (verbosity lever)", () => {
     expect(n.maxLines).toBe(1);
   });
 });
+
+describe("predictive-staging config", () => {
+  it("ships the előrejelzés category, a private staging box, and a promote-able public box", () => {
+    const cfg = loadConfig(project);
+    expect(cfg.wall.categories.some((c) => c.id === "előrejelzés" && c.render === "graph")).toBe(true);
+    const priv = cfg.wall.windows.find((w) => w.route === "/")!;
+    const staging = (priv.boxes as Record<string, { cats: string[] }>).staging;
+    expect(staging.cats).toEqual(["előrejelzés"]);
+    // A promoted (public-zone) prediction has somewhere to land on the public wall.
+    const pub = cfg.wall.windows.find((w) => w.route === "/wall")!;
+    const pubPrez = (pub.boxes as Record<string, { cats: string[] }>).prezentáció;
+    expect(pubPrez.cats).toContain("előrejelzés");
+  });
+
+  it("defaults staging.ttlMs and honours a positive override, ignoring a bad one", () => {
+    expect(loadConfig(project).wall.staging.ttlMs).toBe(120_000);
+    writeCfg(project, { wall: { staging: { ttlMs: 5000 } } });
+    expect(loadConfig(project).wall.staging.ttlMs).toBe(5000);
+    writeCfg(project, { wall: { staging: { ttlMs: -1 } } });
+    expect(loadConfig(project).wall.staging.ttlMs).toBe(120_000);
+  });
+});

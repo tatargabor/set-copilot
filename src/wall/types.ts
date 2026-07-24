@@ -142,6 +142,17 @@ export interface DisplayEvent {
    * that passed through unredacted.
    */
   redaction?: "redacted" | "withheld";
+  /**
+   * Marks a predictive staged visual (predictive-staging D3): content prepared for
+   * where the conversation is heading, drawn ahead into the PRIVATE zone during a
+   * `silence` window. The server tracks a staged visual for the promote gate and for
+   * expiry — it is a state marker, not geometry. A staged event is `zone:"private"` —
+   * and this is *enforced*, not merely conventional: `normalizeEvent` rejects
+   * `staged:true` on any non-private zone (fail-closed), so a single wrong zone character
+   * can never publish a prediction. The zone model keeps it off every public client, and
+   * it reaches the public wall only through an explicit `promote`.
+   */
+  staged?: boolean;
 }
 
 /**
@@ -218,8 +229,43 @@ export interface Pending {
   ttlMs?: number;
 }
 
+/**
+ * Lift a staged private visual into a target zone (predictive-staging D3). Triggered by
+ * the operator/skill after the gate fires (the conversation reached the predicted topic,
+ * or a single confirmation) — NOT autonomous. The server re-runs the already-prepared
+ * visual through the normal ingest funnel, so promoting into a `both`/public zone passes
+ * the SAME public-zone redaction as any other event: promotion is a cheap zone-lift of an
+ * existing draw, never a re-draw, and never a bypass of redaction.
+ *
+ * Trust boundary: unlike `show`/`heartbeat`/`stage-expired`, a promote is NOT server-only
+ * — it is the operator/skill's act, and the gate is *who may append to the canonical log*
+ * (the documented producer seam), not a server check. An injected promote can therefore
+ * lift a currently-staged visual, but the lift still runs through redaction, so the worst
+ * case is a prematurely-published *redacted* prediction, never raw private content.
+ */
+export interface Promote {
+  kind: "promote";
+  category: string;
+  /** The staged visual's id. */
+  visual: string;
+  /** Target zone for the lift. Default `public`. */
+  zone?: Zone;
+}
+
+/**
+ * A staged prediction that expired unused (predictive-staging D4). Broadcast to the
+ * PRIVATE view only, so a stale guess is marked (and released) rather than lingering as
+ * visual noise — and, once expired, it is no longer eligible for promotion. Server-only,
+ * like `show`/`heartbeat`: a producer that injects one is dropped.
+ */
+export interface StageExpired {
+  kind: "stage-expired";
+  category: string;
+  visual: string;
+}
+
 /** Anything that can appear on the `/events` stream. */
-export type WireMessage = DisplayEvent | ShowCommand | Heartbeat | Pending;
+export type WireMessage = DisplayEvent | ShowCommand | Heartbeat | Pending | Promote | StageExpired;
 
 export function isShowCommand(m: WireMessage): m is ShowCommand {
   return (m as ShowCommand).kind === "show";
@@ -231,6 +277,14 @@ export function isHeartbeat(m: WireMessage): m is Heartbeat {
 
 export function isPending(m: WireMessage): m is Pending {
   return (m as Pending).kind === "pending";
+}
+
+export function isPromote(m: WireMessage): m is Promote {
+  return (m as Promote).kind === "promote";
+}
+
+export function isStageExpired(m: WireMessage): m is StageExpired {
+  return (m as StageExpired).kind === "stage-expired";
 }
 
 // ---- config/data shapes ----------------------------------------------------
@@ -381,6 +435,12 @@ export interface WallConfig {
    * would grow without limit.
    */
   scrollHistory: number;
+  /**
+   * Predictive-staging expiry (predictive-staging D4). A staged prediction not promoted
+   * within `ttlMs` is released with a private-view marker and becomes non-promotable, so
+   * a stale guess never lingers as visual noise or publishes late in the wrong context.
+   */
+  staging: { ttlMs: number };
   /**
    * Optional path (relative to project root) to a `categories.mjs` module that
    * default-exports `(ctx) => Category[]`, mirroring the `knowledge.adapter` seam.

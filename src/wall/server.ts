@@ -20,14 +20,15 @@ import type { CategoryRegistry } from "./categories.js";
 import {
   type CanvasState, emptyCanvas, offerCandidate, nextSwap, commitSwap, overrideSwap,
 } from "./director.js";
-import { normalizeEvent, normalizePending } from "./emit.js";
+import { normalizeEvent, normalizePending, normalizePromote } from "./emit.js";
 import type { EventSource } from "./event-source.js";
 import { compileRedactor, splitForZones, type CompiledRedactor, type EventVariants } from "./redaction.js";
 import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
   type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Heartbeat, type Pacing,
-  type Pending, type RedactionConfig, type ResolvedWindow, type ShowCommand, type WireMessage, type Zone,
-  isHeartbeat, isPending, isShowCommand, reachesPrivate, reachesPublic,
+  type Pending, type Promote, type RedactionConfig, type ResolvedWindow, type ShowCommand, type StageExpired,
+  type WireMessage, type Zone,
+  isHeartbeat, isPending, isPromote, isShowCommand, isStageExpired, reachesPrivate, reachesPublic,
 } from "./types.js";
 
 const MIME: Record<string, string> = {
@@ -161,6 +162,14 @@ export interface WallServerOptions {
   transcriptPath?: string;
   /** How often the liveness heartbeat is broadcast. Default 1000 ms. */
   heartbeatMs?: number;
+  /**
+   * How long a staged prediction stays promotable before it expires (predictive-staging
+   * D4). After this, a promote is refused and the private view is told to release it.
+   * Default 120000. Set 0 to disable staging expiry (predictions never auto-expire).
+   */
+  stagingTtlMs?: number;
+  /** How often to sweep for expired staged predictions. Default 5000 ms. */
+  stagingSweepMs?: number;
 }
 
 export class WallServer {
@@ -170,6 +179,14 @@ export class WallServer {
   private readonly sources: EventSource[] = [];
   private directorTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
+  private stagingTimer?: NodeJS.Timeout;
+  /**
+   * Live staged predictions: `${category}\0${visual}` → stagedAt (predictive-staging).
+   * A visual is promotable only while it is in this map; expiry (or a promote) removes
+   * it. Normal private visuals never enter it — only events carrying `staged:true` do —
+   * so an ordinary private graph is neither expirable nor promotable-by-accident.
+   */
+  private readonly staged = new Map<string, number>();
 
   // ---- accumulated display state (for replay + the director) ----
   /** category → visual id → accumulated graph, split into private/public zone slices. */
@@ -266,6 +283,11 @@ export class WallServer {
             this.opts.heartbeatMs ?? 1000,
           );
         }
+        // Sweep expired staged predictions (predictive-staging D4). Disabled when the
+        // ttl is 0 — predictions then never auto-expire.
+        if ((this.opts.stagingTtlMs ?? 120_000) > 0) {
+          this.stagingTimer = setInterval(() => this.sweepStaged(Date.now()), this.opts.stagingSweepMs ?? 5000);
+        }
         resolve();
       };
       this.http!.once("error", onError);
@@ -284,6 +306,7 @@ export class WallServer {
     for (const s of this.sources) s.stop();
     if (this.directorTimer) clearInterval(this.directorTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.stagingTimer) clearInterval(this.stagingTimer);
     for (const c of this.clients) c.res.end();
     this.clients.clear();
     this.http?.close();
@@ -338,6 +361,68 @@ export class WallServer {
     }
   }
 
+  // ---- predictive staging (predictive-staging) ----
+  //
+  // A prediction is a guess, and the wall carries authority, so a guess is prepared in
+  // the private zone and NEVER published autonomously. The zone model already keeps a
+  // `private` staged event off every public client; promotion is the only path to the
+  // public wall, and it is operator/rule-triggered, cheap (a zone-lift of the existing
+  // draw), and — into a public zone — subject to the same redaction as any event.
+
+  private stageKey(cat: string, visual: string): string {
+    return JSON.stringify([cat, visual]);
+  }
+
+  /**
+   * Promote a staged private visual into a target zone. Refused unless the visual is a
+   * LIVE staged prediction (present in the registry and not expired), so a stale or
+   * never-staged visual can never be lifted. The lift re-runs the already-prepared visual
+   * through `ingest` as one reset delta in the target zone — no re-draw — so redaction,
+   * public-slice accumulation, broadcast, and the show all happen on identical terms.
+   */
+  private promote(p: Promote): void {
+    const key = this.stageKey(p.category, p.visual);
+    const g = this.graphs.get(p.category)?.get(p.visual);
+    if (!g || !g.private.present) {
+      console.warn(`[set-copilot] wall: refusing promote — nothing staged for "${p.category}"/"${p.visual}"`);
+      return;
+    }
+    if (!this.staged.has(key)) {
+      console.warn(`[set-copilot] wall: refusing promote — "${p.visual}" is not a live staged prediction (expired or never staged)`);
+      return;
+    }
+    this.staged.delete(key); // promoted → no longer staged or expirable
+    const zone: Zone = p.zone ?? "public";
+    this.ingest({
+      category: p.category,
+      zone,
+      visual: p.visual,
+      graph: { op: "reset", nodes: [...g.private.nodes.values()], edges: g.private.edges },
+    });
+  }
+
+  /** Release staged predictions past their ttl: drop them and mark the private view (D4). */
+  private sweepStaged(now: number): void {
+    const ttl = this.opts.stagingTtlMs ?? 120_000;
+    if (ttl <= 0) return;
+    for (const [key, at] of this.staged) {
+      if (now - at < ttl) continue;
+      this.staged.delete(key);
+      const [category, visual] = JSON.parse(key) as [string, string];
+      this.broadcastStageExpired({ kind: "stage-expired", category, visual });
+    }
+  }
+
+  /** Tell the private view a staged prediction expired — never a public client (D4). */
+  private broadcastStageExpired(m: StageExpired): void {
+    const payload = `data: ${JSON.stringify(m)}\n\n`;
+    for (const c of this.clients) {
+      if (this.isPublicClient(c)) continue; // a stage-expired marker is private-only
+      if (!c.cats.has(m.category)) continue;
+      c.res.write(payload);
+    }
+  }
+
   // ---- ingest + accumulate ----
 
   /**
@@ -376,6 +461,24 @@ export class WallServer {
       this.broadcastPending(p.pending);
       return;
     }
+    // A stage-expired marker is server-authoritative like `show`/`heartbeat`: the server
+    // decides when a staged prediction dies, so an injected one is dropped.
+    if (isStageExpired(msg)) {
+      console.warn("[set-copilot] wall: dropping externally-supplied stage-expired — it is server-only");
+      return;
+    }
+    // A promote lifts an already-staged private visual into a target zone (predictive-
+    // staging). It carries no payload; the server re-runs the staged visual through this
+    // same funnel so redaction and broadcast happen exactly as for any event.
+    if (isPromote(msg)) {
+      const p = normalizePromote(msg);
+      if (!p.ok) {
+        console.warn(`[set-copilot] wall: dropping invalid promote (${p.reason})`);
+        return;
+      }
+      this.promote(p.promote);
+      return;
+    }
     const norm = normalizeEvent(msg, { projectRoot: this.opts.projectRoot });
     if (!norm.ok) {
       console.warn(`[set-copilot] wall: dropping invalid event (${norm.reason})`);
@@ -397,6 +500,14 @@ export class WallServer {
 
     this.accumulate(variants);
     this.broadcastEvent(variants);
+
+    // Register a predictive staged visual for the promote gate + expiry (predictive-
+    // staging). Only a private graph carrying `staged:true` enters the registry; the zone
+    // model already keeps it off every public client, and it reaches the public wall only
+    // through an explicit promote.
+    if (msg.staged && msg.graph && msg.visual && reachesPrivate(msg.zone)) {
+      this.staged.set(this.stageKey(msg.category, msg.visual), Date.now());
+    }
 
     // A graph reset (new visual) offers a candidate to the director; an immediate
     // one overrides the dwell and shows now. Keyed on the ORIGINAL event's zone/visual.

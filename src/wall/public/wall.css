@@ -175,3 +175,26 @@ body {
 .pending-overlay .pending-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pending-overlay .pending-spinner { display: inline-block; animation: pending-spin 1.4s linear infinite; }
 @keyframes pending-spin { to { transform: rotate(360deg); } }
+
+/* Predictive staging (predictive-staging): a "prepared" badge distinguishes a private
+   guess from established content, and an expired prediction dims so a stale guess is
+   never mistaken for a live one — and never quietly hardens into fact. */
+.stage-badge {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  z-index: 5;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel));
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  pointer-events: none;
+}
+.stage-badge.stage-expired {
+  background: color-mix(in srgb, var(--muted) 20%, var(--panel));
+  color: var(--muted);
+  border-color: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+.slot.stage-dim { opacity: 0.5; }

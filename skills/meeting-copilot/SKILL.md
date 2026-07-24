@@ -253,6 +253,33 @@ Rules that keep this cheap and correct:
 For a one-line text note you may skip the fork and `wall-emit` directly — there is nothing to
 compose, so a fork would only add latency.
 
+**Prepared, not published — the `silence` window as a preparation window (predictive-staging).** A
+fork-based draw is slow (16–62 s); by the time it lands the conversation has moved on. So use a `silence`
+event not only for a deeper lookup but for a short (one- to two-step) extrapolation of where the
+conversation is heading, and **pre-draw the likely-next visual into private staging** — so the expensive
+draw is already done when the topic arrives. This is preparation, not prediction-on-the-wall:
+
+- **Stage privately.** The staging fork emits the predicted visual to the `előrejelzés` category with
+  `zone:"private"` and `staged:true` — it lands in the private staging box, never on the public wall. Keep
+  the mandate one line and DON'T read source for a prediction (the expensive branch) unless the private
+  mandate genuinely needs it; a guess is not worth a 60k-token source read.
+- **A prediction is a guess; the wall carries authority.** NEVER emit a prediction to a `both`/`public`
+  zone. There is no confidence threshold that makes an unspoken guess safe to publish — a confident wrong
+  prediction is the worst case. The zone model is the guarantee: staged = private, full stop.
+- **Promote when it actually arrives.** When the conversation reaches the predicted topic, lift the
+  already-prepared visual to the public wall with a cheap promote (no re-draw) — on a single confirmation,
+  or a clear rule that the topic was reached:
+
+  ```bash
+  SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"kind":"promote","category":"előrejelzés","visual":"<staged id>","zone":"public"}'
+  ```
+
+  The server lifts the existing visual through the same redaction as any public event. Promotion is never
+  automatic for an unspoken prediction — it is your explicit act.
+- **Let a stale guess go.** An unpromoted prediction expires on its own (the server releases it and marks
+  the private view); the conversation turned elsewhere, and a stale guess must not sit as visual noise or be
+  promoted later out of context. Don't fight the expiry — draw a fresh prediction if the topic recurs.
+
 A malformed event is dropped with a warning, never crashing capture — so mirror freely and move
 on. If no wall is running, skip the emitting — but the chat-feedback rules above (direct address,
 ambiguity) still apply.

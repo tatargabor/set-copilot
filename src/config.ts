@@ -345,6 +345,11 @@ export const DEFAULT_CATEGORIES: Category[] = [
   { id: "narráció", label: "Narráció", icon: "🗣", render: "text" },
   { id: "architektúra", label: "Architektúra", icon: "🕸", render: "graph" },
   { id: "metrika", label: "Metrika", icon: "📊", render: "chart" },
+  // The predictive-staging channel (predictive-staging). A visual drawn AHEAD during a
+  // `silence` window lands here in the PRIVATE staging box as `zone:"private"`, and only
+  // an explicit promote lifts it to the public presentation box. A guess never publishes
+  // itself: "prepared, not published". See DEFAULT_WINDOWS and the predictive-staging spec.
+  { id: "előrejelzés", label: "Előrejelzés", icon: "🔮", render: "graph" },
 ];
 
 /**
@@ -360,6 +365,10 @@ export const DEFAULT_LAYOUTS: WallLayout[] = [
   { id: "stacked", areas: [["szöveg"], ["prezentáció"]] },
   { id: "third-two-thirds", areas: [["szöveg", "prezentáció"]], columns: ["1fr", "2fr"] },
   { id: "prezentáció-teljes", areas: [["prezentáció"]] },
+  // The private view's layout with a staging lane along the bottom (predictive-staging).
+  // Geometry only: a full-width row under the text + presentation, where a pre-drawn
+  // prediction waits privately until it is promoted.
+  { id: "private-staging", areas: [["szöveg", "prezentáció"], ["staging", "staging"]], columns: ["1fr", "2fr"], rows: ["2fr", "1fr"] },
 ];
 
 /**
@@ -386,20 +395,32 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
     name: "én",
     route: "/",
     zones: ["private", "both"],
-    layout: "third-two-thirds",
+    layout: "private-staging",
     boxes: {
       szöveg: {
         behavior: "scroll",
         cats: ["riasztás", "súgás", "narráció"],
         policy: {
           instructions:
-            "Ez a privát súgódoboz. Ellenőrizd, amit a beszélő mond, és hozd felszínre, amit nem tud: ellentmondás a rögzített döntésekkel, releváns kontextus, rögzítésre érdemes új döntés. A `narráció`-sorok folyamatos, tartalmi kísérőszöveget adnak arról, ami épp zajlik — az alertektől külön csatorna.",
+            "Ez a privát súgódoboz. Ellenőrizd, amit a beszélő mond, és hozd felszínre, amit nem tud, ÉS amit mindjárt tudnia kell: ellentmondás a rögzített döntésekkel, releváns kontextus, rögzítésre érdemes új döntés — és egy `silence`-ablakban egy-két lépéssel előre, merre tart a beszélgetés. A `narráció`-sorok folyamatos, tartalmi kísérőszöveget adnak arról, ami épp zajlik — az alertektől külön csatorna.",
         },
       },
       prezentáció: {
         behavior: "latest",
         cats: ["architektúra", "metrika"],
         pacing: { minDwellMs: 8000, crossFadeMs: 400 },
+      },
+      staging: {
+        behavior: "latest",
+        cats: ["előrejelzés"],
+        pacing: { minDwellMs: 4000, crossFadeMs: 400 },
+        policy: {
+          // The predictive mandate lives in this box's policy (config, not `src/`):
+          // prepare ahead, privately. Promotion to the public wall is a separate,
+          // explicit gate — "prepared, not published" (predictive-staging D1/D5).
+          instructions:
+            "Ez a privát staging-doboz. A `silence`-ablakban rajzold ELŐRE a valószínű következő vizuált ide, `zone:\"private\"`, `staged:true` — ez felkészülés, nem publikálás. A publikus falra csak explicit promote emeli, ha a beszélgetés tényleg odaér. Egy fel nem használt jóslat elévül; ne üljön itt zajként.",
+        },
       },
     },
   },
@@ -423,8 +444,11 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
         },
       },
       prezentáció: {
+        // Also subscribes to `előrejelzés`: a staged prediction is private and never
+        // reaches here on its own, but a PROMOTED one (lifted to a public zone) surfaces
+        // in this public presentation box — the promote target (predictive-staging D3).
         behavior: "latest",
-        cats: ["architektúra", "metrika"],
+        cats: ["architektúra", "metrika", "előrejelzés"],
         pacing: { minDwellMs: 8000, crossFadeMs: 400 },
       },
     },
@@ -480,11 +504,15 @@ export const DEFAULT_REDACTION: RedactionConfig = {
 /** Recent scroll lines per category kept for connect-time replay (wall-scroll-replay). */
 export const DEFAULT_SCROLL_HISTORY = 20;
 
+/** How long a staged prediction stays promotable before it expires (predictive-staging). */
+export const DEFAULT_STAGING_TTL_MS = 120_000;
+
 export const DEFAULT_WALL: WallConfig = {
   port: 4180,
   categories: DEFAULT_CATEGORIES,
   redaction: DEFAULT_REDACTION,
   scrollHistory: DEFAULT_SCROLL_HISTORY,
+  staging: { ttlMs: DEFAULT_STAGING_TTL_MS },
   layouts: DEFAULT_LAYOUTS,
   windows: DEFAULT_WINDOWS,
 };
@@ -723,6 +751,12 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         typeof wall.scrollHistory === "number" && wall.scrollHistory > 0
           ? Math.floor(wall.scrollHistory)
           : DEFAULT_WALL.scrollHistory,
+      staging: {
+        ttlMs:
+          typeof wall.staging?.ttlMs === "number" && wall.staging.ttlMs > 0
+            ? Math.floor(wall.staging.ttlMs)
+            : DEFAULT_WALL.staging.ttlMs,
+      },
       // Redaction is validated (patterns compiled, bad ones dropped) where it is
       // consumed, in `compileRedactor`; here we only resolve the shape. A supplied
       // non-empty `patterns` replaces the default marking convention wholesale. But an

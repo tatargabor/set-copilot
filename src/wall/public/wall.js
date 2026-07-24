@@ -49,6 +49,7 @@ function connect() {
     if (msg.kind === "show") return onShow(msg);
     if (msg.kind === "heartbeat") return onHeartbeat(msg);
     if (msg.kind === "pending") return onPending(msg);
+    if (msg.kind === "stage-expired") return onStageExpired(msg);
     onEvent(msg);
   };
 }
@@ -125,6 +126,33 @@ function hidePending(entry) {
   if (entry.pendingOverlay) entry.pendingOverlay.hidden = true;
 }
 
+// ---- predictive staging (predictive-staging) ----
+//
+// A staged prediction is prepared privately (this view only ever sees it if it is a
+// private view). It wears a "prepared" badge so the operator can tell a guess apart from
+// established content, and an expiry marker releases a prediction the conversation left
+// behind — a guess must never quietly harden into fact on the wall.
+
+/** Toggle a corner badge on a box that is showing a staged (or expired) prediction. */
+function markStage(entry, text, expired) {
+  let badge = entry.el.querySelector(":scope > .stage-badge");
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.className = "stage-badge";
+    entry.el.appendChild(badge);
+  }
+  badge.textContent = text;
+  badge.classList.toggle("stage-expired", Boolean(expired));
+}
+
+function onStageExpired(m) {
+  for (const entry of boxEls.values()) {
+    if (!entry.box.cats.includes(m.category)) continue;
+    entry.el.classList.add("stage-dim");
+    markStage(entry, "⌛ elévült jóslat", true);
+  }
+}
+
 // ---- routing ----
 
 function onEvent(ev) {
@@ -156,6 +184,13 @@ function applyToBox(entry, render, cat, ev) {
   // Any real payload for this box clears a pending placeholder it was showing
   // (wall-pending-indicator: "Real content clears the placeholder").
   hidePending(entry);
+
+  // A staged prediction wears a "prepared" badge so a guess is visibly distinct from
+  // established content (predictive-staging); a fresh staged draw clears a prior expiry.
+  if (ev.staged) {
+    entry.el.classList.remove("stage-dim");
+    markStage(entry, "🔮 előkészítve", false);
+  }
 
   if (render === "text") {
     show(entry, "text");

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { CopilotConfig } from "../config.js";
-import { DEFAULT_PENDING_TTL_MS, emitWallEvents, normalizeEvent, normalizePending } from "./emit.js";
+import { DEFAULT_PENDING_TTL_MS, emitWallEvents, normalizeEvent, normalizePending, normalizePromote } from "./emit.js";
 import { isHeartbeat, isPending, isShowCommand, type WireMessage } from "./types.js";
 
 describe("normalizeEvent", () => {
@@ -213,6 +213,52 @@ describe("emitWallEvents pending + heartbeat routing", () => {
     const res = emitWallEvents(cfg(dir), { kind: "heartbeat", captureAlive: true, lastHeardMsAgo: 0 });
     expect(res.emitted).toBe(0);
     expect(res.dropped[0]?.reason).toContain("server-only");
+  });
+
+  it("writes a promote command, defaulting its zone to public", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+    const res = emitWallEvents(cfg(dir), { kind: "promote", category: "előrejelzés", visual: "v1" });
+    expect(res.emitted).toBe(1);
+    const line = JSON.parse(readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim());
+    expect(line).toEqual({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" });
+  });
+
+  it("drops an injected stage-expired — it is server-only", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+    const res = emitWallEvents(cfg(dir), { kind: "stage-expired", category: "a", visual: "v" });
+    expect(res.emitted).toBe(0);
+    expect(res.dropped[0]?.reason).toContain("server-only");
+  });
+});
+
+describe("normalizePromote + staged passthrough (predictive-staging)", () => {
+  it("requires a category and a visual id", () => {
+    expect(normalizePromote({ kind: "promote", category: "a" }).ok).toBe(false);
+    expect(normalizePromote({ kind: "promote", visual: "v" }).ok).toBe(false);
+    const r = normalizePromote({ kind: "promote", category: "a", visual: "v" });
+    expect(r.ok && r.promote.zone).toBe("public");
+  });
+
+  it("honours an explicit target zone and rejects a bad one", () => {
+    expect(normalizePromote({ kind: "promote", category: "a", visual: "v", zone: "both" }).ok).toBe(true);
+    expect(normalizePromote({ kind: "promote", category: "a", visual: "v", zone: "nope" }).ok).toBe(false);
+  });
+
+  it("carries the staged marker through normalizeEvent when private", () => {
+    const r = normalizeEvent({ category: "előrejelzés", zone: "private", visual: "v1", staged: true, graph: { op: "reset" } });
+    expect(r.ok && r.event.staged).toBe(true);
+    // A normal event without the flag never gains it.
+    const plain = normalizeEvent({ category: "a", text: "x" });
+    expect(plain.ok && plain.event.staged).toBeUndefined();
+  });
+
+  it("rejects staged:true on a non-private zone — a prediction must be private (fail-closed)", () => {
+    // A single wrong zone character must not be able to publish a prediction.
+    for (const zone of ["both", "public"]) {
+      const r = normalizeEvent({ category: "előrejelzés", zone, visual: "v1", staged: true, graph: { op: "reset" } });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('zone:"private"');
+    }
   });
 });
 

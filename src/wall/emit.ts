@@ -16,7 +16,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import type { CopilotConfig } from "../config.js";
-import { PAYLOAD_KEYS, type DisplayEvent, type PayloadKey, type Pending, type Zone } from "./types.js";
+import { PAYLOAD_KEYS, type DisplayEvent, type PayloadKey, type Pending, type Promote, type Zone } from "./types.js";
 
 /** The canonical events log a producer appends to (kept in sync with index.ts). */
 export function wallEventsFile(runtimeDir: string): string {
@@ -175,10 +175,20 @@ export function normalizeEvent(raw: unknown, opts: NormalizeOptions = {}): Norma
     : null;
   if (bad) return { ok: false, reason: bad };
 
+  // A staged prediction MUST be private (predictive-staging D1). The zone model is the
+  // whole guarantee that a guess never publishes autonomously, so `staged:true` on a
+  // `both`/`public` event is a contradiction — a single wrong zone character would else
+  // publish a prediction with no server-side backstop. Reject it loudly, fail-closed,
+  // rather than silently stripping the flag (which would still publish the content).
+  if (o.staged === true && zone !== "private") {
+    return { ok: false, reason: `staged predictions must be zone:"private", got ${JSON.stringify(zone)}` };
+  }
+
   const event: DisplayEvent = { category: category.trim(), zone };
   if (o.speaker === "mic" || o.speaker === "system") event.speaker = o.speaker;
   if (o.priority === "immediate") event.priority = "immediate";
   if (typeof o.visual === "string") event.visual = o.visual;
+  if (o.staged === true) event.staged = true; // predictive-staging marker (server-tracked)
   switch (payload) {
     case "text": event.text = o.text as string; break;
     case "graph": event.graph = o.graph as DisplayEvent["graph"]; break;
@@ -238,6 +248,43 @@ export function normalizePending(raw: unknown): NormalizePendingResult {
   return { ok: true, pending: { kind: "pending", category: category.trim(), zone, label: label.trim(), ttlMs } };
 }
 
+export type NormalizePromoteResult =
+  | { ok: true; promote: Promote }
+  | { ok: false; reason: string };
+
+/**
+ * Shape-check a `promote` command (predictive-staging D3). It lifts an existing staged
+ * visual by (category, visual) into a target zone — default `public` — so it carries no
+ * payload. The server enforces the gate (the visual must be staged and not expired) and
+ * re-runs the lift through ingest so redaction applies; this only validates the request.
+ */
+export function normalizePromote(raw: unknown): NormalizePromoteResult {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ok: false, reason: "not an object" };
+  }
+  const o = raw as Record<string, unknown>;
+  if (o.kind !== "promote") return { ok: false, reason: "not a promote command" };
+
+  const category = o.category;
+  if (typeof category !== "string" || !category.trim()) {
+    return { ok: false, reason: "missing/empty category" };
+  }
+  const visual = o.visual;
+  if (typeof visual !== "string" || !visual.trim()) {
+    return { ok: false, reason: "promote requires the staged visual id" };
+  }
+
+  let zone: Zone = "public"; // publish target by default
+  if (o.zone !== undefined) {
+    if (typeof o.zone !== "string" || !ZONES.includes(o.zone as Zone)) {
+      return { ok: false, reason: `bad zone ${JSON.stringify(o.zone)} (expected private|public|both)` };
+    }
+    zone = o.zone as Zone;
+  }
+
+  return { ok: true, promote: { kind: "promote", category: category.trim(), visual: visual.trim(), zone } };
+}
+
 export interface EmitResult {
   emitted: number;
   dropped: { reason: string }[];
@@ -262,8 +309,8 @@ export function emitWallEvents(cfg: CopilotConfig, raw: unknown): EmitResult {
     // A `pending` marker (wall-pending-indicator) takes the payload-free path; a
     // `heartbeat` is server-only and never valid from a producer (drop it, like `show`).
     const kind = (item as { kind?: unknown } | null)?.kind;
-    if (kind === "heartbeat") {
-      result.dropped.push({ reason: "heartbeat is server-only, not producer output" });
+    if (kind === "heartbeat" || kind === "stage-expired") {
+      result.dropped.push({ reason: `${kind} is server-only, not producer output` });
       continue;
     }
     if (kind === "pending") {
@@ -273,6 +320,16 @@ export function emitWallEvents(cfg: CopilotConfig, raw: unknown): EmitResult {
         continue;
       }
       batch += JSON.stringify(p.pending) + "\n";
+      result.emitted++;
+      continue;
+    }
+    if (kind === "promote") {
+      const p = normalizePromote(item);
+      if (!p.ok) {
+        result.dropped.push({ reason: p.reason });
+        continue;
+      }
+      batch += JSON.stringify(p.promote) + "\n";
       result.emitted++;
       continue;
     }
