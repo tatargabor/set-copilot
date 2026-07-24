@@ -20,14 +20,14 @@ import type { CategoryRegistry } from "./categories.js";
 import {
   type CanvasState, emptyCanvas, offerCandidate, nextSwap, commitSwap, overrideSwap,
 } from "./director.js";
-import { normalizeEvent } from "./emit.js";
+import { normalizeEvent, normalizePending } from "./emit.js";
 import type { EventSource } from "./event-source.js";
 import { compileRedactor, splitForZones, type CompiledRedactor, type EventVariants } from "./redaction.js";
 import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
-  type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Pacing, type RedactionConfig,
-  type ResolvedWindow, type ShowCommand, type WireMessage, type Zone,
-  isShowCommand, reachesPrivate, reachesPublic,
+  type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Heartbeat, type Pacing,
+  type Pending, type RedactionConfig, type ResolvedWindow, type ShowCommand, type WireMessage, type Zone,
+  isHeartbeat, isPending, isShowCommand, reachesPrivate, reachesPublic,
 } from "./types.js";
 
 const MIME: Record<string, string> = {
@@ -147,6 +147,20 @@ export interface WallServerOptions {
   redaction?: RedactionConfig;
   /** Recent lines per `scroll` category kept for connect-time replay (default 20). */
   scrollHistory?: number;
+  /**
+   * The runtime dir this wall serves (wall-liveness D1). Enables the server-derived
+   * heartbeat: the capture PID lives at `<runtimeDir>/capture.pid`, checked exactly as
+   * `stop`/`poll` check it. Absent → no heartbeat is broadcast (a wall with no capture
+   * to watch, e.g. a unit test that only exercises the event path).
+   */
+  runtimeDir?: string;
+  /**
+   * Path to the transcript whose freshness feeds `lastHeardMsAgo` (meeting mode). Its
+   * mtime is the "last heard" clock; absent or missing → `null` (nothing heard yet).
+   */
+  transcriptPath?: string;
+  /** How often the liveness heartbeat is broadcast. Default 1000 ms. */
+  heartbeatMs?: number;
 }
 
 export class WallServer {
@@ -155,6 +169,7 @@ export class WallServer {
   private readonly clients = new Set<Client>();
   private readonly sources: EventSource[] = [];
   private directorTimer?: NodeJS.Timeout;
+  private heartbeatTimer?: NodeJS.Timeout;
 
   // ---- accumulated display state (for replay + the director) ----
   /** category → visual id → accumulated graph, split into private/public zone slices. */
@@ -243,6 +258,14 @@ export class WallServer {
         this.http!.removeListener("error", onError);
         for (const s of this.sources) s.start((m) => this.ingest(m));
         this.directorTimer = setInterval(() => this.runDirector(Date.now()), this.opts.directorTickMs ?? 500);
+        // The liveness heartbeat runs only when we have a runtime dir to watch — there
+        // is nothing to report aliveness of otherwise (wall-liveness D1).
+        if (this.opts.runtimeDir) {
+          this.heartbeatTimer = setInterval(
+            () => this.broadcastHeartbeat(this.computeHeartbeat(Date.now())),
+            this.opts.heartbeatMs ?? 1000,
+          );
+        }
         resolve();
       };
       this.http!.once("error", onError);
@@ -260,9 +283,59 @@ export class WallServer {
   stop(): void {
     for (const s of this.sources) s.stop();
     if (this.directorTimer) clearInterval(this.directorTimer);
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     for (const c of this.clients) c.res.end();
     this.clients.clear();
     this.http?.close();
+  }
+
+  // ---- liveness heartbeat (wall-liveness) ----
+  //
+  // Derived by the server from the runtime dir, never from the copilot: the thing
+  // whose aliveness is in question cannot be the source of the signal. A stalled or
+  // dead copilot therefore cannot make the wall look dead while capture still runs.
+
+  /** Build the current heartbeat from the capture PID + transcript freshness. */
+  private computeHeartbeat(now: number): Heartbeat {
+    return {
+      kind: "heartbeat",
+      captureAlive: this.captureAlive(),
+      lastHeardMsAgo: this.lastHeardMsAgo(now),
+    };
+  }
+
+  /** Is the capture process for this runtime dir alive? Same probe as `stop`/`poll`. */
+  private captureAlive(): boolean {
+    const dir = this.opts.runtimeDir;
+    if (!dir) return false;
+    const pidFile = join(dir, "capture.pid");
+    if (!existsSync(pidFile)) return false;
+    const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+    if (!Number.isFinite(pid)) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  }
+
+  /** Age of the newest transcript line (by mtime), or null if nothing heard yet. */
+  private lastHeardMsAgo(now: number): number | null {
+    const p = this.opts.transcriptPath;
+    if (!p || !existsSync(p)) return null;
+    try { return Math.max(0, Math.round(now - statSync(p).mtimeMs)); } catch { return null; }
+  }
+
+  /** Send a heartbeat to every connected client — liveness is zone-independent. */
+  private broadcastHeartbeat(hb: Heartbeat): void {
+    const payload = `data: ${JSON.stringify(hb)}\n\n`;
+    for (const c of this.clients) c.res.write(payload);
+  }
+
+  /** Broadcast a pending marker, gated by zone and the window's category appetite (D4). */
+  private broadcastPending(p: Pending): void {
+    const payload = `data: ${JSON.stringify(p)}\n\n`;
+    for (const c of this.clients) {
+      if (!zoneMatches(p.zone, c.zones)) continue;
+      if (!c.cats.has(p.category)) continue;
+      c.res.write(payload);
+    }
   }
 
   // ---- ingest + accumulate ----
@@ -282,6 +355,25 @@ export class WallServer {
   ingest(msg: WireMessage): void {
     if (isShowCommand(msg)) {
       console.warn(`[set-copilot] wall: dropping externally-supplied show command for "${msg.cat}" — show is server-only`);
+      return;
+    }
+    // The heartbeat is server-authoritative like `show` (wall-liveness): a source that
+    // injects one via the canonical log could fake liveness, so it is dropped here.
+    if (isHeartbeat(msg)) {
+      console.warn("[set-copilot] wall: dropping externally-supplied heartbeat — heartbeat is server-only");
+      return;
+    }
+    // A pending marker (wall-pending-indicator) broadcasts through the zone gate like an
+    // event, but is NOT accumulated: it is transient placeholder feedback, not replayable
+    // state, so a late join never reconstructs a stale spinner (D3). Re-validated here
+    // because the JSONL tailer reaches ingest without passing through `wall-emit`.
+    if (isPending(msg)) {
+      const p = normalizePending(msg);
+      if (!p.ok) {
+        console.warn(`[set-copilot] wall: dropping invalid pending (${p.reason})`);
+        return;
+      }
+      this.broadcastPending(p.pending);
       return;
     }
     const norm = normalizeEvent(msg, { projectRoot: this.opts.projectRoot });
@@ -495,6 +587,12 @@ export class WallServer {
         client.res.write(`data: ${JSON.stringify(ev)}\n\n`);
         client.res.write(`data: ${JSON.stringify({ kind: "show", cat, id: shown, zone } satisfies ShowCommand)}\n\n`);
       }
+    }
+
+    // Send one immediate heartbeat so a freshly-connected client's status strip is
+    // populated between connect and the first timer tick (wall-liveness task 2.5).
+    if (this.opts.runtimeDir) {
+      client.res.write(`data: ${JSON.stringify(this.computeHeartbeat(Date.now()))}\n\n`);
     }
   }
 

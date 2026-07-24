@@ -16,15 +16,44 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* Column so the always-visible status strip sits above the wall and the wall takes
+     the rest — the strip is layout furniture, never a grid box (wall-liveness D2). */
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
 }
 
 /* The grid template comes entirely from the window's layout (areas, columns, rows),
    set inline by wall.js. Nothing here constrains the shape: horizontal, vertical,
    and mixed arrangements are all just config. */
 #wall {
-  height: 100vh;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: 10px;
   padding: 10px;
+}
+
+/* Liveness status strip (wall-liveness D2): always present, three ranged states.
+   The emoji + text are set by wall.js; the class carries the colour cue. */
+.status-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  background: var(--panel);
+  color: var(--muted);
+}
+.status-strip.status-listening { color: var(--text); border-left-color: var(--accent); }
+.status-strip.status-quiet { color: var(--muted); border-left-color: var(--muted); }
+.status-strip.status-dead {
+  color: var(--alert);
+  border-left-color: var(--alert);
+  background: color-mix(in srgb, var(--alert) 12%, var(--panel));
 }
 
 .slot {
@@ -121,3 +150,28 @@ body {
 .line.redaction-redacted .txt { text-decoration: underline dotted var(--alert); }
 .line.redaction-withheld { opacity: 0.7; }
 .line.redaction-withheld .icon::after { content: " ⊘"; color: var(--alert); }
+
+/* Pending placeholder (wall-pending-indicator): a lightweight overlay a fork-based
+   draw shows immediately in its target box, cleared by the real content or by ttl. It
+   overlays rather than replacing, so the previous content stands until the draw lands. */
+.pending-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 16px);
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  pointer-events: none;
+}
+.pending-overlay[hidden] { display: none; }
+.pending-overlay .pending-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-overlay .pending-spinner { display: inline-block; animation: pending-spin 1.4s linear infinite; }
+@keyframes pending-spin { to { transform: rotate(360deg); } }

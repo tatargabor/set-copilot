@@ -47,8 +47,82 @@ function connect() {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.kind === "show") return onShow(msg);
+    if (msg.kind === "heartbeat") return onHeartbeat(msg);
+    if (msg.kind === "pending") return onPending(msg);
     onEvent(msg);
   };
+}
+
+// ---- liveness status strip (wall-liveness) ----
+//
+// The server pushes a heartbeat on a timer, derived from the runtime dir, not from the
+// copilot — so this strip stays truthful even when the copilot is silent or stuck. The
+// "N mp / N perc" humanising is client-side; the server sends only raw ms.
+
+/** Below this age the capture counts as actively hearing speech; above it, quiet. */
+const QUIET_THRESHOLD_MS = 4000;
+let statusEl = null;
+
+function humanAge(ms) {
+  if (ms == null) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} mp`;
+  const m = Math.round(s / 60);
+  return `${m} perc`;
+}
+
+function onHeartbeat(hb) {
+  if (!statusEl) statusEl = document.getElementById("status-strip");
+  if (!statusEl) return;
+  statusEl.classList.remove("status-listening", "status-quiet", "status-dead");
+  if (!hb.captureAlive) {
+    statusEl.classList.add("status-dead");
+    statusEl.textContent = "⚠ a capture leállt";
+    return;
+  }
+  const age = hb.lastHeardMsAgo;
+  if (age != null && age < QUIET_THRESHOLD_MS) {
+    statusEl.classList.add("status-listening");
+    statusEl.textContent = "🎙 figyelek";
+  } else {
+    statusEl.classList.add("status-quiet");
+    statusEl.textContent = age == null ? "💤 csend" : `💤 csend · ${humanAge(age)} óta`;
+  }
+}
+
+// ---- pending placeholder (wall-pending-indicator) ----
+//
+// A fork-based draw takes seconds; the copilot marks its target box pending so a
+// spinner appears at once. It overlays the box rather than replacing content, and is
+// cleared either by the first real render (see applyToBox) or by its own ttl — so a
+// crashed fork never strands a permanent spinner.
+
+function onPending(p) {
+  for (const entry of boxEls.values()) {
+    if (!entry.box.cats.includes(p.category)) continue;
+    showPendingMarker(entry, p);
+  }
+}
+
+function showPendingMarker(entry, p) {
+  let overlay = entry.pendingOverlay;
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.className = "pending-overlay";
+    overlay.innerHTML = `<span class="pending-spinner">⏳</span><span class="pending-label"></span>`;
+    entry.el.appendChild(overlay);
+    entry.pendingOverlay = overlay;
+  }
+  overlay.querySelector(".pending-label").textContent = p.label ?? "";
+  overlay.hidden = false;
+  clearTimeout(entry.pendingTtl);
+  const ttl = typeof p.ttlMs === "number" && p.ttlMs > 0 ? p.ttlMs : 20000;
+  entry.pendingTtl = setTimeout(() => hidePending(entry), ttl);
+}
+
+function hidePending(entry) {
+  clearTimeout(entry.pendingTtl);
+  if (entry.pendingOverlay) entry.pendingOverlay.hidden = true;
 }
 
 // ---- routing ----
@@ -78,6 +152,10 @@ function applyToBox(entry, render, cat, ev) {
   // withheld. Mark the box regardless of payload type, so a redacted graph label or
   // chart title is as visible to the operator as a redacted text line.
   markRedaction(entry, ev);
+
+  // Any real payload for this box clears a pending placeholder it was showing
+  // (wall-pending-indicator: "Real content clears the placeholder").
+  hidePending(entry);
 
   if (render === "text") {
     show(entry, "text");

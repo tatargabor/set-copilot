@@ -16,7 +16,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import type { CopilotConfig } from "../config.js";
-import { PAYLOAD_KEYS, type DisplayEvent, type PayloadKey, type Zone } from "./types.js";
+import { PAYLOAD_KEYS, type DisplayEvent, type PayloadKey, type Pending, type Zone } from "./types.js";
 
 /** The canonical events log a producer appends to (kept in sync with index.ts). */
 export function wallEventsFile(runtimeDir: string): string {
@@ -189,6 +189,55 @@ export function normalizeEvent(raw: unknown, opts: NormalizeOptions = {}): Norma
   return { ok: true, event };
 }
 
+/** Default lifetime of a pending placeholder before the client releases it (D3). */
+export const DEFAULT_PENDING_TTL_MS = 20_000;
+
+export type NormalizePendingResult =
+  | { ok: true; pending: Pending }
+  | { ok: false; reason: string };
+
+/**
+ * Shape-check a `pending` marker (wall-pending-indicator D3/D4). Unlike a display
+ * event it carries NO payload — just a category to target and a one-line label — and
+ * it defaults to `zone: "private"`, because a placeholder is operator feedback and a
+ * `both`/`public` "working…" caption would otherwise land on an audience wall. `ttlMs`
+ * defaults so a producer that crashes mid-draw cannot strand a permanent spinner.
+ */
+export function normalizePending(raw: unknown): NormalizePendingResult {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ok: false, reason: "not an object" };
+  }
+  const o = raw as Record<string, unknown>;
+  if (o.kind !== "pending") return { ok: false, reason: "not a pending marker" };
+
+  const category = o.category;
+  if (typeof category !== "string" || !category.trim()) {
+    return { ok: false, reason: "missing/empty category" };
+  }
+  const label = o.label;
+  if (typeof label !== "string" || !label.trim()) {
+    return { ok: false, reason: "pending requires a non-empty label" };
+  }
+
+  let zone: Zone = "private"; // operator feedback by default (D4)
+  if (o.zone !== undefined) {
+    if (typeof o.zone !== "string" || !ZONES.includes(o.zone as Zone)) {
+      return { ok: false, reason: `bad zone ${JSON.stringify(o.zone)} (expected private|public|both)` };
+    }
+    zone = o.zone as Zone;
+  }
+
+  let ttlMs = DEFAULT_PENDING_TTL_MS;
+  if (o.ttlMs !== undefined) {
+    if (typeof o.ttlMs !== "number" || !(o.ttlMs > 0)) {
+      return { ok: false, reason: `ttlMs must be a positive number, got ${JSON.stringify(o.ttlMs)}` };
+    }
+    ttlMs = Math.floor(o.ttlMs);
+  }
+
+  return { ok: true, pending: { kind: "pending", category: category.trim(), zone, label: label.trim(), ttlMs } };
+}
+
 export interface EmitResult {
   emitted: number;
   dropped: { reason: string }[];
@@ -210,6 +259,23 @@ export function emitWallEvents(cfg: CopilotConfig, raw: unknown): EmitResult {
   const result: EmitResult = { emitted: 0, dropped: [] };
   let batch = "";
   for (const item of items) {
+    // A `pending` marker (wall-pending-indicator) takes the payload-free path; a
+    // `heartbeat` is server-only and never valid from a producer (drop it, like `show`).
+    const kind = (item as { kind?: unknown } | null)?.kind;
+    if (kind === "heartbeat") {
+      result.dropped.push({ reason: "heartbeat is server-only, not producer output" });
+      continue;
+    }
+    if (kind === "pending") {
+      const p = normalizePending(item);
+      if (!p.ok) {
+        result.dropped.push({ reason: p.reason });
+        continue;
+      }
+      batch += JSON.stringify(p.pending) + "\n";
+      result.emitted++;
+      continue;
+    }
     const norm = normalizeEvent(item, { projectRoot: cfg.projectRoot });
     if (!norm.ok) {
       result.dropped.push({ reason: norm.reason });

@@ -183,11 +183,54 @@ export interface ShowCommand {
   zone?: Zone;
 }
 
+/**
+ * A server-authoritative liveness heartbeat (wall-liveness D1). Broadcast to every
+ * client on a fixed timer, derived by the server from the runtime dir it serves — the
+ * capture PID and the transcript's freshness — never from the copilot. The thing whose
+ * aliveness is in question (the copilot) cannot be the source of the aliveness signal,
+ * so a stalled copilot can never make the wall look dead while capture is still running.
+ * Server-only, exactly like `show`: an injected heartbeat from an event source is dropped.
+ */
+export interface Heartbeat {
+  kind: "heartbeat";
+  /** Is the capture process for this runtime dir alive (PID file present + reachable)? */
+  captureAlive: boolean;
+  /** Age in ms of the newest transcript line, or null if nothing has been heard yet. */
+  lastHeardMsAgo: number | null;
+}
+
+/**
+ * A lightweight "working" marker (wall-pending-indicator D3). When the copilot starts a
+ * fork-based draw that takes seconds, it emits a pending marker so the target box shows a
+ * placeholder at once — legible instead of indistinguishable from a dead wall. It is NOT
+ * content: it carries a category and a short label, never a payload to render as final,
+ * so it is deliberately kept apart from `PAYLOAD_KEYS`. It is transient — the first real
+ * payload for the box clears it, and `ttlMs` clears it if the draw dies — and zoned like
+ * any event (D4): a `private` pending never reaches a public client.
+ */
+export interface Pending {
+  kind: "pending";
+  category: string;
+  zone: Zone;
+  /** One-line description of what is being drawn, shown beside the spinner. */
+  label: string;
+  /** Self-expiry in ms; the client drops the placeholder if nothing replaces it in time. */
+  ttlMs?: number;
+}
+
 /** Anything that can appear on the `/events` stream. */
-export type WireMessage = DisplayEvent | ShowCommand;
+export type WireMessage = DisplayEvent | ShowCommand | Heartbeat | Pending;
 
 export function isShowCommand(m: WireMessage): m is ShowCommand {
   return (m as ShowCommand).kind === "show";
+}
+
+export function isHeartbeat(m: WireMessage): m is Heartbeat {
+  return (m as Heartbeat).kind === "heartbeat";
+}
+
+export function isPending(m: WireMessage): m is Pending {
+  return (m as Pending).kind === "pending";
 }
 
 // ---- config/data shapes ----------------------------------------------------

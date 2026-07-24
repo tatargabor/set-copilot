@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { CopilotConfig } from "../config.js";
-import { emitWallEvents, normalizeEvent } from "./emit.js";
+import { DEFAULT_PENDING_TTL_MS, emitWallEvents, normalizeEvent, normalizePending } from "./emit.js";
+import { isHeartbeat, isPending, isShowCommand, type WireMessage } from "./types.js";
 
 describe("normalizeEvent", () => {
   it("accepts a text event and defaults zone to both", () => {
@@ -147,6 +148,71 @@ describe("emitWallEvents write safety", () => {
     expect(() => { res = emitWallEvents(cfg(asFile), { category: "a", text: "x" }); }).not.toThrow();
     expect(res?.emitted).toBe(0);
     expect(res?.dropped[0]?.reason).toContain("could not write");
+  });
+});
+
+describe("wire type guards (wall-liveness / wall-pending-indicator)", () => {
+  it("discriminates heartbeat, pending, and show from a display event", () => {
+    const hb = { kind: "heartbeat", captureAlive: true, lastHeardMsAgo: 0 } as WireMessage;
+    const pend = { kind: "pending", category: "a", zone: "private", label: "x" } as WireMessage;
+    const show = { kind: "show", cat: "a", id: "v" } as WireMessage;
+    const ev = { category: "a", zone: "both", text: "hi" } as WireMessage;
+    expect([isHeartbeat(hb), isPending(hb), isShowCommand(hb)]).toEqual([true, false, false]);
+    expect([isHeartbeat(pend), isPending(pend), isShowCommand(pend)]).toEqual([false, true, false]);
+    expect([isHeartbeat(show), isPending(show), isShowCommand(show)]).toEqual([false, false, true]);
+    expect([isHeartbeat(ev), isPending(ev), isShowCommand(ev)]).toEqual([false, false, false]);
+  });
+});
+
+describe("normalizePending (wall-pending-indicator)", () => {
+  it("defaults zone to private and ttl to the module default", () => {
+    const r = normalizePending({ kind: "pending", category: "architektúra", label: "rajzolom: adatfolyam" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.pending).toEqual({
+        kind: "pending", category: "architektúra", zone: "private",
+        label: "rajzolom: adatfolyam", ttlMs: DEFAULT_PENDING_TTL_MS,
+      });
+    }
+  });
+
+  it("honours an explicit zone and positive ttl", () => {
+    const r = normalizePending({ kind: "pending", category: "a", label: "x", zone: "both", ttlMs: 5000 });
+    expect(r.ok && r.pending.zone).toBe("both");
+    expect(r.ok && r.pending.ttlMs).toBe(5000);
+  });
+
+  it("rejects a missing/empty label — a placeholder with no text is useless", () => {
+    expect(normalizePending({ kind: "pending", category: "a" }).ok).toBe(false);
+    expect(normalizePending({ kind: "pending", category: "a", label: "  " }).ok).toBe(false);
+  });
+
+  it("rejects a missing category, a bad zone, and a non-positive ttl", () => {
+    expect(normalizePending({ kind: "pending", label: "x" }).ok).toBe(false);
+    expect(normalizePending({ kind: "pending", category: "a", label: "x", zone: "nope" }).ok).toBe(false);
+    expect(normalizePending({ kind: "pending", category: "a", label: "x", ttlMs: 0 }).ok).toBe(false);
+    expect(normalizePending({ kind: "pending", category: "a", label: "x", ttlMs: -5 }).ok).toBe(false);
+  });
+});
+
+describe("emitWallEvents pending + heartbeat routing", () => {
+  const cfg = (dir: string) => ({ runtimeDir: dir } as CopilotConfig);
+
+  it("writes a normalized pending marker to the log", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+    const res = emitWallEvents(cfg(dir), { kind: "pending", category: "architektúra", label: "rajzolom" });
+    expect(res.emitted).toBe(1);
+    const line = JSON.parse(readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim());
+    expect(line.kind).toBe("pending");
+    expect(line.zone).toBe("private");
+    expect(line.ttlMs).toBe(DEFAULT_PENDING_TTL_MS);
+  });
+
+  it("drops an injected heartbeat — it is server-only", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+    const res = emitWallEvents(cfg(dir), { kind: "heartbeat", captureAlive: true, lastHeardMsAgo: 0 });
+    expect(res.emitted).toBe(0);
+    expect(res.dropped[0]?.reason).toContain("server-only");
   });
 });
 

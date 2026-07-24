@@ -214,6 +214,20 @@ yourself (`subagent_type: "fork"`) whose prompt is ONLY the mandate:
 The fork inherits this entire conversation — that inheritance IS its grounding, which is why the
 mandate can be one line and why it knows what matters. It draws, emits, and exits.
 
+**Mark the box pending BEFORE the fork (wall-pending-indicator).** A fork-based draw takes 16–62 s; a
+silent "working" box is indistinguishable from a dead wall. So immediately before you spawn the fork,
+emit a lightweight `pending` marker on the target category, so the box shows a ⏳ placeholder at once —
+the real visual the fork emits replaces it, and a `ttlMs` clears it if the draw dies:
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"kind":"pending","category":"<category>","zone":"private","label":"rajzolom: <egy sor>"}'
+```
+
+The pending marker is **operator feedback**: keep it `zone:"private"` by default. A public "készül…"
+caption reaches the audience wall only with a deliberate `zone` override — never emit a `both`/`public`
+pending unless you mean the audience to see it. A direct (non-fork) `wall-emit` needs no pending; the
+placeholder only earns its keep in front of the seconds a fork costs.
+
 **Spawn a fork only when there is something to compose.** If the content is already settled in this
 conversation, `wall-emit` it directly: measured on a live session, a fork costs 16–62 s and 47–76k
 tokens per drawing (a fork that reads source files is the slow end), against ~1 s for a direct emit.
