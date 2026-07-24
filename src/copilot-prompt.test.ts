@@ -330,3 +330,45 @@ describe("renderBoxPolicies", () => {
     expect(() => renderCopilotPrompt({ projectRoot: root, copilot: { alerts: DEFAULT_ALERTS } } as CopilotConfig)).not.toThrow();
   });
 });
+
+describe("narration mandate (live-narration)", () => {
+  // A minimal copilot with drawing off and no wall, so renderCopilotPrompt is exactly
+  // renderAlerts + (optionally) the narration section — letting us prove byte-identity.
+  const base = (narration: CopilotConfig["copilot"]["narration"]): CopilotConfig =>
+    cfg({
+      alerts: DEFAULT_ALERTS,
+      engagement: "reactive",
+      maxLines: 3,
+      allowWebResearch: false,
+      acknowledge: true,
+      drawing: { enabled: false, conventions: [] },
+      names: [],
+      narration,
+    } as CopilotConfig["copilot"]);
+
+  it("renders the mandate + verbosity when enabled", () => {
+    const out = renderCopilotPrompt(base({ enabled: true, verbosity: "normal", maxLines: 1 }));
+    expect(out).toContain("## Narration");
+    expect(out).toContain("Verbosity — normal");
+    expect(out).toContain("At most **1** line(s) per emission.");
+    // NO-FILLER is stated explicitly — the change's most fragile point.
+    expect(out).toContain("NO FILLER");
+    expect(out).toContain('zone:"private"');
+  });
+
+  it("renders a louder verbosity verbatim", () => {
+    const out = renderCopilotPrompt(base({ enabled: true, verbosity: "rich", maxLines: 3 }));
+    expect(out).toContain("Verbosity — rich");
+    expect(out).toContain("At most **3** line(s) per emission.");
+  });
+
+  it("disabled → no mandate, and the reactive policy is byte-for-byte unchanged", () => {
+    const off = renderCopilotPrompt(base({ enabled: false, verbosity: "normal", maxLines: 1 }));
+    const on = renderCopilotPrompt(base({ enabled: true, verbosity: "normal", maxLines: 1 }));
+    expect(off).not.toContain("## Narration");
+    // The reactive alert/engagement/feedback text is exactly renderAlerts — narration
+    // never perturbs it — and the enabled output only *appends* the mandate to it.
+    expect(off).toBe(renderAlerts(DEFAULT_ALERTS, base({ enabled: false, verbosity: "normal", maxLines: 1 }).copilot));
+    expect(on.startsWith(off)).toBe(true);
+  });
+});

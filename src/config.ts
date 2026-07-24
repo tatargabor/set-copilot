@@ -72,6 +72,15 @@ export interface CopilotPromptConfig {
    */
   drawing: DrawingContractConfig;
   /**
+   * The continuous-narration channel (live-narration D2). When enabled, the copilot
+   * writes a running, substantive commentary of what is being discussed into the
+   * private `narráció` box on a regular cadence — a separate channel from the
+   * event-triggered alert taxonomy, and independent of `engagement`. Default on and
+   * louder than the reactive silence users complained about; disabling it restores the
+   * pre-change reactive behavior byte-for-byte.
+   */
+  narration: NarrationConfig;
+  /**
    * What the copilot answers to. Plain words, not regexes — naming one of these
    * marks the line `command: true`, and `poll` returns at once instead of waiting
    * for the silence gate. Default `["copilot"]`; add nicknames or slang freely
@@ -99,6 +108,27 @@ export interface DrawingContractConfig {
    * these to teach a project's own visual language without forking the skill.
    */
   conventions: string[];
+}
+
+/** How talkative the continuous-narration channel is. Rendered into the policy mandate. */
+export type NarrationVerbosity = "terse" | "normal" | "rich";
+
+/**
+ * The continuous-narration channel (live-narration D2). Verbosity is *policy*, rendered
+ * into the prompt by `copilot-prompt.ts`, never a regex in `src/` — a project raises,
+ * lowers, or disables narration from config without forking the skill or the engine.
+ * The default is deliberately louder than today's reactive silence (the single loudest
+ * complaint across three sessions); disabling it makes the policy output and runtime
+ * behavior byte-for-byte the pre-change reactive behavior. Orthogonal to `engagement`,
+ * which governs how eagerly the copilot speaks *in chat* about content.
+ */
+export interface NarrationConfig {
+  /** Emit the narration channel at all. Default on. */
+  enabled: boolean;
+  /** How much it narrates — rendered into the mandate. Default "normal". */
+  verbosity: NarrationVerbosity;
+  /** Max lines per narration emission. Default 1 — one substantive line per batch. */
+  maxLines: number;
 }
 
 /**
@@ -306,9 +336,12 @@ export const DEFAULT_DEFERRED_MARKERS = [
 export const DEFAULT_CATEGORIES: Category[] = [
   { id: "súgás", label: "Súgás", icon: "💡", render: "text" },
   { id: "riasztás", label: "Riasztás", icon: "⚠", render: "text" },
-  // The public narration box's category — the private hint box's counterpart. Its
-  // output is *processed* (condensed, filtered), never a raw transcript, and it goes
-  // out through public-zone redaction. See DEFAULT_WINDOWS and the box-policy spec.
+  // The narration channel — one category, zone-differentiated (live-narration + the
+  // public narration box share it). Private-zone narration is the copilot's running,
+  // substantive commentary of what is being discussed, shown in the private text box;
+  // `both`/`public`-zone narration is the *processed* (condensed, filtered) audience
+  // line that goes out through public-zone redaction. Never a raw transcript either
+  // way. See DEFAULT_WINDOWS, the live-narration spec, and the box-policy spec.
   { id: "narráció", label: "Narráció", icon: "🗣", render: "text" },
   { id: "architektúra", label: "Architektúra", icon: "🕸", render: "graph" },
   { id: "metrika", label: "Metrika", icon: "📊", render: "chart" },
@@ -357,10 +390,10 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
     boxes: {
       szöveg: {
         behavior: "scroll",
-        cats: ["riasztás", "súgás"],
+        cats: ["riasztás", "súgás", "narráció"],
         policy: {
           instructions:
-            "Ez a privát súgódoboz. Ellenőrizd, amit a beszélő mond, és hozd felszínre, amit nem tud: ellentmondás a rögzített döntésekkel, releváns kontextus, rögzítésre érdemes új döntés.",
+            "Ez a privát súgódoboz. Ellenőrizd, amit a beszélő mond, és hozd felszínre, amit nem tud: ellentmondás a rögzített döntésekkel, releváns kontextus, rögzítésre érdemes új döntés. A `narráció`-sorok folyamatos, tartalmi kísérőszöveget adnak arról, ami épp zajlik — az alertektől külön csatorna.",
         },
       },
       prezentáció: {
@@ -499,6 +532,7 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     allowWebResearch: false,
     acknowledge: true,
     drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },
+    narration: { enabled: true, verbosity: "normal", maxLines: 1 },
     names: DEFAULT_NAMES,
   },
   detect: DEFAULT_DETECT,
@@ -506,6 +540,7 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
 };
 
 const ENGAGEMENTS: Engagement[] = ["silent", "reactive", "participant"];
+const NARRATION_VERBOSITIES: NarrationVerbosity[] = ["terse", "normal", "rich"];
 
 export const CONFIG_FILENAME = "set-copilot.config.json";
 
@@ -656,6 +691,18 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         conventions: Array.isArray(copilot.drawing?.conventions)
           ? copilot.drawing.conventions.filter((c): c is string => typeof c === "string")
           : DEFAULT_DRAWING_CONVENTIONS,
+      },
+      narration: {
+        // Absent key → default (on). Only an explicit `false` disables it, mirroring
+        // `acknowledge` — so a config that predates narration gets the louder default.
+        enabled: copilot.narration?.enabled !== false,
+        verbosity: NARRATION_VERBOSITIES.includes(copilot.narration?.verbosity as NarrationVerbosity)
+          ? (copilot.narration!.verbosity as NarrationVerbosity)
+          : DEFAULTS.copilot.narration.verbosity,
+        maxLines:
+          typeof copilot.narration?.maxLines === "number" && copilot.narration.maxLines > 0
+            ? Math.floor(copilot.narration.maxLines)
+            : DEFAULTS.copilot.narration.maxLines,
       },
       names: resolvedNames,
     },

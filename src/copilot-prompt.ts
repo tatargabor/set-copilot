@@ -88,6 +88,39 @@ function renderFeedback(): string[] {
 }
 
 /**
+ * The continuous-narration mandate (live-narration D2/D4).
+ *
+ * A channel of its own — separate from the event-triggered alert taxonomy and from
+ * `engagement`, which governs chat about content. Rendered ONLY when narration is
+ * enabled, and as its own top-level section appended by `renderCopilotPrompt`, so the
+ * alert/engagement/feedback policy text is byte-for-byte identical whether narration is
+ * on or off. Disabling narration removes this section and emits nothing — the pre-change
+ * reactive behavior.
+ *
+ * Verbosity is a config lever surfaced here as words, never a regex in `src/`. The
+ * hardest line to hold is NO-FILLER: "be more talkative" degrades into "I'm listening"
+ * unless the mandate forbids it explicitly, so it does.
+ */
+function renderNarration(narration: CopilotConfig["copilot"]["narration"]): string[] {
+  const detail: Record<typeof narration.verbosity, string> = {
+    terse: "Only when the substance is unmistakable, and in as few words as carry it — err toward fewer lines.",
+    normal: "One substantive line per batch: the topic under discussion or the decision taking shape, briefly.",
+    rich: "Track the thread closely — name the topic, the decision forming, and the knowledge-base tie when there is one.",
+  };
+  return [
+    "## Narration — the live commentary lane (private)",
+    "",
+    "A channel of its own, separate from the alert categories above and from the engagement rule: a running, **substantive** commentary of what is being discussed, written into the private `narráció` box. Emit it **directly** with `wall-emit` (`zone:\"private\"`) — no fork; one line has nothing to compose.",
+    "",
+    "- **Cadence — regular, not per-token, not per-alert.** At most ONE line per reaction batch, plus one on each `silence` window. Never a line per transcript token, and never wait for an alert to fire. The box is `scroll`, so lines accumulate — you are keeping a live log, not replacing a headline.",
+    "- **Substance only — NO FILLER, EVER.** Every line says something: the topic under discussion, a decision being formed, or how it ties to the knowledge base (name the source when you can). NEVER \"I'm listening\" / \"waiting\" / \"still here\", and never a bare restatement of the raw transcript. If the latest batch holds nothing you can substantively summarize or relate, emit NOTHING — the box keeps its previous line. Silence is correct; filler is not.",
+    `- **Verbosity — ${narration.verbosity}.** ${detail[narration.verbosity]} At most **${narration.maxLines}** line(s) per emission.`,
+    "- **Private by default.** Narration is `zone:\"private\"`; it never reaches a public wall on its own. Promoting it to a public audience is a separate, redaction-gated decision, not something this channel does autonomously.",
+    "",
+  ];
+}
+
+/**
  * The wall drawing contract (fork-wall-producer D2).
  *
  * This block exists to be *inherited*, not re-supplied. A producer is a fork of the
@@ -274,6 +307,11 @@ export function renderBoxPolicies(cfg: CopilotConfig): string[] {
  */
 export function renderCopilotPrompt(cfg: CopilotConfig): string {
   const parts = [renderAlerts(cfg.copilot.alerts, cfg.copilot)];
+  // The narration mandate is its own section, gated on `enabled` — so with narration
+  // off the alert/engagement policy above is byte-for-byte the pre-change reactive text.
+  if (cfg.copilot.narration?.enabled) {
+    parts.push(renderNarration(cfg.copilot.narration).join("\n"));
+  }
   // Tolerate a hand-built config: CopilotConfig is exported, so consumers construct
   // one, and a missing wall/drawing section means "no wall", not a crash.
   if (cfg.copilot.drawing?.enabled) {

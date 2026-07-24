@@ -301,3 +301,45 @@ describe("wall.scrollHistory config", () => {
     expect(loadConfig(project).wall.scrollHistory).toBe(20);
   });
 });
+
+describe("narráció category + private box subscription (live-narration)", () => {
+  it("resolves the narráció category and the private text box subscribes to it", () => {
+    const cfg = loadConfig(project);
+    expect(cfg.wall.categories.some((c) => c.id === "narráció" && c.render === "text")).toBe(true);
+    const priv = cfg.wall.windows.find((w) => w.route === "/");
+    const textBox = (priv!.boxes as Record<string, { cats: string[] }>).szöveg;
+    expect(textBox.cats).toContain("narráció");
+    // Still the private hint box — narration joins riasztás/súgás, doesn't replace them.
+    expect(textBox.cats).toEqual(expect.arrayContaining(["riasztás", "súgás", "narráció"]));
+  });
+
+  it("a project can rename the category from config without touching src", () => {
+    writeCfg(project, {
+      wall: { categories: [{ id: "narr", label: "N", icon: "💬", render: "text" }] },
+    });
+    const cfg = loadConfig(project);
+    expect(cfg.wall.categories.map((c) => c.id)).toContain("narr");
+  });
+});
+
+describe("copilot.narration config (verbosity lever)", () => {
+  it("defaults to enabled, normal, 1 line — louder than reactive silence", () => {
+    const n = loadConfig(project).copilot.narration;
+    expect(n).toEqual({ enabled: true, verbosity: "normal", maxLines: 1 });
+  });
+  it("honours overrides and merges key by key", () => {
+    writeCfg(project, { copilot: { narration: { verbosity: "rich", maxLines: 3 } } });
+    const n = loadConfig(project).copilot.narration;
+    expect(n).toEqual({ enabled: true, verbosity: "rich", maxLines: 3 });
+  });
+  it("only an explicit false disables it", () => {
+    writeCfg(project, { copilot: { narration: { enabled: false } } });
+    expect(loadConfig(project).copilot.narration.enabled).toBe(false);
+  });
+  it("drops a bad verbosity / non-positive maxLines back to default", () => {
+    writeCfg(project, { copilot: { narration: { verbosity: "loud", maxLines: 0 } } });
+    const n = loadConfig(project).copilot.narration;
+    expect(n.verbosity).toBe("normal");
+    expect(n.maxLines).toBe(1);
+  });
+});

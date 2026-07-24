@@ -169,6 +169,25 @@ the chat carries the liveness and the interpretation (the `## Feedback` block fr
 `set-copilot prompt`). Emit with the SAME scoped `SET_COPILOT_DIR`, so the events reach the
 wall this session owns.
 
+**Narration — the live commentary lane (mechanics).** When narration is enabled (a `## Narration`
+block is present in `set-copilot prompt`), keep the private `narráció` box alive: once per reaction
+batch, and once on each `silence` event, `wall-emit` ONE substantive line to it **directly** — no
+fork, `zone:"private"` (a single line has nothing to compose):
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"category":"narráció","zone":"private","text":"<one substantive line>"}'
+```
+
+- **Cadence: at most one line per batch.** Not one per transcript token, and never gated on an alert
+  firing. If a batch holds nothing substantive to add, emit NOTHING — the box keeps its previous line.
+  **NO FILLER**: never "listening"/"waiting", never a bare echo of the raw transcript.
+- **Separate from the alert output.** Narration does NOT replace the ⚠/📋/✏/❓ alerts — they are
+  independent channels. An alert still goes to chat exactly as before; narration is the running private
+  commentary in the wall box. Neither suppresses the other.
+- **What to say comes from the policy, not this file.** The `## Narration` block owns the substance and
+  verbosity; this file owns only the emit + the cadence. If no `## Narration` block is present (narration
+  disabled), skip this lane entirely.
+
 **Showing a live web page.** An iframe (`webpage` payload) only works for pages that permit
 embedding; news sites, Google, banks, etc. send `X-Frame-Options` / `CSP frame-ancestors` and
 render blank. For those, screenshot instead — it works for ANY page:
