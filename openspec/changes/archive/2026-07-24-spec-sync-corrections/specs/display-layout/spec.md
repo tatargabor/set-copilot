@@ -84,7 +84,7 @@ switching renderer per event.
 - **THEN** the box renders each with its own renderer in turn, without any change to the layout or
   the box assignment
 
-#### Scenario: Graph append redraws the accumulated visual
+#### Scenario: Incremental graph append
 
 - **WHEN** a `graph` event `{op:"add", nodes:[{id:"capture"}], edges:[{source:"mic",target:"capture"}]}`
   arrives in a box currently showing a graph that already contains node `mic`

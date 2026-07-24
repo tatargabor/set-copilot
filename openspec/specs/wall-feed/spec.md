@@ -45,7 +45,9 @@ independently-running worker processes.
 
 - **WHEN** the main session (or a thin text loop) has a súgás/riasztás ready
 - **THEN** it is emitted directly to the event source with no intermediate LLM call, and the
-  added latency over in-session output is the SSE + render hop only
+  added latency over in-session output is the ingest hop only — the `wall-emit` append, the
+  JSONL tail-poll (bounded by its poll interval), and the SSE + render hop — with no model
+  round-trip on the path
 
 #### Scenario: Alert bypasses the director's pacing
 
@@ -55,17 +57,24 @@ independently-running worker processes.
 
 ### Requirement: Text path carries no model hop
 
-Text-modality categories (transcript, súgás, riasztás) SHALL be produced without an
-intermediate model round-trip. The text producer SHALL read the live transcript (via the
-existing line-offset long-poll) and emit category events directly, so the only latency added
-over today's in-session output is the render hop. A model SHALL NOT be inserted into the text
-path.
+Text-modality categories (súgás, riasztás) SHALL be produced without an intermediate model
+round-trip. The text producer SHALL read the live transcript (via the existing line-offset
+long-poll) and emit category events directly, so the only latency added over today's in-session
+output is the ingest hop (append + tail-poll + render), never a model call. A model SHALL NOT be
+inserted into the text path.
+
+There is deliberately no raw `transcript` text category: the wall shows only processed copilot
+output (súgás/riasztás), not a transcript mirror. A producer therefore never emits a
+`transcript`/`transzkript` category — the registry has none, so such an event would be
+unrenderable.
 
 #### Scenario: Text reaches the wall within the render-hop budget
 
 - **WHEN** the main session (or a thin text loop) has a súgás/riasztás ready
 - **THEN** it is emitted directly to the event source with no intermediate LLM call, and the
-  added latency over in-session output is the SSE + render hop only
+  added latency over in-session output is the ingest hop only — the `wall-emit` append, the
+  JSONL tail-poll, and the SSE + render hop. (An in-process source such as the fake-feed, which
+  calls the ingest callback directly, avoids the tail-poll and the process spawn.)
 
 #### Scenario: Alert bypasses the director's pacing
 
@@ -75,8 +84,12 @@ path.
 
 ### Requirement: Latency budget
 
-The feed SHALL meet a per-modality latency budget. The text path SHALL add only the render hop
-(single/double-digit milliseconds locally) over in-session output.
+The feed SHALL meet a per-modality latency budget. The text path SHALL add only the ingest hop
+over in-session output: the `wall-emit` append and process spawn, the JSONL tail-poll (bounded
+by its poll interval), and the SSE + render hop — with no model round-trip. The sub-millisecond
+figure applies only to an in-process source (the fake-feed) that calls the ingest callback
+directly; a real out-of-process text producer additionally pays the tail-poll interval and the
+`wall-emit` spawn.
 
 The graph path budget SHALL be established by live measurement on the fork producer, not
 inherited from the fast-tier research estimate. Because a producer fork runs on the parent
@@ -114,8 +127,8 @@ path. Voice command scoping SHALL remain restricted to `mic`.
 
 #### Scenario: A producer preserves speaker attribution
 
-- **WHEN** a text producer emits a `transzkript` event derived from a `system`-tagged
-  transcript line
+- **WHEN** a text producer emits a `riasztás` event derived from a `system`-tagged transcript
+  line (something the remote/system speaker said)
 - **THEN** the emitted event carries `speaker: "system"` so the display keeps the én/mindenki
   más distinction
 

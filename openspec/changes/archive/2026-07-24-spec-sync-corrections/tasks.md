@@ -17,8 +17,8 @@ Purpose fills.
 
 - [x] 2.1 "Render types" graph mandate rewritten to the shipped A-path full redraw
   (`wall.js:277-288`), with incremental `cy.add` kept as tracked future (task 9.13)
-- [x] 2.2 "Incremental graph append" scenario renamed/rewritten to "Graph append redraws the
-  accumulated visual" reflecting the full redraw
+- [x] 2.2 "Incremental graph append" scenario body rewritten in place (header kept, per the
+  archiver's no-scenario-rename rule) to reflect the shipped full redraw + the 9.13 note
 - [x] 2.3 "Slot-based layout composition" composition scenario positions corrected
   `left`/`right` → `szöveg`/`prezentáció` (the shipped `third-two-thirds` positions)
 - [x] 2.4 All base scenarios carried forward, legacy `slots` scenarios intact

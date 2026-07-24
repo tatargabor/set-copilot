@@ -24,9 +24,9 @@ holds, and a box SHALL NOT determine its own geometry.
 
 #### Scenario: Compose a window from a layout and boxes
 
-- **WHEN** a window declares `layout: "third-two-thirds"` (a layout defining positions `left` and
-  `right`) and assigns `left` a text box subscribing to `["riasztás","súgás"]` and `right` a
-  presentation box subscribing to `["architektúra","metrika"]`
+- **WHEN** a window declares `layout: "third-two-thirds"` (the shipped layout defining positions
+  `szöveg` and `prezentáció`) and assigns `szöveg` a text box subscribing to `["riasztás","súgás"]`
+  and `prezentáció` a presentation box subscribing to `["architektúra","metrika"]`
 - **THEN** the display renders two boxes side by side in the declared proportions, each showing
   only events whose category is in that box's subscription list
 
@@ -53,7 +53,8 @@ holds, and a box SHALL NOT determine its own geometry.
 - **WHEN** a window declares the legacy `slots` list `[{area:"pinned", behavior:"latest", cats:["riasztás","súgás"]}, {area:"stream", behavior:"scroll", cats:["transzkript"]}, {area:"canvas", behavior:"latest", pacing:{...}, cats:["architektúra"]}]`
 - **THEN** the window SHALL resolve onto the stacked layout — one box per slot area, preserving
   each slot's behavior, pacing, and subscriptions — so an existing slot-based config renders
-  unchanged
+  unchanged (arbitrary legacy cat ids resolve structurally even when the current registry has no
+  such category)
 
 #### Scenario: Slot ignores unsubscribed categories
 
@@ -148,13 +149,17 @@ different position SHALL NOT change its pacing.
 
 ### Requirement: Render types
 
-The display SHALL provide four built-in render types: `text`, `graph`, `chart`, and the
-media types `image` and `webpage` introduced by this change.
+The display SHALL provide the built-in render types `text`, `graph`, `chart`, and the media types
+`image` and `webpage`.
 
-`text` renders an event into a DOM lane. `graph` renders into a Cytoscape.js instance and SHALL
-append incrementally (`cy.add`) for an `add` operation rather than rebuilding the whole graph,
-running an animated dagre layout on update. `chart` renders a data series. `image` renders a
-local file or remote URL. `webpage` renders an embedded document.
+`text` renders an event into a DOM lane. `graph` renders into a Cytoscape.js instance: on each
+`add` delta the renderer SHALL draw the visual's accumulated node/edge set and run an animated
+layout (dagre when the plugin is loaded, else breadthfirst). The shipped implementation is the
+**A-path** full redraw — it clears the instance (`cy.elements().remove()`) and re-adds the whole
+accumulated set on every delta. Incremental append via `cy.add` of only the new node/edge (the
+**B-path** optimization) is the intended eventual behavior but is NOT yet implemented; it is
+tracked as task 9.13 and SHALL NOT be asserted as current behavior. `chart` renders a data series.
+`image` renders a local file or remote URL. `webpage` renders an embedded document.
 
 The renderer for a given event SHALL be selected from the event's payload, not from the box's
 category subscription. A single box MAY therefore host events of several render types over time,
@@ -171,8 +176,9 @@ switching renderer per event.
 
 - **WHEN** a `graph` event `{op:"add", nodes:[{id:"capture"}], edges:[{source:"mic",target:"capture"}]}`
   arrives in a box currently showing a graph that already contains node `mic`
-- **THEN** the renderer appends the new node and edge to the existing Cytoscape graph (not a full
-  rebuild) and runs an animated layout
+- **THEN** the renderer draws the visual's full accumulated set (node `mic` plus the new node
+  `capture` and the new edge) and runs an animated layout — the shipped A-path full redraw, not an
+  incremental `cy.add` of only the new elements (that incremental optimization is tracked as 9.13)
 
 #### Scenario: Text render into a lane
 

@@ -30,14 +30,16 @@ NOT require editing `src/` or a skill.
 
 ### Requirement: A box's mandate is independent of its zone
 
-A box's *mandate* (what it is for, what is worth emitting to it) SHALL be a property of the box,
-independent of the *zone* (where its events may appear). The shipped default expresses this through
-the private hint box: it checks what the speaker says against known information and surfaces what
-they may not know — contradictions, relevant context, decisions worth recording.
+A box's *mandate* (what it is for, what is worth emitting to it) SHALL be a property of the box
+(`WallBox.policy`), independent of *zone*. Zone is a property of the *window* (`WallWindow.zones`),
+not of the box: it governs where a window's events may appear. The shipped default expresses this
+through the private hint box: it checks what the speaker says against known information and surfaces
+what they may not know — contradictions, relevant context, decisions worth recording.
 
 Zone routing SHALL remain the mechanism that decides *where* an event may appear; box policy decides
-*what is worth emitting* for that box. The two SHALL be independent: changing a box's zone SHALL NOT
-change its mandate, and changing its mandate SHALL NOT change its zone.
+*what is worth emitting* for that box. The two SHALL be independent: changing the zone of the window
+a box lives in SHALL NOT change the box's mandate, and changing a box's mandate SHALL NOT change any
+zone.
 
 > A public *narration* box — the private box's counterpart, rendering the conversation for an
 > audience — was specified here originally. It moved to `wall-public-redaction`: a narration box is
@@ -47,14 +49,16 @@ change its mandate, and changing its mandate SHALL NOT change its zone.
 
 #### Scenario: Zone and mandate are independent
 
-- **WHEN** a box's zone is changed from `private` to `public` with its policy left untouched
-- **THEN** its mandate is unchanged and only its routing changes
+- **WHEN** the zone of the window a box lives in is changed from `private` to `public` with the
+  box's policy left untouched
+- **THEN** the box's mandate is unchanged and only its routing changes
 
 #### Scenario: The private box's mandate is carried by policy, not by its zone
 
-- **WHEN** the private hint box is defined with an instruction to check and surface, and a zone of
-  `private`
-- **THEN** its instruction governs what it emits, and the zone governs only which windows render it
+- **WHEN** the private hint box is defined with an instruction to check and surface, inside a window
+  zoned `private`
+- **THEN** its instruction governs what it emits, and the window's zone governs only which display
+  clients receive it
 
 ### Requirement: The prompt renderer composes one section per box
 

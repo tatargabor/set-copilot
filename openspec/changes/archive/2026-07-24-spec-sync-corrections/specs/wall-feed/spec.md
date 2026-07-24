@@ -31,7 +31,7 @@ independently-running worker processes.
 - **THEN** two forks run concurrently and each emits independently as soon as its own output
   is ready
 
-#### Scenario: Text reaches the wall within the ingest-hop budget
+#### Scenario: Text reaches the wall within the render-hop budget
 
 - **WHEN** the main session (or a thin text loop) has a súgás/riasztás ready
 - **THEN** it is emitted directly to the event source with no intermediate LLM call, and the
@@ -58,7 +58,7 @@ output (súgás/riasztás), not a transcript mirror. A producer therefore never 
 `transcript`/`transzkript` category — the registry has none, so such an event would be
 unrenderable.
 
-#### Scenario: Text reaches the wall with no model round-trip
+#### Scenario: Text reaches the wall within the render-hop budget
 
 - **WHEN** the main session (or a thin text loop) has a súgás/riasztás ready
 - **THEN** it is emitted directly to the event source with no intermediate LLM call, and the

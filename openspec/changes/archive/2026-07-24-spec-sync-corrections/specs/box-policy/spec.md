@@ -25,7 +25,7 @@ zone.
   box's policy left untouched
 - **THEN** the box's mandate is unchanged and only its routing changes
 
-#### Scenario: The private box's mandate is carried by policy, not by its window's zone
+#### Scenario: The private box's mandate is carried by policy, not by its zone
 
 - **WHEN** the private hint box is defined with an instruction to check and surface, inside a window
   zoned `private`
