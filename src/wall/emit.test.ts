@@ -149,3 +149,75 @@ describe("emitWallEvents write safety", () => {
     expect(res?.dropped[0]?.reason).toContain("could not write");
   });
 });
+
+describe("normalizeEvent — payload selection (design D3)", () => {
+  it("requires exactly one payload", () => {
+    const none = normalizeEvent({ category: "súgás" });
+    expect(none.ok).toBe(false);
+    if (!none.ok) expect(none.reason).toContain("no payload");
+
+    // Two payloads are genuinely ambiguous: the renderer dispatches on the
+    // payload, so it would draw one and silently discard the other.
+    const two = normalizeEvent({
+      category: "x", graph: { op: "add" }, image: { src: "https://e.com/a.png" },
+    });
+    expect(two.ok).toBe(false);
+    if (!two.ok) expect(two.reason).toContain("exactly one payload");
+  });
+
+  it("treats a null payload as absent, not as a payload", () => {
+    const r = normalizeEvent({ category: "súgás", text: "hi", graph: null });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.event.graph).toBeUndefined();
+  });
+
+  it("accepts a payload whose type differs from the category default", () => {
+    // `architektúra` defaults to graph; the payload wins.
+    const r = normalizeEvent({ category: "architektúra", chart: { type: "bar", data: [] } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.event.chart).toBeDefined();
+  });
+});
+
+describe("normalizeEvent — media payloads", () => {
+  const root = "~/code/set-copilot";
+
+  it("accepts an absolute https image URL", () => {
+    const r = normalizeEvent({ category: "x", image: { src: "https://example.com/a.png" } }, { projectRoot: root });
+    expect(r.ok).toBe(true);
+  });
+
+  it("accepts an in-project relative path", () => {
+    const r = normalizeEvent({ category: "x", image: { src: "docs/a.png" } }, { projectRoot: root });
+    expect(r.ok).toBe(true);
+  });
+
+  it("rejects a path escaping the project root", () => {
+    const r = normalizeEvent({ category: "x", image: { src: "../../etc/passwd" } }, { projectRoot: root });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("inside the project root");
+  });
+
+  it("rejects an absolute filesystem path", () => {
+    const r = normalizeEvent({ category: "x", image: { src: "/etc/passwd" } }, { projectRoot: root });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects a sibling directory sharing a name prefix", () => {
+    // `startsWith` would pass this; `relative()` does not.
+    const r = normalizeEvent({ category: "x", image: { src: "../set-copilot-secrets/a.png" } }, { projectRoot: root });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects non-http schemes", () => {
+    for (const src of ["file:///etc/passwd", "data:image/png;base64,AAAA", "javascript:alert(1)"]) {
+      expect(normalizeEvent({ category: "x", image: { src } }, { projectRoot: root }).ok).toBe(false);
+    }
+  });
+
+  it("accepts a webpage with an absolute http(s) url and rejects anything else", () => {
+    expect(normalizeEvent({ category: "x", webpage: { url: "https://example.com" } }).ok).toBe(true);
+    expect(normalizeEvent({ category: "x", webpage: { url: "/relative" } }).ok).toBe(false);
+    expect(normalizeEvent({ category: "x", webpage: { url: "javascript:alert(1)" } }).ok).toBe(false);
+  });
+});

@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   emptyCanvas, offerCandidate, nextSwap, commitSwap, overrideSwap,
 } from "./director.js";
-import type { Pacing } from "./types.js";
+import { resolveWindow } from "./layout.js";
+import type { Pacing, WallLayout, WallWindow } from "./types.js";
 
 const pacing: Pacing = { minDwellMs: 10_000 };
 
@@ -49,5 +50,36 @@ describe("director pacing", () => {
     commitSwap(c, "v1", 0);
     offerCandidate(c, "v1", 5000);
     expect(c.pending).toHaveLength(0);
+  });
+});
+
+describe("pacing is a box property, not a position (D2)", () => {
+  const LAYOUTS: WallLayout[] = [
+    { id: "third-two-thirds", areas: [["szöveg", "prezentáció"]], columns: ["1fr", "2fr"] },
+  ];
+  const pacedBox = { behavior: "latest" as const, cats: ["architektúra"], pacing: { minDwellMs: 8000 } };
+
+  const dwellFor = (position: "szöveg" | "prezentáció") => {
+    const win: WallWindow = {
+      name: "w", route: "/", zones: ["both"], layout: "third-two-thirds",
+      boxes: { [position]: pacedBox },
+    };
+    const box = resolveWindow(win, LAYOUTS, () => {})!.boxes[0];
+    return box.pacing!;
+  };
+
+  it("drives the director identically whether the box sits left or right", () => {
+    const left = dwellFor("szöveg");
+    const right = dwellFor("prezentáció");
+    expect(left).toEqual(right);
+
+    // The resolved pacing gates nextSwap the same way regardless of position.
+    for (const p of [left, right]) {
+      const c = emptyCanvas();
+      commitSwap(c, "v1", 0);
+      offerCandidate(c, "v2", 1000);
+      expect(nextSwap(c, p, 1000)).toBeNull(); // within the box's 8s dwell → hold
+      expect(nextSwap(c, p, 8000)).toBe("v2"); // dwell elapsed → swap
+    }
   });
 });

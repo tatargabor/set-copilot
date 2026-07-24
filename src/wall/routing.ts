@@ -18,6 +18,18 @@ export function zoneMatches(eventZone: Zone, windowZones: Zone[]): boolean {
 }
 
 /**
+ * A window's category appetite: the union of the categories its boxes subscribe
+ * to. Subscription is keyed on the box, not on its position — moving a box to
+ * another layout position carries its `cats` with it, exactly as it carries its
+ * `behavior` and `pacing` (design D2). An event whose category is in no box's
+ * `cats` never reaches this window's clients — that is how a `both`-zoned hint
+ * that no box asked for stays off the public wall's wire (design D6/6.4).
+ */
+export function windowCats(boxes: { cats: string[] }[]): Set<string> {
+  return new Set(boxes.flatMap((b) => b.cats));
+}
+
+/**
  * Resolve the category of an incoming event against the registry. Returns the
  * Category, or null (with a warning) when the category is unknown — the display
  * drops the event and keeps processing rather than rendering blank or crashing.

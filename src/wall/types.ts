@@ -15,13 +15,22 @@ export type Zone = "private" | "public" | "both";
 
 /**
  * How a category is drawn.
- *  - `text`  → a DOM lane (súgás, riasztás)
- *  - `graph` → a Cytoscape node/edge diagram (architecture, relationships)
- *  - `chart` → a data chart (magnitude/trend) rendered as dependency-free SVG
+ *  - `text`    → a DOM lane (súgás, riasztás)
+ *  - `graph`   → a Cytoscape node/edge diagram (architecture, relationships)
+ *  - `chart`   → a data chart (magnitude/trend) rendered as dependency-free SVG
+ *  - `image`   → a local (in-project) file or remote URL
+ *  - `webpage` → an embedded document
+ *
+ * The vocabulary is closed on purpose: it is an engine fact, not a config seam.
+ * Extending it is an engine change (this list is where that change happens), so a
+ * project cannot quietly invent a render type the client has no renderer for.
+ *
+ * A category's `render` is only the *default*. Which renderer actually runs is
+ * decided by the payload the event carries — see `DisplayEvent`.
  */
-export type RenderType = "text" | "graph" | "chart";
+export type RenderType = "text" | "graph" | "chart" | "image" | "webpage";
 
-/** How a slot treats the stream of events routed to it. */
+/** How a box treats the stream of events routed to it. */
 export type Behavior = "scroll" | "latest";
 
 /** A graph delta operation: append to the current visual, or start a fresh one. */
@@ -68,17 +77,38 @@ export interface ChartSpec {
 }
 
 /**
+ * The `image` payload. `src` is either an absolute URL or a path resolved inside
+ * the project root — validated at ingest, never at render time, so a malformed or
+ * escaping source never reaches a live display (design D4).
+ */
+export interface ImageSpec {
+  src: string;
+  caption?: string;
+}
+
+/** The `webpage` payload — an absolute URL embedded in the presentation box. */
+export interface WebpageSpec {
+  url: string;
+  title?: string;
+}
+
+/**
  * A display event as it travels over SSE and sits in the canonical JSONL log.
  *
  * `category` is the only field the transport needs to route/render. `zone` gates
  * which windows see it. `speaker` preserves the load-bearing mic/system primitive
  * on text. `priority:"immediate"` means "broadcast now, bypass the director's
  * pacing" — set by alerts and scroll-log lines. `visual` groups graph deltas.
+ *
+ * An event carries EXACTLY ONE payload, and that payload — not the category's
+ * `render` default — selects the renderer. This is what lets a single presentation
+ * box show a diagram, then a chart, then an image, without the box or the layout
+ * being redefined.
  */
 export interface DisplayEvent {
   category: string;
   zone: Zone;
-  /** Text payload for a `text`-render category. */
+  /** Text payload. */
   text?: string;
   /** mic = "én", system = "mindenki más". Preserved, never re-invented. */
   speaker?: "mic" | "system";
@@ -86,11 +116,33 @@ export interface DisplayEvent {
   priority?: "immediate";
   /** Groups graph deltas: same id → same visual; a new id via `op:"reset"` = topic boundary. */
   visual?: string;
-  /** Graph payload for a `graph`-render category. */
+  /** Graph payload. */
   graph?: GraphDelta;
-  /** Chart payload for a `chart`-render category. */
+  /** Chart payload. */
   chart?: ChartSpec;
+  /** Image payload. */
+  image?: ImageSpec;
+  /** Embedded-page payload. */
+  webpage?: WebpageSpec;
 }
+
+/**
+ * The payload keys, in the order the renderer dispatches on. Exported so ingest
+ * validation and the client agree on exactly one list — a payload added to
+ * `DisplayEvent` but forgotten here would validate and then fail to render.
+ */
+export const PAYLOAD_KEYS = ["text", "graph", "chart", "image", "webpage"] as const;
+
+export type PayloadKey = (typeof PAYLOAD_KEYS)[number];
+
+/** Which render type a given payload key selects. */
+export const PAYLOAD_RENDER: Record<PayloadKey, RenderType> = {
+  text: "text",
+  graph: "graph",
+  chart: "chart",
+  image: "image",
+  webpage: "webpage",
+};
 
 /**
  * A director command. Emitted server-side (authoritative playout) to tell every
@@ -122,7 +174,7 @@ export interface Category {
   render: RenderType;
 }
 
-/** Pacing config for a `latest` slot, turning it into a playout-governed canvas. */
+/** Pacing config for a `latest` box, turning it into a playout-governed canvas. */
 export interface Pacing {
   /** A shown item stays at least this long before a fresher candidate can swap in. */
   minDwellMs: number;
@@ -130,7 +182,47 @@ export interface Pacing {
   crossFadeMs?: number;
 }
 
-/** One region of a window: where it sits, how it behaves, what it subscribes to. */
+/**
+ * A *layout* — the geometry layer. It names box positions and how they are
+ * arranged, and knows nothing about what will be shown in them (design D2).
+ *
+ * `areas` is the grid, row by row: `[["left","right"]]` is one row of two
+ * positions; `[["a"],["b"]]` is two stacked rows. Position names may repeat
+ * across cells to span. `columns`/`rows` are CSS track sizes; omit `rows` and the
+ * client derives each row's size from the box occupying it, which is what keeps
+ * the shipped stacked layout byte-identical to the pre-layout behavior.
+ */
+export interface WallLayout {
+  id: string;
+  areas: string[][];
+  columns?: string[];
+  rows?: string[];
+}
+
+/**
+ * A *box* — the content layer. It carries behavior, pacing, subscriptions, and its
+ * own optional policy, and knows nothing about where it sits. Moving a box to a
+ * different position must not change how it behaves (design D2).
+ */
+export interface WallBox {
+  behavior: Behavior;
+  /** Category ids this box renders; events of other categories are ignored. */
+  cats: string[];
+  /** Present only on a `latest` box that should be director-paced (a canvas). */
+  pacing?: Pacing;
+  /**
+   * Box-scoped content policy. Merged key-by-key over the session-global
+   * `copilot.*` policy, so a box that declares nothing inherits the global one
+   * unchanged (design D5).
+   *
+   * Typed from config.ts, which is a type-only cycle (config.ts already imports
+   * these shapes): erased at runtime, and the alternative would be duplicating the
+   * alert/engagement unions here, where they do not belong.
+   */
+  policy?: import("../config.js").BoxPolicy;
+}
+
+/** One region of a window. **Legacy** — superseded by layout + boxes, still accepted on the way in. */
 export interface Slot {
   /** grid-area name — becomes part of the window's `grid-template-areas`. */
   area: string;
@@ -141,17 +233,43 @@ export interface Slot {
   pacing?: Pacing;
 }
 
-/** A window (view) — a route serving one zone-filtered slot layout. */
+/**
+ * A window (view) — a route serving one zone-filtered layout.
+ *
+ * Two accepted forms: the current `layout` + `boxes` pair, and the legacy `slots`
+ * list, which resolves onto the `stacked` layout so an existing config keeps
+ * working and keeps looking identical. Everything downstream of `resolveWindow`
+ * sees only the resolved form.
+ */
 export interface WallWindow {
   name: string;
   /** URL path, e.g. "/" or "/wall". */
   route: string;
   /** Which event zones this window renders. */
   zones: Zone[];
-  slots: Slot[];
+  /** Layout id, resolved against `WallConfig.layouts`. */
+  layout?: string;
+  /** Position name → the box occupying it. */
+  boxes?: Record<string, WallBox>;
+  /** Legacy slot list. Mutually exclusive with `layout`/`boxes`. */
+  slots?: Slot[];
 }
 
-/** The whole wall config section. Categories + windows are config/data, not `src/`. */
+/** A box together with the position it was assigned to. */
+export interface ResolvedBox extends WallBox {
+  position: string;
+}
+
+/** A window with its layout and boxes resolved — the only form the server and client see. */
+export interface ResolvedWindow {
+  name: string;
+  route: string;
+  zones: Zone[];
+  layout: WallLayout;
+  boxes: ResolvedBox[];
+}
+
+/** The whole wall config section. Categories, layouts + windows are config/data, not `src/`. */
 export interface WallConfig {
   /** TCP port the local HTTP server binds. */
   port: number;
@@ -162,6 +280,8 @@ export interface WallConfig {
    * default-exports `(ctx) => Category[]`, mirroring the `knowledge.adapter` seam.
    */
   categoriesModule?: string;
+  /** Named layouts. A window picks one by id; swapping the id reshapes the window. */
+  layouts: WallLayout[];
   /** The views. `/` and `/wall` are defaults; a new window is a new entry, no code. */
   windows: WallWindow[];
 }

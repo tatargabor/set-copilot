@@ -13,10 +13,10 @@
  */
 
 import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import type { CopilotConfig } from "../config.js";
-import type { DisplayEvent, Zone } from "./types.js";
+import { PAYLOAD_KEYS, type DisplayEvent, type PayloadKey, type Zone } from "./types.js";
 
 /** The canonical events log a producer appends to (kept in sync with index.ts). */
 export function wallEventsFile(runtimeDir: string): string {
@@ -29,11 +29,6 @@ export type NormalizeResult =
   | { ok: true; event: DisplayEvent }
   | { ok: false; reason: string };
 
-/**
- * Validate + normalize one raw object into a `DisplayEvent`. Permissive on shape
- * (a category may carry text, graph, chart, or several), strict on the two fields
- * routing depends on: a non-empty `category`, and a `zone` that defaults to "both".
- */
 /**
  * Shape-check a `graph` payload. Deliberately minimal — the renderer tolerates extra
  * keys and free-form node fields — but `op` decides whether the client starts a fresh
@@ -66,7 +61,72 @@ function badChart(chart: unknown): string | null {
   return null;
 }
 
-export function normalizeEvent(raw: unknown): NormalizeResult {
+/** An absolute http(s) URL. Other schemes (file:, data:, javascript:) are not sources we serve. */
+function isHttpUrl(s: string): boolean {
+  try {
+    const u = new URL(s);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Does `p` resolve inside `root`? Used to keep an `image` source from escaping the
+ * project. `relative()` rather than `startsWith()` because a sibling directory
+ * sharing a name prefix (`/proj-secrets` next to `/proj`) passes a prefix test.
+ */
+function insideRoot(p: string, root: string): boolean {
+  const rel = relative(resolve(root), resolve(root, p));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
+ * Shape-check an `image` payload. Validated here, on the way in, rather than at
+ * render time (design D4): a bad source that is broadcast first fails on a live
+ * display, and the traversal check has to happen server-side anyway because the
+ * server is what serves the file.
+ */
+function badImage(image: unknown, projectRoot?: string): string | null {
+  if (typeof image !== "object" || image === null || Array.isArray(image)) {
+    return `image must be an object, got ${JSON.stringify(image)}`;
+  }
+  const src = (image as { src?: unknown }).src;
+  if (typeof src !== "string" || !src.trim()) return "image.src must be a non-empty string";
+  if (isHttpUrl(src)) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) {
+    return `image.src must be an http(s) URL or an in-project path, got ${JSON.stringify(src)}`;
+  }
+  if (!projectRoot) return "image.src is a path but no project root is available to resolve it against";
+  if (isAbsolute(src) || !insideRoot(src, projectRoot)) {
+    return `image.src must resolve inside the project root, got ${JSON.stringify(src)}`;
+  }
+  return null;
+}
+
+/** Shape-check a `webpage` payload — an absolute http(s) URL, nothing else. */
+function badWebpage(webpage: unknown): string | null {
+  if (typeof webpage !== "object" || webpage === null || Array.isArray(webpage)) {
+    return `webpage must be an object, got ${JSON.stringify(webpage)}`;
+  }
+  const url = (webpage as { url?: unknown }).url;
+  if (typeof url !== "string" || !isHttpUrl(url)) {
+    return `webpage.url must be an absolute http(s) URL, got ${JSON.stringify(url)}`;
+  }
+  return null;
+}
+
+/** Which payload keys an object actually carries (a null payload counts as absent). */
+function payloadsOn(o: Record<string, unknown>): PayloadKey[] {
+  return PAYLOAD_KEYS.filter((k) => o[k] !== undefined && o[k] !== null);
+}
+
+export interface NormalizeOptions {
+  /** Needed to resolve (and confine) a local `image.src`. */
+  projectRoot?: string;
+}
+
+export function normalizeEvent(raw: unknown, opts: NormalizeOptions = {}): NormalizeResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { ok: false, reason: "not an object" };
   }
@@ -91,28 +151,41 @@ export function normalizeEvent(raw: unknown): NormalizeResult {
     zone = o.zone as Zone;
   }
 
-  const hasPayload =
-    typeof o.text === "string" || (o.graph !== undefined && o.graph !== null) || (o.chart !== undefined && o.chart !== null);
-  if (!hasPayload) {
-    return { ok: false, reason: "no payload (need text, graph, or chart)" };
+  // Exactly one payload (design D3). The renderer dispatches on the payload, so
+  // two of them is genuinely ambiguous — it would render one and silently discard
+  // the other — and this is stricter than the previous "at least one" check on
+  // purpose, while there is still only one producer to migrate.
+  const payloads = payloadsOn(o);
+  if (payloads.length === 0) {
+    return { ok: false, reason: `no payload (need exactly one of ${PAYLOAD_KEYS.join(", ")})` };
+  }
+  if (payloads.length > 1) {
+    return { ok: false, reason: `exactly one payload allowed, got ${payloads.join(" + ")}` };
+  }
+  const payload = payloads[0];
+  if (payload === "text" && typeof o.text !== "string") {
+    return { ok: false, reason: `text must be a string, got ${JSON.stringify(o.text)}` };
   }
 
-  if (o.graph !== undefined && o.graph !== null) {
-    const bad = badGraph(o.graph);
-    if (bad) return { ok: false, reason: bad };
-  }
-  if (o.chart !== undefined && o.chart !== null) {
-    const bad = badChart(o.chart);
-    if (bad) return { ok: false, reason: bad };
-  }
+  const bad =
+    payload === "graph" ? badGraph(o.graph)
+    : payload === "chart" ? badChart(o.chart)
+    : payload === "image" ? badImage(o.image, opts.projectRoot)
+    : payload === "webpage" ? badWebpage(o.webpage)
+    : null;
+  if (bad) return { ok: false, reason: bad };
 
   const event: DisplayEvent = { category: category.trim(), zone };
-  if (typeof o.text === "string") event.text = o.text;
   if (o.speaker === "mic" || o.speaker === "system") event.speaker = o.speaker;
   if (o.priority === "immediate") event.priority = "immediate";
   if (typeof o.visual === "string") event.visual = o.visual;
-  if (o.graph !== undefined && o.graph !== null) event.graph = o.graph as DisplayEvent["graph"];
-  if (o.chart !== undefined && o.chart !== null) event.chart = o.chart as DisplayEvent["chart"];
+  switch (payload) {
+    case "text": event.text = o.text as string; break;
+    case "graph": event.graph = o.graph as DisplayEvent["graph"]; break;
+    case "chart": event.chart = o.chart as DisplayEvent["chart"]; break;
+    case "image": event.image = o.image as DisplayEvent["image"]; break;
+    case "webpage": event.webpage = o.webpage as DisplayEvent["webpage"]; break;
+  }
   return { ok: true, event };
 }
 
@@ -137,7 +210,7 @@ export function emitWallEvents(cfg: CopilotConfig, raw: unknown): EmitResult {
   const result: EmitResult = { emitted: 0, dropped: [] };
   let batch = "";
   for (const item of items) {
-    const norm = normalizeEvent(item);
+    const norm = normalizeEvent(item, { projectRoot: cfg.projectRoot });
     if (!norm.ok) {
       result.dropped.push({ reason: norm.reason });
       continue;

@@ -4,11 +4,11 @@
  * lib is Cytoscape, and only for `graph` slots; text slots are ~20-line renderers.
  */
 
-import { gridTemplate, slotsForCategory } from "./wall-core.mjs";
+import { gridTemplate, boxesForCategory, renderForEvent } from "./wall-core.mjs";
 
 const route = location.pathname;
 const registry = new Map(); // category id → {render, icon, label}
-const slotEls = new Map(); // area → { el, slot, render fns/state }
+const boxEls = new Map(); // position → { el, box, lazily-built renderers }
 
 async function boot() {
   const res = await fetch(`/api/bootstrap?route=${encodeURIComponent(route)}`);
@@ -22,26 +22,22 @@ async function boot() {
 
 function mountGrid(win) {
   const root = document.getElementById("wall");
-  const t = gridTemplate(win.slots);
+  const t = gridTemplate(win.layout, win.boxes);
   root.style.display = "grid";
   root.style.gridTemplateAreas = t.gridTemplateAreas;
   root.style.gridTemplateRows = t.gridTemplateRows;
   root.style.gridTemplateColumns = t.gridTemplateColumns;
 
-  for (const slot of win.slots) {
+  for (const box of win.boxes) {
     const el = document.createElement("div");
-    el.className = `slot slot-${slot.behavior}${slot.pacing ? " slot-paced" : ""}`;
-    el.style.gridArea = slot.area;
-    el.dataset.area = slot.area;
+    el.className = `slot slot-${box.behavior}${box.pacing ? " slot-paced" : ""}`;
+    el.style.gridArea = box.position;
+    el.dataset.area = box.position;
     root.appendChild(el);
-    // A slot's render harness follows its categories' render type: a Cytoscape
-    // graph, an SVG chart, or plain DOM text lanes.
-    const render = slot.cats.map((c) => registry.get(c)?.render).find(Boolean);
-    slotEls.set(slot.area, {
-      el, slot,
-      graph: render === "graph" ? makeGraphSlot(el) : null,
-      chart: render === "chart" ? makeChartSlot(el) : null,
-    });
+    // Renderers are built on first use, not from the box's subscriptions: a
+    // presentation box may hold a graph now and a chart next, and which one it
+    // gets is not knowable at mount time.
+    boxEls.set(box.position, { el, box, graph: null, chart: null, panes: new Map(), shown: null, shownAt: 0, pending: null });
   }
 }
 
@@ -60,36 +56,201 @@ function connect() {
 function onEvent(ev) {
   const cat = registry.get(ev.category);
   if (!cat) return; // unknown category → drop, keep going
-  for (const { slot, el, graph, chart } of slotEls.values()) {
-    if (!slotsForCategory([slot], ev.category).length) continue;
-    if (cat.render === "graph" && graph) graph.apply(ev);
-    else if (cat.render === "chart" && chart) chart.apply(ev);
-    else renderText(el, slot, cat, ev);
+  const render = renderForEvent(ev); // the PAYLOAD decides, not the category
+  if (!render) return;
+  for (const entry of boxEls.values()) {
+    if (!boxesForCategory([entry.box], ev.category).length) continue;
+    applyToBox(entry, render, cat, ev);
   }
 }
 
+/**
+ * Hand one event to one box, building that box's renderer on first use.
+ *
+ * A box holding several render types swaps between them, and a swap tears down the
+ * previous renderer's DOM — otherwise a chart would be drawn on top of a live
+ * Cytoscape canvas. Text is exempt: `scroll` text accumulates, and clearing it on
+ * every line would make the log useless.
+ */
+function applyToBox(entry, render, cat, ev) {
+  if (render === "text") {
+    show(entry, "text");
+    renderText(paneFor(entry, "text"), entry.box, cat, ev);
+    return;
+  }
+
+  // A render-type change in a PACED box is a canvas swap and obeys the dwell.
+  // Without this, a chart arriving mid-dwell wipes the graph the director is still
+  // holding — the default presentation box subscribes to both, so this is the
+  // common case, not an edge case. `priority:"immediate"` bypasses it, as everywhere.
+  if (entry.shown && entry.shown !== render && entry.box.pacing && ev.priority !== "immediate") {
+    const remaining = (entry.box.pacing.minDwellMs ?? 0) - (Date.now() - (entry.shownAt ?? 0));
+    if (remaining > 0) {
+      entry.pending = { render, cat, ev };
+      clearTimeout(entry.pendingTimer);
+      entry.pendingTimer = setTimeout(() => {
+        const p = entry.pending;
+        entry.pending = null;
+        if (p) applyToBox(entry, p.render, p.cat, p.ev);
+      }, remaining);
+      return;
+    }
+  }
+
+  // Media is loaded BEFORE the box is touched: a source that fails must leave the
+  // previous content standing, and a box cleared first then failed is empty — which
+  // is indistinguishable from a dead wall, the one signal the operator relies on.
+  if (render === "image" || render === "webpage") {
+    const node = render === "image" ? buildImage(ev.image) : buildWebpage(ev.webpage);
+    if (!node) return; // malformed spec: nothing rendered, nothing destroyed
+    whenReady(node, () => {
+      paneFor(entry, render).replaceChildren(node.root);
+      show(entry, render);
+    });
+    return;
+  }
+
+  show(entry, render);
+  if (render === "graph") {
+    entry.graph = entry.graph || makeGraphSlot(paneFor(entry, "graph"));
+    entry.graph.apply(ev);
+  } else if (render === "chart") {
+    entry.chart = entry.chart || makeChartSlot(paneFor(entry, "chart"));
+    entry.chart.apply(ev);
+  }
+}
+
+/** Swap in only once the media has actually loaded; on failure, leave the box alone. */
+function whenReady(node, swapIn) {
+  if (!node.awaits) return swapIn();
+  node.awaits.onload = () => swapIn();
+  node.awaits.onerror = () => console.warn("[wall] media failed to load, keeping previous content:", node.src);
+}
+
+/**
+ * One pane per render type inside a box, created on demand and never destroyed.
+ *
+ * Swapping HIDES the other panes rather than clearing the box. Clearing looked
+ * cheaper and was wrong three ways: it threw away the graph renderer's accumulated
+ * `visuals` (so a later `op:"add"` drew an empty graph, and the director never
+ * re-sends a `show` for an already-committed visual — the box stayed blank for
+ * good), it destroyed a `scroll` box's whole text log, and neither is recoverable
+ * because replay does not carry scroll history.
+ */
+function paneFor(entry, render) {
+  let pane = entry.panes.get(render);
+  if (!pane) {
+    pane = document.createElement("div");
+    pane.className = `pane pane-${render}`;
+    entry.el.appendChild(pane);
+    entry.panes.set(render, pane);
+  }
+  return pane;
+}
+
+function show(entry, render) {
+  if (entry.shown !== render) {
+    entry.shown = render;
+    entry.shownAt = Date.now();
+  }
+  paneFor(entry, render);
+  for (const [kind, pane] of entry.panes) pane.hidden = kind !== render;
+}
+
 function onShow(cmd) {
-  for (const { slot, graph } of slotEls.values()) {
-    if (graph && slot.cats.includes(cmd.cat)) graph.show(cmd.id);
+  for (const entry of boxEls.values()) {
+    if (!entry.graph || !entry.box.cats.includes(cmd.cat)) continue;
+    // A show is broadcast once per visual, so a throw here used to abort the rest
+    // of the loop AND the SSE handler — one malformed delta could take the whole
+    // page down until reload.
+    try {
+      entry.graph.show(cmd.id);
+    } catch (e) {
+      console.warn("[wall] show failed for", cmd.cat, cmd.id, e);
+    }
   }
 }
 
 // ---- text renderers (scroll / latest) ----
 
-function renderText(el, slot, cat, ev) {
+function renderText(el, box, cat, ev) {
   const line = document.createElement("div");
   line.className = "line";
   if (ev.speaker) line.classList.add(`speaker-${ev.speaker}`); // mic="én" vs system
   if (ev.priority === "immediate") line.classList.add("immediate");
-  line.innerHTML = `<span class="icon">${cat.icon ?? ""}</span><span class="txt"></span>`;
+  line.innerHTML = `<span class="time"></span><span class="icon">${cat.icon ?? ""}</span><span class="txt"></span>`;
+  line.querySelector(".time").textContent = clock();
   line.querySelector(".txt").textContent = ev.text ?? "";
 
-  if (slot.behavior === "latest") {
+  if (box.behavior === "latest") {
     el.replaceChildren(line); // only the newest survives
   } else {
-    el.appendChild(line); // scroll: accumulate…
-    el.scrollTop = el.scrollHeight; // …and keep the newest in view
+    // scroll: newest on top, older lines flow down — no auto-scroll to chase, the
+    // fresh line is always at the visible top edge.
+    el.insertBefore(line, el.firstChild);
+    el.scrollTop = 0;
   }
+}
+
+/**
+ * Wall-clock HH:MM:SS for the moment a line is shown. On a live wall arrival ≈
+ * utterance time, and replay carries no scroll history (only the last pinned line),
+ * so a client-side stamp has nothing older to be wrong about — 24h, seconds
+ * included so rapid lines stay distinguishable.
+ */
+function clock() {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
+// ---- media renderers (image / webpage) ----
+//
+// A load failure keeps the previous content instead of clearing the box: an empty
+// box is visually indistinguishable from a dead wall, and that is the one signal
+// the operator relies on.
+
+/** Only these reach the DOM. The client re-checks the scheme it was handed. */
+function isHttp(u) {
+  return /^https?:\/\//i.test(String(u)); // case-insensitive: HTTPS:// is a valid URL
+}
+
+function buildImage(spec) {
+  if (!spec || typeof spec.src !== "string" || !spec.src) return null;
+  const img = document.createElement("img");
+  img.className = "media-image";
+  img.alt = spec.caption ?? "";
+  // A remote URL loads directly; anything else goes through /media, which re-derives
+  // confinement server-side rather than trusting the emitted path.
+  img.src = isHttp(spec.src) ? spec.src : `/media?src=${encodeURIComponent(spec.src)}`;
+
+  const figure = document.createElement("figure");
+  figure.className = "media";
+  figure.appendChild(img);
+  if (spec.caption) {
+    const cap = document.createElement("figcaption");
+    cap.textContent = spec.caption;
+    figure.appendChild(cap);
+  }
+  return { root: figure, awaits: img, src: spec.src };
+}
+
+function buildWebpage(spec) {
+  // Scheme is re-checked here, not only at ingest: `javascript:` and `data:text/html`
+  // in an iframe src execute attacker markup, and the client must not depend on
+  // every producer having gone through validation.
+  if (!spec || typeof spec.url !== "string" || !isHttp(spec.url)) return null;
+  const frame = document.createElement("iframe");
+  frame.className = "media-frame";
+  frame.src = spec.url;
+  frame.title = spec.title ?? spec.url;
+  // Display, not a runtime (a Non-Goal of this change): the embedded document gets
+  // scripts so ordinary pages render, but omitting `allow-same-origin` puts it in an
+  // opaque origin — no access to the wall's DOM, no top-level navigation, no
+  // downloads, no popups.
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.setAttribute("referrerpolicy", "no-referrer");
+  // An iframe fires `load` even for an error page, so it swaps in either way; there
+  // is no cross-origin way to tell, and a blank frame at least replaced deliberately.
+  return { root: frame, awaits: frame, src: spec.url };
 }
 
 // ---- graph renderer (Cytoscape) ----

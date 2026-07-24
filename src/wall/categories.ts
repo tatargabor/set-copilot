@@ -14,7 +14,12 @@ import { pathToFileURL } from "node:url";
 import type { CopilotConfig } from "../config.js";
 import type { Category, RenderType } from "./types.js";
 
-const RENDER_TYPES: RenderType[] = ["text", "graph", "chart"];
+/**
+ * The closed render-type vocabulary. A category's `render` is only its *default* —
+ * the payload an event carries selects the renderer — but the value still has to
+ * name a renderer the client actually has, so it is validated against this list.
+ */
+const RENDER_TYPES: RenderType[] = ["text", "graph", "chart", "image", "webpage"];
 
 /** A resolved registry: id → category, with a couple of routing conveniences. */
 export interface CategoryRegistry {

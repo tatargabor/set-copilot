@@ -233,3 +233,84 @@ describe("drawing contract in the full prompt", () => {
     expect(renderCopilotPrompt(bare)).not.toContain("## Drawing the wall");
   });
 });
+
+describe("renderBoxPolicies", () => {
+  const wallCfg = (windows: unknown[]) =>
+    ({
+      projectRoot: root,
+      copilot: { alerts: DEFAULT_ALERTS },
+      wall: {
+        categories: DEFAULT_CATEGORIES,
+        layouts: [{ id: "third-two-thirds", areas: [["szöveg", "prezentáció"]], columns: ["1fr", "2fr"] }],
+        windows,
+      },
+    }) as unknown as CopilotConfig;
+
+  it("renders nothing when no box declares a policy — the common case stays compact", () => {
+    const out = renderCopilotPrompt(
+      wallCfg([
+        {
+          name: "én", route: "/", zones: ["private", "both"], layout: "third-two-thirds",
+          boxes: { szöveg: { behavior: "scroll", cats: ["súgás"] } },
+        },
+      ]),
+    );
+    expect(out).not.toContain("## Per-box policy");
+  });
+
+  it("renders one section per policy-declaring box, naming zone and surface", () => {
+    const out = renderCopilotPrompt(
+      wallCfg([
+        {
+          name: "én", route: "/", zones: ["private", "both"], layout: "third-two-thirds",
+          boxes: {
+            szöveg: { behavior: "scroll", cats: ["súgás"], policy: { instructions: "Ellenőrizd, amit mond." } },
+            prezentáció: { behavior: "latest", cats: ["architektúra"] },
+          },
+        },
+        {
+          name: "fal", route: "/wall", zones: ["public", "both"], layout: "third-two-thirds",
+          boxes: { szöveg: { behavior: "scroll", cats: ["súgás"], policy: { instructions: "Narrálj." } } },
+        },
+      ]),
+    );
+    expect(out).toContain("## Per-box policy");
+    expect(out).toContain("### én → szöveg");
+    expect(out).toContain("### fal → szöveg");
+    // A reader can tell the two mandates apart without opening the config.
+    expect(out).toContain("Ellenőrizd, amit mond.");
+    expect(out).toContain("Narrálj.");
+    // The box with no policy of its own is not given a section.
+    expect(out).not.toContain("### én → prezentáció");
+  });
+
+  it("prints only the overridden keys, so inherited values cannot drift", () => {
+    const out = renderCopilotPrompt(
+      wallCfg([
+        {
+          name: "én", route: "/", zones: ["private"], layout: "third-two-thirds",
+          boxes: { szöveg: { behavior: "scroll", cats: ["súgás"], policy: { engagement: "participant" } } },
+        },
+      ]),
+    );
+    expect(out).toContain("Engagement: **participant**");
+    expect(out).not.toContain("Max lines:");
+  });
+
+  it("reads a policy instructions file when the string is a path", () => {
+    writeFileSync(join(root, "box.md"), "Fájlból jövő szabály.\n");
+    const out = renderCopilotPrompt(
+      wallCfg([
+        {
+          name: "én", route: "/", zones: ["private"], layout: "third-two-thirds",
+          boxes: { szöveg: { behavior: "scroll", cats: ["súgás"], policy: { instructions: "box.md" } } },
+        },
+      ]),
+    );
+    expect(out).toContain("Fájlból jövő szabály.");
+  });
+
+  it("does not throw on a config with no wall section at all", () => {
+    expect(() => renderCopilotPrompt({ projectRoot: root, copilot: { alerts: DEFAULT_ALERTS } } as CopilotConfig)).not.toThrow();
+  });
+});

@@ -12,6 +12,7 @@ import { resolve } from "node:path";
 
 import type { CopilotConfig, CopilotPromptConfig, Engagement } from "./config.js";
 import type { AlertCategory } from "./knowledge/types.js";
+import { resolveWindows } from "./wall/layout.js";
 import type { Category } from "./wall/types.js";
 
 const RANK: Record<AlertCategory["priority"], number> = { high: 0, medium: 1, low: 2 };
@@ -199,9 +200,75 @@ export function readInstructions(cfg: CopilotConfig): string {
 }
 
 /**
- * The full policy block: alert categories, then the wall drawing contract, then the
- * project's own instructions. The drawing contract sits here rather than in the skill
- * so it is loaded once and inherited by every producer fork (fork-wall-producer D2).
+ * A box policy's instructions: a path to a markdown file if one exists there,
+ * otherwise the string verbatim. Both forms are useful — a project with real
+ * domain rules wants a file, and a one-sentence mandate ("narrate, don't
+ * transcribe") is not worth one.
+ */
+function boxInstructions(cfg: CopilotConfig, instructions: string): string {
+  const path = resolve(cfg.projectRoot, instructions);
+  if (existsSync(path)) return readFileSync(path, "utf-8").trim();
+  return instructions.trim();
+}
+
+/**
+ * One section per box that declares its own policy (design D5).
+ *
+ * Returns nothing when no box declares one — the common case stays exactly as
+ * compact as it was, and the single global section above is the whole policy.
+ * When boxes DO differ, a reader of the prompt can tell which surface gets
+ * contradictions and which gets narration without opening the config.
+ *
+ * Only what the box overrides is printed. Anything unstated is inherited from the
+ * global policy, and restating it here would invite the two to drift.
+ */
+export function renderBoxPolicies(cfg: CopilotConfig): string[] {
+  const windows = resolveWindows(cfg.wall?.windows ?? [], cfg.wall?.layouts ?? [], () => {});
+  const rendered: string[] = [];
+
+  for (const win of windows) {
+    for (const box of win.boxes) {
+      const policy = box.policy;
+      if (!policy) continue;
+      const surfaces = box.cats
+        .map((c) => cfg.wall?.categories?.find((k) => k.id === c))
+        .filter((c): c is NonNullable<typeof c> => Boolean(c));
+
+      const lines: string[] = [
+        `### ${win.name} → ${box.position}`,
+        "",
+        `- Zone: \`${win.zones.join("` / `")}\``,
+        `- Renders: ${surfaces.length ? surfaces.map((c) => `${c.icon} \`${c.id}\` (${c.render})`).join(", ") : "—"}`,
+      ];
+      if (policy.engagement) lines.push(`- Engagement: **${policy.engagement}** (overrides the global setting)`);
+      if (policy.maxLines) lines.push(`- Max lines: ${policy.maxLines}`);
+      if (policy.alerts?.length) {
+        lines.push(`- Alert categories: ${policy.alerts.map((a) => `${a.emoji} ${label(a)}`).join(", ")} (replaces the global list for this box)`);
+      }
+      if (policy.instructions) {
+        lines.push("", boxInstructions(cfg, policy.instructions));
+      }
+      lines.push("");
+      rendered.push(lines.join("\n"));
+    }
+  }
+
+  if (!rendered.length) return [];
+  return [
+    "## Per-box policy",
+    "",
+    "Each box below has its own mandate. Anything a box does not restate is inherited",
+    "from the policy above — these are overrides, not replacements.",
+    "",
+    ...rendered,
+  ];
+}
+
+/**
+ * The full policy block: alert categories, then the wall drawing contract, then any
+ * per-box policy, then the project's own instructions. The drawing contract sits here
+ * rather than in the skill so it is loaded once and inherited by every producer fork
+ * (fork-wall-producer D2).
  */
 export function renderCopilotPrompt(cfg: CopilotConfig): string {
   const parts = [renderAlerts(cfg.copilot.alerts, cfg.copilot)];
@@ -214,6 +281,8 @@ export function renderCopilotPrompt(cfg: CopilotConfig): string {
     );
     if (drawing.length) parts.push(drawing.join("\n"));
   }
+  const boxes = renderBoxPolicies(cfg);
+  if (boxes.length) parts.push(boxes.join("\n"));
   const instructions = readInstructions(cfg);
   if (instructions) parts.push("## Project instructions", "", instructions);
   return parts.join("\n");

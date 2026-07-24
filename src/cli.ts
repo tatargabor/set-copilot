@@ -11,6 +11,8 @@
  *   prompt                   print the copilot policy (alert categories + instructions)
  *   poll [seconds]           long-poll the transcript for the copilot monitor
  *   wall [--port N] [--no-fake-feed]  start the local monitor-wall display server
+ *   wall-stop                stop the wall serving this runtime dir (via wall.pid)
+ *   wall-shot <url>          screenshot a URL (headless Chromium) onto the wall
  *   sources                  list audio input devices
  *   doctor                   audio + env health check (probes real signal)
  *   beep [--end]             play the OS chime (start: single, end: double)
@@ -21,10 +23,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import {
-  cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, statSync,
+  cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, rmSync, statSync,
 } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import {
   loadConfig, userConfigDir, CONFIG_FILENAME, keywordIndexPath, enrichedContextPath,
@@ -73,6 +75,8 @@ async function main(): Promise<void> {
       });
       return; // server keeps the process alive; Ctrl-C stops it
     }
+    case "wall-stop": return cmdWallStop();
+    case "wall-shot": return cmdWallShot(args);
     case "wall-emit": {
       // A producer's hand on the wall: push a DisplayEvent (or a JSON array of them)
       // onto the canonical events log. The producer is a fork of the main session
@@ -237,6 +241,104 @@ function cmdStop(print = false): void {
   if (print) printTranscriptOnce(cfg);
 }
 
+// ---- wall lifecycle --------------------------------------------------------
+
+/**
+ * Stop the wall serving this runtime dir, found through `wall.pid` — the same
+ * PID-file discipline `stop` uses for capture, so a `/meeting-copilot stop` can
+ * tear down exactly the wall this session started and never another project's.
+ * The wall removes its own pid/url on a clean exit; we clean up too in case it
+ * was already dead (a stale claim would otherwise refuse the next start).
+ */
+function cmdWallStop(): void {
+  const cfg = loadConfig();
+  const pf = join(cfg.runtimeDir, "wall.pid");
+  if (!existsSync(pf)) { console.log("[set-copilot] No wall running"); return; }
+  const pid = parseInt(readFileSync(pf, "utf-8").trim(), 10);
+  try {
+    process.kill(pid, "SIGTERM");
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0); } catch { break; } // exited
+      sleepMs(25);
+    }
+    console.log(`[set-copilot] Stopped wall (pid ${pid})`);
+  } catch {
+    console.log("[set-copilot] Wall already stopped");
+  }
+  try { rmSync(pf, { force: true }); } catch { /* best effort */ }
+  try { rmSync(join(cfg.runtimeDir, "wall.url"), { force: true }); } catch { /* best effort */ }
+}
+
+/** Chromium/Chrome binaries we try, in preference order, for `wall-shot`. */
+const BROWSER_BINS = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"];
+
+function findBrowser(): string | undefined {
+  for (const bin of BROWSER_BINS) {
+    const r = spawnSync(bin, ["--version"], { stdio: "ignore" });
+    if (!r.error && r.status === 0) return bin;
+  }
+  return undefined;
+}
+
+/**
+ * Screenshot a URL with headless Chromium and put it on the wall as an `image`.
+ *
+ * This is the answer to pages that refuse to be iframed (`X-Frame-Options` /
+ * `CSP frame-ancestors` — news sites, Google, banks): render to a PNG server-side
+ * and show the picture, which works for ANY page because there is no frame. The
+ * wall is display-not-runtime anyway, so a static shot loses nothing that the
+ * iframe path offered (its sandboxed frame is unreadable and non-interactive too).
+ *
+ * The PNG lands under the runtime dir and is emitted as a project-relative path,
+ * because the wall's `/media` only serves files inside the project root. With the
+ * scoped runtime dir (`$PWD/.set/copilot/$SESSION`) that holds; a shot taken
+ * against the shared `/tmp` runtime dir is outside the project and the emit will
+ * report the confinement rejection rather than serve it.
+ */
+async function cmdWallShot(args: string[]): Promise<void> {
+  const cfg = loadConfig();
+  const url = args.find((a) => !a.startsWith("-"));
+  if (!url) {
+    console.error("Usage: set-copilot wall-shot <url> [--category <id>] [--zone both|private|public] [--caption <text>]");
+    process.exit(1);
+  }
+  const category = flag(args, "--category") ?? "architektúra";
+  const zone = flag(args, "--zone") ?? "both";
+  const caption = flag(args, "--caption");
+
+  const bin = findBrowser();
+  if (!bin) {
+    console.error(`[wall-shot] no headless browser found — install Chromium or Google Chrome (tried: ${BROWSER_BINS.join(", ")})`);
+    process.exit(1);
+  }
+
+  const shotsDir = join(cfg.runtimeDir, "shots");
+  mkdirSync(shotsDir, { recursive: true });
+  const png = join(shotsDir, `shot-${Date.now()}.png`);
+
+  // `--headless=new` is the modern headless; `--no-sandbox` keeps it working in the
+  // containerized/root environments a copilot often runs in. A hard timeout stops a
+  // page that never settles from hanging the command.
+  const r = spawnSync(bin, [
+    "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+    "--window-size=1280,800", `--screenshot=${png}`, url,
+  ], { stdio: "ignore", timeout: 45_000 });
+  if (r.status !== 0 || !existsSync(png)) {
+    console.error(`[wall-shot] screenshot failed (${bin} exit ${r.status ?? "timeout/signal"})`);
+    process.exit(1);
+  }
+
+  const rel = relative(cfg.projectRoot, png);
+  const { emitWallEvents } = await import("./wall/emit.js");
+  const image: Record<string, unknown> = { src: rel };
+  if (caption) image.caption = caption;
+  const res = emitWallEvents(cfg, { category, zone, priority: "immediate", image });
+  for (const d of res.dropped) console.error(`[wall-shot] dropped: ${d.reason}`);
+  if (res.emitted === 0) process.exit(1);
+  console.log(`[wall-shot] ${url} → ${rel} (emitted to '${category}')`);
+}
+
 function cmdStatus(): void {
   const cfg = loadConfig();
   const pf = join(cfg.runtimeDir, "capture.pid");
@@ -264,6 +366,8 @@ function cmdPath(name?: string): void {
     keywords: keywordIndexPath(cfg),
     context: enrichedContextPath(cfg),
     digest: digestMarkdownPath(cfg),
+    "wall-url": join(cfg.runtimeDir, "wall.url"),
+    "wall-pid": join(cfg.runtimeDir, "wall.pid"),
   };
   if (!name || !(name in map)) {
     console.error(`Usage: set-copilot path <${Object.keys(map).join("|")}>`);
@@ -345,9 +449,15 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot poll [seconds]       long-poll the transcript (copilot monitor)
   set-copilot wall [--port N] [--no-fake-feed]
                                    start the local monitor-wall display (SSE);
-                                   prints window URLs. Fake-feed on by default
+                                   prints window URLs. On a taken port it walks to
+                                   the next free one; writes wall.pid + wall.url.
+                                   Fake-feed on by default
+  set-copilot wall-stop            stop the wall serving this runtime dir (wall.pid)
   set-copilot wall-emit '<json>'   push a DisplayEvent (or JSON array) onto the
                                    wall — the main session's producer seam (D9)
+  set-copilot wall-shot <url> [--category id] [--zone z] [--caption t]
+                                   headless-Chromium screenshot of <url> onto the
+                                   wall as an image (for pages that block iframing)
   set-copilot sources              list audio input devices
   set-copilot doctor               audio + env health check (probes real signal)
   set-copilot beep [--end]         OS chime (start: single, --end: double)

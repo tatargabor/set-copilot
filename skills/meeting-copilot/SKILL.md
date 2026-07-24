@@ -25,6 +25,8 @@ Both halves are config, not code:
 - **`start --lite`** — pre-loaded context: loads the enriched JSON at Phase 1, then **zero tool calls** during the meeting. Fast (<1s) but limited to pre-loaded knowledge.
 - **`start --zero`** — zero-load: **skips Phase 1 entirely**. Works purely from what's already in the conversation context (CLAUDE.md, rules, memory). Fastest start, smallest footprint.
 
+**Wall option (`start wall`).** Add the word `wall` (combinable with any mode, e.g. `start --lite wall`) to have the copilot **own the monitor wall**: it launches the wall itself in Phase 2b — scoped to the SAME runtime dir as the capture, on a per-session port, fake-feed off — and tears it down in `stop`. This is the supported way to run the wall; do NOT hand-start `set-copilot wall` in another terminal against a different dir (that split is what makes drawings and transcript point at different places). Without `wall`, no wall is started and Phase 5 simply skips emitting.
+
 #### Phase 0: Scope the runtime dir (do this in EVERY command below)
 
 Every `set-copilot` command in this skill — `digest`, `prompt`, `path`, `capture`, `poll`,
@@ -80,7 +82,30 @@ project, exactly as `/ds` does for dictation. Without it the capture lands in th
 outright ("a capture is already running"). **Keep it byte-identical in Phase 3 and in
 `stop`** — that directory is how they find this capture.
 
-**After starting: immediately proceed to Phase 3. Do NOT stop.**
+**After starting: immediately proceed to Phase 2b (if `wall`) then Phase 3. Do NOT stop.**
+
+#### Phase 2b: Start the wall (ONLY if `wall` was in the args)
+
+ONE Bash call with `run_in_background: true`. Derive a per-session port so parallel
+sessions do not fight over one (the wall walks to the next free port anyway if it is
+taken), and start it in the SAME scoped runtime dir, fake-feed off:
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}"
+WALL_PORT=$(( 4180 + $(printf '%s' "${CLAUDE_CODE_SESSION_ID:-shared}" | cksum | cut -d' ' -f1) % 800 ))
+SET_COPILOT_DIR="$SET_COPILOT_DIR" npx set-copilot wall --no-fake-feed --port "$WALL_PORT"
+```
+
+The wall writes `wall.pid` + `wall.url` into the runtime dir and keeps the process
+alive. Read the URL back and tell the user (the bound port may differ from `WALL_PORT`
+on fallback), in a **separate, non-background** call:
+
+```bash
+sleep 1; cat "$(SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot path wall-url)"
+```
+
+Tell the user: "🖥 Wall: <url>" (both the private `/` view and the public `/wall` view
+are served there). **After starting: immediately proceed to Phase 3. Do NOT stop.**
 
 #### Phase 3: Long-poll Monitor
 
@@ -138,9 +163,23 @@ another project.
 #### Phase 5 (optional): Mirror analysis to the monitor wall
 
 **Chat is your primary voice; the wall is a secondary artifact.** If a wall is running
-(`npx set-copilot wall` in another terminal, or the user asked for it), the wall must never be
-your ONLY output — a wall that doesn't visibly update looks broken, so the chat carries the
-liveness and the interpretation (the `## Feedback` block from `set-copilot prompt`).
+(started by Phase 2b when the session began with `wall`, or already up for this runtime dir),
+the wall must never be your ONLY output — a wall that doesn't visibly update looks broken, so
+the chat carries the liveness and the interpretation (the `## Feedback` block from
+`set-copilot prompt`). Emit with the SAME scoped `SET_COPILOT_DIR`, so the events reach the
+wall this session owns.
+
+**Showing a live web page.** An iframe (`webpage` payload) only works for pages that permit
+embedding; news sites, Google, banks, etc. send `X-Frame-Options` / `CSP frame-ancestors` and
+render blank. For those, screenshot instead — it works for ANY page:
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-shot <url> [--caption "<text>"]
+```
+
+It renders the page with headless Chromium and puts the image on the wall. Prefer `webpage`
+for embed-friendly URLs (instant, live); reach for `wall-shot` when the page blocks framing or
+a static snapshot is all that is wanted. (Needs Chromium/Chrome installed.)
 
 **The categories, the payload shapes, and when a visual is warranted are NOT in this file.** They
 come from the `## Drawing the wall` block of `set-copilot prompt`, which you loaded in Phase 1.
@@ -150,15 +189,21 @@ session instead of being restated on every drawing. This file owns only the mech
 **Spawn a fork to draw.** Don't draw inline — you'd stop talking while you did. Spawn a fork of
 yourself (`subagent_type: "fork"`) whose prompt is ONLY the mandate:
 
-> Draw the `<category>` slot for what we just discussed: <one line of what to show>.
+> Draw the `<category>` for what we just discussed: <one line of what to show>.
 > Emit with `SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '<json>'`, then stop.
 
 The fork inherits this entire conversation — that inheritance IS its grounding, which is why the
 mandate can be one line and why it knows what matters. It draws, emits, and exits.
 
+**Spawn a fork only when there is something to compose.** If the content is already settled in this
+conversation, `wall-emit` it directly: measured on a live session, a fork costs 16–62 s and 47–76k
+tokens per drawing (a fork that reads source files is the slow end), against ~1 s for a direct emit.
+A fork earns its cost by reading source or working something out — never by retyping what you
+already know.
+
 Rules that keep this cheap and correct:
 
-- **One fork, one slot.** Give each fork a single category. If two slots need updating, spawn two
+- **One fork, one category.** Give each fork a single category. If two need updating, spawn two
   forks in the same message — they run concurrently and neither blocks the other.
 - **Never pass a `model` override to a producer fork.** A fork always runs on your model and the
   override is ignored; asking for a cheaper tier silently does nothing.
@@ -183,8 +228,13 @@ ambiguity) still apply.
 
 ```bash
 SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot stop
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-stop
 ```
-The Monitor exits on its own (the in-flight poll returns `{"type":"capture-dead"}`). Then report a summary: meeting duration, alert counts by type (⚠/📋/✏/❓), and any new decisions detected (for post-meeting processing).
+Stop both: the capture, and the wall this session started (`wall-stop` is a no-op if none was
+started, and only ever stops the wall in THIS runtime dir — never another project's). The
+Monitor exits on its own (the in-flight poll returns `{"type":"capture-dead"}`). Then report a
+summary: meeting duration, alert counts by type (⚠/📋/✏/❓), and any new decisions detected
+(for post-meeting processing).
 
 ### `/meeting-copilot status`
 

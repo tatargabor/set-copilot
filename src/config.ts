@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 
 import type { AlertCategory, KeywordPattern } from "./knowledge/types.js";
-import type { WallConfig, Category, WallWindow } from "./wall/types.js";
+import type { WallConfig, Category, WallLayout, WallWindow } from "./wall/types.js";
 
 export interface KnowledgeConfig {
   /** "markdown" (built-in) or a path to a module exporting a KnowledgeAdapter factory */
@@ -98,6 +98,30 @@ export interface DrawingContractConfig {
    * these to teach a project's own visual language without forking the skill.
    */
   conventions: string[];
+}
+
+/**
+ * A box's own slice of content policy (design D5).
+ *
+ * Every field is optional and overrides the session-global `copilot.*` value for
+ * that box alone; a box declaring nothing inherits the global policy unchanged, so
+ * a config written before boxes existed behaves exactly as it did. The merge is
+ * key by key, not wholesale — otherwise every box would have to restate the entire
+ * alert taxonomy just to change one instruction, and the copies would drift.
+ *
+ * This is what makes the private and the public text box differ in *mandate*
+ * rather than only in zone: the private one checks and surfaces, the public one
+ * narrates.
+ */
+export interface BoxPolicy {
+  /** Markdown path or inline text, same as `copilot.instructions`. */
+  instructions?: string;
+  /** Alert taxonomy for this box only. */
+  alerts?: AlertCategory[];
+  /** How eagerly this box is fed. */
+  engagement?: Engagement;
+  /** Max lines per contribution to this box. */
+  maxLines?: number;
 }
 
 /** Regex sources driving the per-line flags the copilot routes on */
@@ -270,9 +294,13 @@ export const DEFAULT_DEFERRED_MARKERS = [
  * registry and the windows wholesale from config without touching `src/`.
  *
  * The copilot shows only *processed* output — there is deliberately no raw
- * transcript category. `súgás`/`riasztás` are `text`, `architektúra` is a
- * node/edge `graph`, `metrika` is a data `chart`. That is the whole render-type
- * vocabulary (text / graph / chart).
+ * transcript category, and the public narration box does not reintroduce one: it
+ * emits condensed, filtered output, not a transcript mirror. `súgás`/`riasztás`
+ * are `text`, `architektúra` is a node/edge `graph`, `metrika` is a data `chart`.
+ *
+ * The render-type vocabulary is text / graph / chart / image / webpage, and it is
+ * closed: it lives in `RenderType` (`wall/types.ts`), so adding one is an engine
+ * change, not something a project can do from config.
  */
 export const DEFAULT_CATEGORIES: Category[] = [
   { id: "súgás", label: "Súgás", icon: "💡", render: "text" },
@@ -281,29 +309,75 @@ export const DEFAULT_CATEGORIES: Category[] = [
   { id: "metrika", label: "Metrika", icon: "📊", render: "chart" },
 ];
 
-// Slots stack top-to-bottom (one column). The private view keeps the alert
-// pinned, scrolls processed hints, and gives the graph the hero space with the
-// chart beneath; the public wall shows only the shared graph + chart.
+/**
+ * The named layouts. Geometry only — which positions exist and how they sit — so a
+ * window is reshaped by swapping an id, not by rewriting its content.
+ *
+ * `stacked` preserves the pre-layout arrangement (one column, top to bottom) and
+ * is the rollback target if the horizontal default turns out wrong on someone's
+ * screen. Neither declares `rows`, so row sizing still follows box behavior, which
+ * is what keeps `stacked` byte-identical to what the wall did before layouts.
+ */
+export const DEFAULT_LAYOUTS: WallLayout[] = [
+  { id: "stacked", areas: [["szöveg"], ["prezentáció"]] },
+  { id: "third-two-thirds", areas: [["szöveg", "prezentáció"]], columns: ["1fr", "2fr"] },
+  { id: "prezentáció-teljes", areas: [["prezentáció"]] },
+];
+
+/**
+ * Two boxes, not four slots: text on the left third, presentation on the right two
+ * thirds. The presentation box takes both the graph and the chart category —
+ * legal, and the point of the change, because the renderer follows the event's
+ * payload rather than the box's subscription.
+ *
+ * The private view (`/`) gets the text box; the public wall (`/wall`) is
+ * graph + chart only, exactly as before. A public TEXT box was prototyped, then
+ * pulled: it would narrate the meeting to an audience, which only makes sense
+ * together with public-zone redaction — and that was deferred to its own change
+ * after an adversarial pass found the redactor leaky. Until it lands, no text and
+ * no `both`-zone content is safe to auto-publish, so `/wall` shows only what a
+ * producer deliberately marks for it.
+ *
+ * The private box carries a `policy`: it checks what the speaker says and surfaces
+ * what they may not know. Per-box policy is the general mechanism (design D5); the
+ * private box is its first user.
+ */
 export const DEFAULT_WINDOWS: WallWindow[] = [
   {
     name: "én",
     route: "/",
     zones: ["private", "both"],
-    slots: [
-      { area: "pinned", behavior: "latest", cats: ["riasztás"] },
-      { area: "hints", behavior: "scroll", cats: ["súgás"] },
-      { area: "canvas", behavior: "latest", cats: ["architektúra"], pacing: { minDwellMs: 8000, crossFadeMs: 400 } },
-      { area: "chart", behavior: "latest", cats: ["metrika"] },
-    ],
+    layout: "third-two-thirds",
+    boxes: {
+      szöveg: {
+        behavior: "scroll",
+        cats: ["riasztás", "súgás"],
+        policy: {
+          instructions:
+            "Ez a privát súgódoboz. Ellenőrizd, amit a beszélő mond, és hozd felszínre, amit nem tud: ellentmondás a rögzített döntésekkel, releváns kontextus, rögzítésre érdemes új döntés.",
+        },
+      },
+      prezentáció: {
+        behavior: "latest",
+        cats: ["architektúra", "metrika"],
+        pacing: { minDwellMs: 8000, crossFadeMs: 400 },
+      },
+    },
   },
   {
     name: "fal",
     route: "/wall",
     zones: ["public", "both"],
-    slots: [
-      { area: "canvas", behavior: "latest", cats: ["architektúra"], pacing: { minDwellMs: 8000, crossFadeMs: 400 } },
-      { area: "chart", behavior: "latest", cats: ["metrika"] },
-    ],
+    layout: "prezentáció-teljes",
+    boxes: {
+      // No text box yet — see the note above. The presentation fills the wall until
+      // public narration + redaction ship together.
+      prezentáció: {
+        behavior: "latest",
+        cats: ["architektúra", "metrika"],
+        pacing: { minDwellMs: 8000, crossFadeMs: 400 },
+      },
+    },
   },
 ];
 
@@ -325,6 +399,7 @@ export const DEFAULT_DRAWING_CONVENTIONS: string[] = [
 export const DEFAULT_WALL: WallConfig = {
   port: 4180,
   categories: DEFAULT_CATEGORIES,
+  layouts: DEFAULT_LAYOUTS,
   windows: DEFAULT_WINDOWS,
 };
 
@@ -523,6 +598,11 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       port: typeof wall.port === "number" && wall.port > 0 ? wall.port : DEFAULT_WALL.port,
       categories: Array.isArray(wall.categories) ? wall.categories : DEFAULT_WALL.categories,
       categoriesModule: wall.categoriesModule,
+      // A project supplying its own layouts still gets the built-ins appended, so
+      // `stacked` (the rollback arrangement) can never be configured away by accident.
+      layouts: Array.isArray(wall.layouts)
+        ? [...wall.layouts, ...DEFAULT_WALL.layouts.filter((d) => !wall.layouts!.some((l) => l.id === d.id))]
+        : DEFAULT_WALL.layouts,
       windows: Array.isArray(wall.windows) ? wall.windows : DEFAULT_WALL.windows,
     },
     projectRoot: root,
