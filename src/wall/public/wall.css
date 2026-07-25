@@ -81,7 +81,10 @@ body {
 .line:last-child { border-bottom: 0; }
 .line .time { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .line .icon { flex: 0 0 auto; }
-.line .txt { flex: 1 1 auto; }
+/* `pre-wrap`: a szöveg `textContent`-tel kerül be (wall.js), így a sortörés csak
+   CSS-sel marad meg. Enélkül a többsoros esemény (pl. egy kitűzött lista) egyetlen
+   összefolyó bekezdéssé olvad — mérve 2026-07-25 egy élő meetingen. */
+.line .txt { flex: 1 1 auto; white-space: pre-wrap; }
 
 /* Media (image / webpage) — fill the box without stretching or overflowing it. */
 .media {
