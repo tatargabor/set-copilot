@@ -27,6 +27,16 @@ Both halves are config, not code:
 
 **Wall option (`start wall`).** Add the word `wall` (combinable with any mode, e.g. `start --lite wall`) to have the copilot **own the monitor wall**: it launches the wall itself in Phase 2b — scoped to the SAME runtime dir as the capture, on a per-session port, fake-feed off — and tears it down in `stop`. This is the supported way to run the wall; do NOT hand-start `set-copilot wall` in another terminal against a different dir (that split is what makes drawings and transcript point at different places). Without `wall`, no wall is started and Phase 5 simply skips emitting.
 
+**Mirror option (`start wall mirror`).** Add the word `mirror` (only meaningful alongside `wall`) to **mirror your substantive chat onto the wall**. It is an opt-in on top of your primary voice: you keep talking in chat and each substantive line is *additionally* echoed to the wall.
+
+Enforcement is a **`Stop` hook** (`wall-mirror.sh`, installed by `set-copilot init`), NOT your own discipline — a field meeting proved that a prompt-only mandate falls behind (the chat carried far more than the wall). The hook fires at the end of every turn, takes your last message, strips code blocks, skips short filler (<40 chars), dedups, and emits it as a `tükör` event. You do not emit the mirror yourself.
+
+To turn it on for the session, in Phase 2b (right after the wall is up) **create the opt-in marker** the hook gates on, and also export `COPILOT_MIRROR=1` on the Phase-1 `prompt` line so the policy shows a `## Mirroring` block:
+```bash
+: > "$SET_COPILOT_DIR/wall-mirror.enabled"   # marker: the Stop hook mirrors only when this exists
+```
+Off by default: without `mirror`, no marker exists, the hook is a no-op, and the chat-primary / wall-secondary separation stays. (If `set-copilot init` was never run in this project, the hook isn't installed — mention that mirroring won't fire until it is.)
+
 #### Phase 0: Scope the runtime dir (do this in EVERY command below)
 
 Every `set-copilot` command in this skill — `digest`, `prompt`, `path`, `capture`, `poll`,
@@ -51,6 +61,11 @@ SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-co
 ```
 
 **The `prompt` output is your analysis policy for this session.** It defines which categories you may speak up about, what triggers each, which ones fire a desktop notification, and any domain rules the project wrote for you. It replaces the default taxonomy in Phase 4 — follow it, not your assumptions about what matters. Run it in every mode, including `--zero`: it is config, not knowledge, and costs one call.
+
+**If the args include `mirror`** (see the Mirror option above), export `COPILOT_MIRROR=1` on the `prompt` line so the rendered policy carries the `## Mirroring` mandate:
+```bash
+COPILOT_MIRROR=1 SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot prompt
+```
 
 **Normal mode (`start`):** Read the digest, then remember you have Grep/Read access during the meeting:
 ```bash
@@ -187,6 +202,27 @@ SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-co
 - **What to say comes from the policy, not this file.** The `## Narration` block owns the substance and
   verbosity; this file owns only the emit + the cadence. If no `## Narration` block is present (narration
   disabled), skip this lane entirely.
+
+**Mirroring the chat onto the wall.** When mirroring is on (the `wall-mirror.enabled` marker exists, i.e.
+the session started with `mirror`), the **`Stop` hook does the mirroring for you** — it takes your last
+message at the end of each turn and emits it as a `tükör` event, with code-block/short-filler filtering and
+dedup. **Do NOT `wall-emit` the mirror yourself** — that would double it. Your only job is to keep your chat
+substantive (the hook mirrors whatever you actually say), and to remember redaction still applies to the
+public variant: keep an internal detail off the public wall by marking it `[belső]`. If mirroring is off
+(no marker), there is nothing to do here.
+
+**Switching the wall layout at runtime.** The active layout of a live window can be changed mid-session,
+no restart — e.g. into the wide `chat-wide` layout (big chat box on the left half, visuals on the right)
+when mirroring is on, and back to `third-two-thirds` afterwards. It is geometry only: the boxes keep their
+content and state.
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-layout /wall chat-wide
+```
+
+Do it on an explicit request ("switch to the wide chat layout", "make the chat bigger"), not on your own —
+a layout is the operator's choice. An unknown route or layout id is dropped with a warning, never blanking
+the wall.
 
 **Showing a live web page.** An iframe (`webpage` payload) only works for pages that permit
 embedding; news sites, Google, banks, etc. send `X-Frame-Options` / `CSP frame-ancestors` and

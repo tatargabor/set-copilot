@@ -264,8 +264,30 @@ export interface StageExpired {
   visual: string;
 }
 
+/**
+ * A runtime layout switch (wall-chat-mirror). Reshapes ONE window's geometry while
+ * the wall is live — no server restart — by swapping which named layout its route
+ * uses. It is geometry only (display-layout MODIFIED): the target route's box
+ * definitions, their behavior, pacing, and subscriptions are untouched; only the
+ * grid the boxes sit in changes. The `layout` id must be present in the registry, or
+ * the switch is dropped with a warning (never blanking the window), exactly as an
+ * unknown layout is dropped at resolve time.
+ *
+ * Trust class matches `promote`, not `show`: it is the operator/skill's act, appended
+ * to the canonical log through the documented producer seam, not server-authoritative.
+ * The worst an injected switch can do is rearrange a window into another *configured*
+ * layout — it carries no content, so it can neither publish nor leak anything.
+ */
+export interface LayoutSwitch {
+  kind: "layout";
+  /** Window route to reshape, e.g. "/" or "/wall". */
+  route: string;
+  /** The layout id to switch to — validated against the config's layout registry. */
+  layout: string;
+}
+
 /** Anything that can appear on the `/events` stream. */
-export type WireMessage = DisplayEvent | ShowCommand | Heartbeat | Pending | Promote | StageExpired;
+export type WireMessage = DisplayEvent | ShowCommand | Heartbeat | Pending | Promote | StageExpired | LayoutSwitch;
 
 export function isShowCommand(m: WireMessage): m is ShowCommand {
   return (m as ShowCommand).kind === "show";
@@ -285,6 +307,10 @@ export function isPromote(m: WireMessage): m is Promote {
 
 export function isStageExpired(m: WireMessage): m is StageExpired {
   return (m as StageExpired).kind === "stage-expired";
+}
+
+export function isLayoutSwitch(m: WireMessage): m is LayoutSwitch {
+  return (m as LayoutSwitch).kind === "layout";
 }
 
 // ---- config/data shapes ----------------------------------------------------

@@ -20,12 +20,14 @@ beforeEach(() => {
   delete process.env.STT_BACKEND;
   delete process.env.WHISPER_MODEL;
   delete process.env.WHISPER_BIN;
+  delete process.env.COPILOT_MIRROR;
 });
 
 afterEach(() => {
   rmSync(userHome, { recursive: true, force: true });
   rmSync(project, { recursive: true, force: true });
   delete process.env.SET_COPILOT_HOME;
+  delete process.env.COPILOT_MIRROR;
 });
 
 const writeCfg = (dir: string, cfg: unknown): void =>
@@ -123,6 +125,42 @@ describe("loadConfig", () => {
   it("throws with the offending path when a config file is malformed", () => {
     writeFileSync(join(project, CONFIG_FILENAME), "{ not json");
     expect(() => loadConfig(project)).toThrow(/Failed to parse .*set-copilot\.config\.json/);
+  });
+});
+
+describe("chat-mirror config (wall-chat-mirror)", () => {
+  it("defaults mirroring off, targeting the tükör category", () => {
+    const cfg = loadConfig(project);
+    expect(cfg.copilot.mirror.enabled).toBe(false);
+    expect(cfg.copilot.mirror.category).toBe("tükör");
+  });
+
+  it("enables mirroring only on an explicit true, or the COPILOT_MIRROR env opt-in", () => {
+    writeCfg(project, { copilot: { mirror: { enabled: true } } });
+    expect(loadConfig(project).copilot.mirror.enabled).toBe(true);
+
+    writeCfg(project, {}); // back to default (off)
+    expect(loadConfig(project).copilot.mirror.enabled).toBe(false);
+    process.env.COPILOT_MIRROR = "1"; // the skill's start-time opt-in
+    expect(loadConfig(project).copilot.mirror.enabled).toBe(true);
+  });
+
+  it("lets a project rename the mirror target category", () => {
+    writeCfg(project, { copilot: { mirror: { enabled: true, category: "chat" } } });
+    expect(loadConfig(project).copilot.mirror.category).toBe("chat");
+  });
+
+  it("ships the tükör category and the chat-wide layout with the expected geometry", () => {
+    const cfg = loadConfig(project);
+    expect(cfg.wall.categories.find((c) => c.id === "tükör")?.render).toBe("text");
+    // Named `chat-wide`, not `mirror`, so the layout id can't collide with the
+    // `copilot.mirror` feature (a field session proved that collision costs confusion).
+    const wide = cfg.wall.layouts.find((l) => l.id === "chat-wide");
+    expect(wide).toBeDefined();
+    // Two equal columns, one row: big chat mirror on the left, visuals on the right — no
+    // unfilled dead region (the summary third is deferred, not shipped empty).
+    expect(wide!.areas).toEqual([["szöveg", "prezentáció"]]);
+    expect(wide!.columns).toEqual(["1fr", "1fr"]);
   });
 });
 

@@ -41,6 +41,27 @@ function mountGrid(win) {
   }
 }
 
+// ---- runtime layout switch (wall-chat-mirror) ----
+//
+// The server reshapes a window at runtime by pushing a new layout for this route. It is
+// geometry only: the existing box elements keep their DOM — and with it every bit of
+// state (scroll log, live graph, pacing) — and simply move to their position in the new
+// grid. A box whose position the new layout does not define is hidden rather than left to
+// auto-place awkwardly; it reappears if a later switch brings its position back.
+function onLayout(msg) {
+  if (!msg.layout || !Array.isArray(msg.layout.areas)) return;
+  const root = document.getElementById("wall");
+  const boxes = [...boxEls.values()].map((e) => e.box);
+  const t = gridTemplate(msg.layout, boxes);
+  root.style.gridTemplateAreas = t.gridTemplateAreas;
+  root.style.gridTemplateRows = t.gridTemplateRows;
+  root.style.gridTemplateColumns = t.gridTemplateColumns;
+  const positions = new Set(msg.layout.areas.flat().filter((c) => c && c !== "."));
+  for (const entry of boxEls.values()) {
+    entry.el.style.display = positions.has(entry.box.position) ? "" : "none";
+  }
+}
+
 function connect() {
   const es = new EventSource(`/events?route=${encodeURIComponent(route)}`);
   es.onmessage = (e) => {
@@ -50,6 +71,7 @@ function connect() {
     if (msg.kind === "heartbeat") return onHeartbeat(msg);
     if (msg.kind === "pending") return onPending(msg);
     if (msg.kind === "stage-expired") return onStageExpired(msg);
+    if (msg.kind === "layout") return onLayout(msg);
     onEvent(msg);
   };
 }

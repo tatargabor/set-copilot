@@ -121,6 +121,26 @@ function renderNarration(narration: CopilotConfig["copilot"]["narration"]): stri
 }
 
 /**
+ * The chat→wall mirroring mandate (wall-chat-mirror). Rendered ONLY when mirroring is
+ * enabled, exactly like narration — so with mirroring off the policy text above is
+ * byte-for-byte the pre-change output. It is an opt-in overlay on the primary voice: the
+ * copilot keeps talking in chat and *additionally* echoes each substantive line to the
+ * wall, through the same redaction funnel as any event.
+ */
+function renderMirror(mirror: CopilotConfig["copilot"]["mirror"]): string[] {
+  return [
+    "## Mirroring — chat onto the wall (opt-in)",
+    "",
+    `Mirroring is **on** this session. Chat is still your primary voice; each substantive chat line is *additionally* shown on the wall as a \`${mirror.category}\` event, so a wall audience can also read it.`,
+    "",
+    "- **A `Stop` hook does the mirroring — not you.** At the end of every turn the hook takes your last message and emits it, with code-block stripping, short-filler skipping, and dedup. **Do NOT `wall-emit` the mirror yourself** — that would double it.",
+    "- **Your job is to keep the chat substantive.** The hook mirrors whatever you actually say, so a filler line becomes wall noise. Say something worth showing, or end the turn silently.",
+    "- **Redaction still applies.** The mirrored line goes through the SAME public-zone redaction as any event. Keep an internal detail off the public wall by marking the span `[belső]`; the server scrubs it before any public client sees it.",
+    "",
+  ];
+}
+
+/**
  * The wall drawing contract (fork-wall-producer D2).
  *
  * This block exists to be *inherited*, not re-supplied. A producer is a fork of the
@@ -311,6 +331,11 @@ export function renderCopilotPrompt(cfg: CopilotConfig): string {
   // off the alert/engagement policy above is byte-for-byte the pre-change reactive text.
   if (cfg.copilot.narration?.enabled) {
     parts.push(renderNarration(cfg.copilot.narration).join("\n"));
+  }
+  // The mirroring mandate is its own section, gated on `enabled` — off by default, so the
+  // policy above stays byte-for-byte the pre-change text unless a session opts in.
+  if (cfg.copilot.mirror?.enabled) {
+    parts.push(renderMirror(cfg.copilot.mirror).join("\n"));
   }
   // Tolerate a hand-built config: CopilotConfig is exported, so consumers construct
   // one, and a missing wall/drawing section means "no wall", not a crash.

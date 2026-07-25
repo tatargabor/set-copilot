@@ -81,6 +81,13 @@ export interface CopilotPromptConfig {
    */
   narration: NarrationConfig;
   /**
+   * Chat→wall mirroring (wall-chat-mirror). When enabled, the copilot also emits its
+   * substantive chat lines to the wall (as `mirror.category` text), through the same
+   * redaction funnel as any event. Off by default: mirroring is an explicit, session-level
+   * opt-in, so the chat-primary / wall-secondary separation is preserved unless asked for.
+   */
+  mirror: MirrorConfig;
+  /**
    * What the copilot answers to. Plain words, not regexes — naming one of these
    * marks the line `command: true`, and `poll` returns at once instead of waiting
    * for the silence gate. Default `["copilot"]`; add nicknames or slang freely
@@ -108,6 +115,21 @@ export interface DrawingContractConfig {
    * these to teach a project's own visual language without forking the skill.
    */
   conventions: string[];
+}
+
+/**
+ * Chat→wall mirroring (wall-chat-mirror). When enabled, the copilot echoes its
+ * substantive chat lines to a wall text box (via the `category` below), so a wall
+ * audience can also read the chat — the primary voice. It is judgement-gated like every
+ * other channel: only substantive lines, never filler, and a mirrored line goes through
+ * the SAME server-side ingest redaction as any event. Off by default — the chat-primary /
+ * wall-secondary separation stays the norm; an operator opts in for a session.
+ */
+export interface MirrorConfig {
+  /** Mirror chat to the wall at all. Default off. */
+  enabled: boolean;
+  /** Which text category a mirrored line is emitted under. Default "tükör". */
+  category: string;
 }
 
 /** How talkative the continuous-narration channel is. Rendered into the policy mandate. */
@@ -350,6 +372,12 @@ export const DEFAULT_CATEGORIES: Category[] = [
   // an explicit promote lifts it to the public presentation box. A guess never publishes
   // itself: "prepared, not published". See DEFAULT_WINDOWS and the predictive-staging spec.
   { id: "előrejelzés", label: "Előrejelzés", icon: "🔮", render: "graph" },
+  // The chat-mirror channel (wall-chat-mirror). When mirroring is enabled, the copilot
+  // echoes its substantive chat lines here as `text`, so a wall audience can also read the
+  // chat — the primary voice. A dedicated category (not `narráció`) so mirroring and
+  // narration coexist and are zoned independently. Off by default: no `tükör` event is
+  // emitted unless mirroring is turned on, so the extra subscription is inert until then.
+  { id: "tükör", label: "Tükör", icon: "🪞", render: "text" },
 ];
 
 /**
@@ -369,6 +397,16 @@ export const DEFAULT_LAYOUTS: WallLayout[] = [
   // Geometry only: a full-width row under the text + presentation, where a pre-drawn
   // prediction waits privately until it is promoted.
   { id: "private-staging", areas: [["szöveg", "prezentáció"], ["staging", "staging"]], columns: ["1fr", "2fr"], rows: ["2fr", "1fr"] },
+  // The chat-wide layout (wall-chat-mirror): a big left column for the mirrored chat, an
+  // equal right column for the visuals. Named `chat-wide`, NOT `mirror`, on purpose — a
+  // field session proved that a `mirror` LAYOUT id collides with the `copilot.mirror`
+  // FEATURE and cost real confusion (operator switched the layout, thought the echo was on,
+  // wall stayed empty). Geometry only, and it reuses the `szöveg`/`prezentáció` position
+  // names the default windows already assign, so switching a live window to it at runtime
+  // maps its existing boxes with no reassignment and leaves NO unfilled dead region. (A
+  // dedicated pinned "summary" box is deliberately deferred — see the wall backlog — rather
+  // than shipped here as an empty third region.)
+  { id: "chat-wide", areas: [["szöveg", "prezentáció"]], columns: ["1fr", "1fr"] },
 ];
 
 /**
@@ -399,7 +437,7 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
     boxes: {
       szöveg: {
         behavior: "scroll",
-        cats: ["riasztás", "súgás", "narráció"],
+        cats: ["riasztás", "súgás", "narráció", "tükör"],
         policy: {
           instructions:
             "Ez a privát súgódoboz. Ellenőrizd, amit a beszélő mond, és hozd felszínre, amit nem tud, ÉS amit mindjárt tudnia kell: ellentmondás a rögzített döntésekkel, releváns kontextus, rögzítésre érdemes új döntés — és egy `silence`-ablakban egy-két lépéssel előre, merre tart a beszélgetés. A `narráció`-sorok folyamatos, tartalmi kísérőszöveget adnak arról, ami épp zajlik — az alertektől külön csatorna.",
@@ -432,7 +470,7 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
     boxes: {
       szöveg: {
         behavior: "scroll",
-        cats: ["narráció"],
+        cats: ["narráció", "tükör"],
         policy: {
           // Mandate, not zone, is what distinguishes this box from the private one
           // (box-policy). Its output is *processed* — condensed and filtered — and it
@@ -561,6 +599,7 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     acknowledge: true,
     drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },
     narration: { enabled: true, verbosity: "normal", maxLines: 1 },
+    mirror: { enabled: false, category: "tükör" },
     names: DEFAULT_NAMES,
   },
   detect: DEFAULT_DETECT,
@@ -731,6 +770,17 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
           typeof copilot.narration?.maxLines === "number" && copilot.narration.maxLines > 0
             ? Math.floor(copilot.narration.maxLines)
             : DEFAULTS.copilot.narration.maxLines,
+      },
+      mirror: {
+        // Off unless explicitly enabled: mirroring is an opt-in, so only `true` turns it
+        // on (a missing/absent key stays off), the mirror of how `allowWebResearch` reads.
+        // `COPILOT_MIRROR=1` is the per-session env opt-in the skill sets for `start … mirror`,
+        // exactly as `SET_COPILOT_DIR` scopes the runtime dir — env wins over the file value.
+        enabled: process.env.COPILOT_MIRROR === "1" || copilot.mirror?.enabled === true,
+        category:
+          typeof copilot.mirror?.category === "string" && copilot.mirror.category.trim()
+            ? copilot.mirror.category.trim()
+            : DEFAULTS.copilot.mirror.category,
       },
       names: resolvedNames,
     },

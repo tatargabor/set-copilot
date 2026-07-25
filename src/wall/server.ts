@@ -25,10 +25,10 @@ import type { EventSource } from "./event-source.js";
 import { compileRedactor, splitForZones, type CompiledRedactor, type EventVariants } from "./redaction.js";
 import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
-  type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Heartbeat, type Pacing,
+  type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Heartbeat, type LayoutSwitch, type Pacing,
   type Pending, type Promote, type RedactionConfig, type ResolvedWindow, type ShowCommand, type StageExpired,
-  type WireMessage, type Zone,
-  isHeartbeat, isPending, isPromote, isShowCommand, isStageExpired, reachesPrivate, reachesPublic,
+  type WallLayout, type WireMessage, type Zone,
+  isHeartbeat, isLayoutSwitch, isPending, isPromote, isShowCommand, isStageExpired, reachesPrivate, reachesPublic,
 } from "./types.js";
 
 const MIME: Record<string, string> = {
@@ -69,6 +69,8 @@ function publicWindowShape(win: ResolvedWindow): ResolvedWindow {
 /** One connected SSE client, tagged with the window it belongs to. */
 interface Client {
   res: ServerResponse;
+  /** The window route this client opened — a runtime layout switch targets a route. */
+  route: string;
   zones: Zone[];
   /** Category ids some box in this window subscribes to — the window's whole appetite. */
   cats: Set<string>;
@@ -128,6 +130,13 @@ export interface WallServerOptions {
   host?: string;
   /** Windows with layout + boxes already resolved — the server never sees the legacy form. */
   windows: ResolvedWindow[];
+  /**
+   * The named-layout registry (wall-chat-mirror). Needed for a runtime layout switch:
+   * a `layout` command names a layout id, and the server looks it up here before
+   * reshaping a window. Omitting it disables runtime switching (a `layout` command is
+   * dropped with a warning) — the resolved `windows` already carry their initial layout.
+   */
+  layouts?: WallLayout[];
   registry: CategoryRegistry;
   /** Directory holding the static client assets (index.html, wall.js, …). */
   publicDir: string;
@@ -217,6 +226,13 @@ export class WallServer {
   private readonly scrollN: number;
   /** The compiled redaction taxonomy (null when no redaction configured). */
   private readonly redactor: CompiledRedactor | null;
+  /**
+   * Active runtime layout override per route (wall-chat-mirror). A `layout` command sets
+   * one; the bootstrap for that route then serves the overridden geometry, so a client
+   * that connects AFTER a switch comes up already in the new layout. Geometry only — the
+   * window's boxes (behavior, pacing, subscriptions) are unchanged.
+   */
+  private readonly layoutOverrides = new Map<string, WallLayout>();
 
   constructor(opts: WallServerOptions) {
     this.opts = opts;
@@ -423,6 +439,34 @@ export class WallServer {
     }
   }
 
+  // ---- runtime layout switch (wall-chat-mirror) ----
+  //
+  // Reshapes ONE window's geometry while the wall is live — no restart. Geometry only
+  // (display-layout MODIFIED): the target route's boxes keep their behavior, pacing, and
+  // subscriptions; only the grid they sit in changes. An unknown route or layout is
+  // dropped with a warning, never blanking a window — the same fail-safe posture as an
+  // unknown layout at resolve time.
+
+  private switchLayout(cmd: LayoutSwitch): void {
+    if (!this.windowFor(cmd.route)) {
+      console.warn(`[set-copilot] wall: dropping layout switch — no window at route "${cmd.route}"`);
+      return;
+    }
+    const layout = this.opts.layouts?.find((l) => l.id === cmd.layout);
+    if (!layout) {
+      console.warn(`[set-copilot] wall: dropping layout switch — unknown layout "${cmd.layout}" (route "${cmd.route}")`);
+      return;
+    }
+    // Record the override so a client that connects AFTER the switch bootstraps into the
+    // new geometry, then push the full layout to every live client on this route — the
+    // geometry rides the message, so the client re-derives its grid with no extra fetch.
+    this.layoutOverrides.set(cmd.route, layout);
+    const payload = `data: ${JSON.stringify({ kind: "layout", route: cmd.route, layout })}\n\n`;
+    for (const c of this.clients) {
+      if (c.route === cmd.route) c.res.write(payload);
+    }
+  }
+
   // ---- ingest + accumulate ----
 
   /**
@@ -465,6 +509,13 @@ export class WallServer {
     // decides when a staged prediction dies, so an injected one is dropped.
     if (isStageExpired(msg)) {
       console.warn("[set-copilot] wall: dropping externally-supplied stage-expired — it is server-only");
+      return;
+    }
+    // A runtime layout switch (wall-chat-mirror) reshapes one window's geometry. It is
+    // operator/skill-triggered like `promote` (reaches ingest through the canonical log),
+    // carries no content, and is applied only if the named layout is in the registry.
+    if (isLayoutSwitch(msg)) {
+      this.switchLayout(msg);
       return;
     }
     // A promote lifts an already-staged private visual into a target zone (predictive-
@@ -722,9 +773,14 @@ export class WallServer {
       return;
     }
     if (path === "/api/bootstrap") {
-      const win = this.windowFor(url.searchParams.get("route") ?? "/");
+      const route = url.searchParams.get("route") ?? "/";
+      const win = this.windowFor(route);
       if (!win) return this.notFound(res);
-      return this.json(res, { window: publicWindowShape(win), categories: this.opts.registry.list() });
+      // Apply an active runtime layout override (wall-chat-mirror) so a client that
+      // connects after a switch bootstraps into the new geometry. Boxes are unchanged.
+      const override = this.layoutOverrides.get(route);
+      const shaped = override ? { ...win, layout: override } : win;
+      return this.json(res, { window: publicWindowShape(shaped), categories: this.opts.registry.list() });
     }
     if (path === "/media") {
       return this.serveMedia(res, url.searchParams.get("src") ?? "");
@@ -744,7 +800,7 @@ export class WallServer {
     });
     res.write("retry: 2000\n\n"); // native auto-reconnect interval
     const cats = windowCats(win.boxes);
-    const client: Client = { res, zones: win.zones, cats };
+    const client: Client = { res, route: win.route, zones: win.zones, cats };
     this.clients.add(client);
     this.replay(client);
     res.on("close", () => this.clients.delete(client));

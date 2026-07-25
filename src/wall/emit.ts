@@ -16,7 +16,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import type { CopilotConfig } from "../config.js";
-import { PAYLOAD_KEYS, type DisplayEvent, type PayloadKey, type Pending, type Promote, type Zone } from "./types.js";
+import { PAYLOAD_KEYS, type DisplayEvent, type LayoutSwitch, type PayloadKey, type Pending, type Promote, type Zone } from "./types.js";
 
 /** The canonical events log a producer appends to (kept in sync with index.ts). */
 export function wallEventsFile(runtimeDir: string): string {
@@ -285,6 +285,33 @@ export function normalizePromote(raw: unknown): NormalizePromoteResult {
   return { ok: true, promote: { kind: "promote", category: category.trim(), visual: visual.trim(), zone } };
 }
 
+export type NormalizeLayoutResult =
+  | { ok: true; layout: LayoutSwitch }
+  | { ok: false; reason: string };
+
+/**
+ * Shape-check a `layout` switch (wall-chat-mirror). It reshapes a window's geometry at
+ * runtime and carries no payload — just the target route and the layout id to switch
+ * to. The id is validated against the registry SERVER-side (only the server holds the
+ * layouts), so here we only check the request is well-formed.
+ */
+export function normalizeLayoutSwitch(raw: unknown): NormalizeLayoutResult {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ok: false, reason: "not an object" };
+  }
+  const o = raw as Record<string, unknown>;
+  if (o.kind !== "layout") return { ok: false, reason: "not a layout switch" };
+  const route = o.route;
+  if (typeof route !== "string" || !route.trim()) {
+    return { ok: false, reason: "layout switch requires a non-empty route" };
+  }
+  const layout = o.layout;
+  if (typeof layout !== "string" || !layout.trim()) {
+    return { ok: false, reason: "layout switch requires a non-empty layout id" };
+  }
+  return { ok: true, layout: { kind: "layout", route: route.trim(), layout: layout.trim() } };
+}
+
 export interface EmitResult {
   emitted: number;
   dropped: { reason: string }[];
@@ -330,6 +357,19 @@ export function emitWallEvents(cfg: CopilotConfig, raw: unknown): EmitResult {
         continue;
       }
       batch += JSON.stringify(p.promote) + "\n";
+      result.emitted++;
+      continue;
+    }
+    if (kind === "layout") {
+      // A runtime layout switch (wall-chat-mirror): operator/skill-triggered, same trust
+      // class as `promote`. It reshapes a window's geometry; the server validates the
+      // layout id against its registry before broadcasting.
+      const l = normalizeLayoutSwitch(item);
+      if (!l.ok) {
+        result.dropped.push({ reason: l.reason });
+        continue;
+      }
+      batch += JSON.stringify(l.layout) + "\n";
       result.emitted++;
       continue;
     }

@@ -13,6 +13,7 @@
  *   wall [--port N] [--no-fake-feed] [--reset]  start the local monitor-wall display server
  *   wall-stop                stop the wall serving this runtime dir (via wall.pid)
  *   wall-shot <url>          screenshot a URL (headless Chromium) onto the wall
+ *   wall-layout <route> <id> switch a live window's layout at runtime (geometry only)
  *   sources                  list audio input devices
  *   doctor                   audio + env health check (probes real signal)
  *   beep [--end]             play the OS chime (start: single, end: double)
@@ -23,9 +24,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import {
-  cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync,
+  cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync,
 } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 
 import {
@@ -106,6 +107,24 @@ async function main(): Promise<void> {
       if (res.emitted === 0) process.exit(1);
       return;
     }
+    case "wall-layout": {
+      // Reshape a live window's geometry (wall-chat-mirror): switch which named layout a
+      // route uses, mid-session, no restart. Appends a `layout` command to the canonical
+      // log; the running wall validates the id against its registry and re-derives the grid.
+      const positional = args.filter((a) => !a.startsWith("-"));
+      const route = positional[0];
+      const layout = positional[1];
+      if (!route || !layout) {
+        console.error('Usage: set-copilot wall-layout <route> <layout-id>   e.g. set-copilot wall-layout /wall mirror');
+        process.exit(1);
+      }
+      const { emitWallEvents } = await import("./wall/emit.js");
+      const res = emitWallEvents(loadConfig(), { kind: "layout", route, layout });
+      for (const d of res.dropped) console.error(`[wall-layout] dropped: ${d.reason}`);
+      if (res.emitted === 0) process.exit(1);
+      console.log(`[wall-layout] switched ${route} → ${layout}`);
+      return;
+    }
     case "sources": {
       const { listSources } = await import("./audio.js");
       for (const s of await listSources()) console.log(`  ${s}`);
@@ -127,6 +146,41 @@ async function main(): Promise<void> {
 }
 
 // ---- init ------------------------------------------------------------------
+
+/**
+ * Idempotently add a `Stop` command hook to a Claude Code `settings.json`, preserving
+ * every other setting and hook. Returns true if it added the hook, false if an identical
+ * command was already registered (so a re-run of `init` neither duplicates nor clobbers).
+ *
+ * The merge is deliberately conservative: it parses the existing JSON (or starts from
+ * `{}`), touches ONLY `hooks.Stop`, and re-serializes. A malformed settings.json is left
+ * untouched (returns false with a warning) rather than overwritten — a user's hook config
+ * is not something to lose to a parse error.
+ */
+export function registerStopHook(settingsPath: string, command: string): boolean {
+  let settings: Record<string, unknown> = {};
+  if (existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+    } catch {
+      console.warn(`[set-copilot] init: ${settingsPath} is not valid JSON — skipping hook registration`);
+      return false;
+    }
+  }
+  const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
+  const stop = (hooks.Stop ??= []) as { matcher?: string; hooks?: { type: string; command: string }[] }[];
+  // Already present anywhere under Stop? Then this is a re-run — do nothing.
+  for (const group of stop) {
+    if (group.hooks?.some((h) => h.command === command)) return false;
+  }
+  // Reuse the empty-matcher group if one exists, else create it.
+  let group = stop.find((g) => (g.matcher ?? "") === "");
+  if (!group) { group = { matcher: "", hooks: [] }; stop.push(group); }
+  (group.hooks ??= []).push({ type: "command", command });
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  return true;
+}
 
 /**
  * Project init writes into ./.claude + ./set-copilot.config.json.
@@ -151,6 +205,26 @@ function cmdInit(global = false): void {
     copied++;
   }
   console.log(`✓ Installed ${copied} skills into ${skillsDest} (dictate, dd, ds, meeting-copilot)`);
+
+  // Install the wall-mirror Stop hook (wall-chat-mirror). It ENFORCES chat→wall mirroring
+  // (the prompt mandate alone was measured to fall behind), and is self-gating: a no-op
+  // unless a session opted in (`wall-mirror.enabled` marker) with a wall running, so
+  // installing it is harmless for non-mirroring sessions.
+  const claudeBase = global ? join(homedir(), ".claude") : join(process.cwd(), ".claude");
+  const hooksSrc = join(PKG_ROOT, "hooks");
+  if (existsSync(hooksSrc)) {
+    const hooksDest = join(claudeBase, "hooks");
+    mkdirSync(hooksDest, { recursive: true });
+    cpSync(hooksSrc, hooksDest, { recursive: true });
+    const hookCmd = global
+      ? `bash "${join(hooksDest, "wall-mirror.sh")}"`
+      : `bash "$CLAUDE_PROJECT_DIR/.claude/hooks/wall-mirror.sh"`;
+    if (registerStopHook(join(claudeBase, "settings.json"), hookCmd)) {
+      console.log(`✓ Installed wall-mirror Stop hook into ${join(claudeBase, "settings.json")}`);
+    } else {
+      console.log(`• wall-mirror Stop hook already registered — left untouched`);
+    }
+  }
 
   mkdirSync(cfgHome, { recursive: true });
   if (existsSync(cfgPath)) {
@@ -451,6 +525,9 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot wall-shot <url> [--category id] [--zone z] [--caption t]
                                    headless-Chromium screenshot of <url> onto the
                                    wall as an image (for pages that block iframing)
+  set-copilot wall-layout <route> <layout-id>
+                                   switch a live window's layout at runtime (e.g.
+                                   /wall mirror) — geometry only, no restart
   set-copilot sources              list audio input devices
   set-copilot doctor               audio + env health check (probes real signal)
   set-copilot beep [--end]         OS chime (start: single, --end: double)
@@ -462,7 +539,24 @@ Secret:  SONIOX_API_KEY  (env  →  ./.env  →  ${join(userConfigDir(), ".env")
 `);
 }
 
-main().catch((err) => {
-  console.error("[set-copilot] Fatal:", err);
-  process.exit(1);
-});
+// Run only when invoked as the CLI entry point — not when imported (e.g. by a test that
+// exercises `registerStopHook`), which would otherwise dispatch on the test runner's argv.
+// `realpathSync` on argv[1] is load-bearing: the installed `set-copilot` bin is a SYMLINK
+// (npm link / node_modules/.bin), so argv[1] is the link path while import.meta.url is the
+// real dist file — comparing them without resolving the link makes the CLI a silent no-op.
+function isCliEntry(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isCliEntry()) {
+  main().catch((err) => {
+    console.error("[set-copilot] Fatal:", err);
+    process.exit(1);
+  });
+}

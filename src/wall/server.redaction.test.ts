@@ -22,12 +22,13 @@ const registry = buildRegistry([
   { id: "narráció", label: "N", icon: "", render: "text" },
   { id: "architektúra", label: "A", icon: "", render: "graph" },
   { id: "doc", label: "D", icon: "", render: "webpage" },
+  { id: "tükör", label: "T", icon: "", render: "text" },
 ]);
 
 /** A box subscribing to every category under test, at one position. */
 const boxAllCats = {
   behavior: "latest" as const,
-  cats: ["narráció", "architektúra", "doc"],
+  cats: ["narráció", "architektúra", "doc", "tükör"],
   pacing: { minDwellMs: 0 },
   position: "p",
 };
@@ -111,6 +112,29 @@ describe("live broadcast splits by zone", () => {
     expect(pub.raw).not.toContain("project-hush"); // never on the public wire, in any framing
     expect(pubText?.redaction).toBeUndefined();
     expect(privText?.text).toBe("roadmap [belső] project-hush details");
+    expect(privText?.redaction).toBe("redacted");
+
+    pub.close();
+    priv.close();
+  });
+
+  it("redacts a mirrored chat line on the same ingest path — no bypass (wall-chat-mirror)", async () => {
+    const s = await startServer();
+    const port = s.boundPort();
+    const pub = await connect(port, "/pub");
+    const priv = await connect(port, "/priv");
+    await sleep(20);
+
+    // A mirrored chat line is an ordinary `tükör` text event — it goes through ingest, so
+    // public-zone redaction applies to it exactly as to any other event.
+    s.ingest({ category: "tükör", zone: "both", text: "döntés: [belső] SECRET-hush marad" });
+    await sleep(30);
+
+    const pubText = pub.msgs.find((m) => "text" in m) as { text: string } | undefined;
+    const privText = priv.msgs.find((m) => "text" in m) as { text: string; redaction?: string } | undefined;
+    expect(pubText?.text).toBe("döntés: […]");
+    expect(pub.raw).not.toContain("SECRET-hush"); // never on the public wire
+    expect(privText?.text).toBe("döntés: [belső] SECRET-hush marad");
     expect(privText?.redaction).toBe("redacted");
 
     pub.close();

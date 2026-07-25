@@ -46,6 +46,18 @@ describe("gridTemplate", () => {
     const t = gridTemplate({ id: "x", areas: [["a", "b", "c"]] }, []);
     expect(t.gridTemplateColumns).toBe("1fr 1fr 1fr");
   });
+
+  it("derives the chat-wide layout: two equal columns, one row (wall-chat-mirror)", () => {
+    const chatWide = {
+      id: "chat-wide",
+      areas: [["szöveg", "prezentáció"]],
+      columns: ["1fr", "1fr"],
+    };
+    const t = gridTemplate(chatWide, [{ position: "szöveg", behavior: "scroll", cats: [] }]);
+    expect(t.gridTemplateAreas).toBe(`"szöveg prezentáció"`);
+    expect(t.gridTemplateColumns).toBe("1fr 1fr");
+    expect(t.gridTemplateRows).toBe("1fr"); // from the scroll box in the row
+  });
 });
 
 describe("boxesForCategory", () => {

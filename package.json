@@ -28,6 +28,7 @@
   "files": [
     "dist",
     "skills",
+    "hooks",
     "set-copilot.config.example.json",
     "README.md",
     "LICENSE"

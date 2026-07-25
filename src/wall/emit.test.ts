@@ -229,6 +229,20 @@ describe("emitWallEvents pending + heartbeat routing", () => {
     expect(res.emitted).toBe(0);
     expect(res.dropped[0]?.reason).toContain("server-only");
   });
+
+  it("writes a layout switch command (wall-chat-mirror)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+    const res = emitWallEvents(cfg(dir), { kind: "layout", route: "/wall", layout: "mirror" });
+    expect(res.emitted).toBe(1);
+    const line = JSON.parse(readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim());
+    expect(line).toEqual({ kind: "layout", route: "/wall", layout: "mirror" });
+  });
+
+  it("drops a malformed layout switch (missing route or layout)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+    expect(emitWallEvents(cfg(dir), { kind: "layout", route: "/wall" }).emitted).toBe(0);
+    expect(emitWallEvents(cfg(dir), { kind: "layout", layout: "mirror" }).emitted).toBe(0);
+  });
 });
 
 describe("normalizePromote + staged passthrough (predictive-staging)", () => {
