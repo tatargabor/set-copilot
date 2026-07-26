@@ -147,7 +147,6 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
 
   let micClient: SonioxRtClient | SonioxChunkClient | WhisperLocalClient;
   let sysClient: SonioxRtClient | SonioxChunkClient | WhisperLocalClient | null = null;
-  let lastSpeaker: "mic" | "system" = "mic";
 
   if (useWhisper) {
     micClient = new WhisperLocalClient(whisper, "mic", 10_000);
@@ -162,10 +161,6 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   }
 
   micClient.on("transcript", (event) => {
-    if (lastSpeaker !== "mic") {
-      writer.onSpeakerChange("mic");
-      lastSpeaker = "mic";
-    }
     writer.onTranscript(event);
     if (event.isFinal && event.text.trim()) {
       process.stdout.write(`\r[mic] ${event.text.trim().slice(0, 80)}\n`);
@@ -184,10 +179,6 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
 
   if (sysClient) {
     sysClient.on("transcript", (event) => {
-      if (lastSpeaker !== "system") {
-        writer.onSpeakerChange("system");
-        lastSpeaker = "system";
-      }
       writer.onTranscript(event);
       if (event.isFinal && event.text.trim()) {
         process.stdout.write(`\r[sys] ${event.text.trim().slice(0, 80)}\n`);

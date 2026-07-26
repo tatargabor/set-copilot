@@ -60,11 +60,71 @@ describe("TranscriptWriter", () => {
     expect(lines()).toEqual([]);
   });
 
-  it("flushes the other speaker's buffer on a speaker change", () => {
+  it("regression: the other channel speaking does NOT cut an unfinished sentence", () => {
+    // The two channels are independent: real conversation overlaps, and a backchannel
+    // ("mhm") used to flush the other speaker's buffer wherever the token stream stood
+    // — severing a word in half. The interjection must leave the sentence intact.
     writer = new TranscriptWriter(out);
-    writer.onTranscript(token("half a thought", "mic"));
-    writer.onSpeakerChange("system");
-    expect(lines().map((l) => [l.speaker, l.text])).toEqual([["mic", "half a thought"]]);
+    writer.onTranscript(token("I cannot edit", "system"));
+    writer.onTranscript(token(" Mhm.", "mic"));
+    writer.onTranscript(token(" it anymore.", "system"));
+
+    expect(lines().map((l) => [l.speaker, l.text])).toEqual([
+      ["mic", "Mhm."],
+      ["system", "I cannot edit it anymore."],
+    ]);
+  });
+
+  it("regression: a backchannel does not split a word in half", () => {
+    // The measured shape of the bug: "szerkeszten" + "i." written as two lines.
+    writer = new TranscriptWriter(out);
+    writer.onTranscript(token(" szerkeszten", "system"));
+    writer.onTranscript(token(" Aha.", "mic"));
+    writer.onTranscript(token("i.", "system"));
+
+    const system = lines().filter((l) => l.speaker === "system");
+    expect(system.map((l) => l.text)).toEqual(["szerkeszteni."]);
+  });
+
+  it("records the utterance start so overlapping speech can be ordered", () => {
+    writer = new TranscriptWriter(out);
+    writer.onTranscript(token("A long", "system", 1000));
+    writer.onTranscript(token(" Mhm.", "mic", 3000));
+    writer.onTranscript(token(" thought.", "system", 5000));
+
+    const system = lines().find((l) => l.speaker === "system")!;
+    // `ts` is where it ended, `startTs` where it began — the mic line sits between them
+    expect([system.startTs, system.ts]).toEqual([1000, 5000]);
+  });
+
+  it("marks a severed line and how its continuation resumes", () => {
+    vi.useFakeTimers();
+    writer = new TranscriptWriter(out, { silenceTimeoutMs: 50, checkIntervalMs: 10 });
+
+    writer.onTranscript(token("cut mid-wo"));
+    vi.advanceTimersByTime(200); // own silence → partial flush
+    writer.onTranscript(token("rd here."));
+
+    const speech = lines().filter((l) => !("type" in l));
+    expect(speech.map((l) => [l.text, l.partial, l.cont, l.midWord])).toEqual([
+      ["cut mid-wo", true, undefined, undefined],
+      ["rd here.", undefined, true, true], // midWord: no leading space → one word
+    ]);
+  });
+
+  it("a continuation that starts a new word is not marked midWord", () => {
+    vi.useFakeTimers();
+    writer = new TranscriptWriter(out, { silenceTimeoutMs: 50, checkIntervalMs: 10 });
+
+    writer.onTranscript(token("a whole word"));
+    vi.advanceTimersByTime(200);
+    writer.onTranscript(token(" follows."));
+
+    const speech = lines().filter((l) => !("type" in l));
+    expect(speech.map((l) => [l.text, l.cont, l.midWord])).toEqual([
+      ["a whole word", undefined, undefined],
+      ["follows.", true, undefined],
+    ]);
   });
 
   it("safety-flushes a buffer that never gets punctuation", () => {

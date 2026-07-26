@@ -8,6 +8,31 @@ export interface TranscriptLine {
   speaker: "mic" | "system";
   text: string;
   final: boolean;
+  /**
+   * Timestamp of the FIRST token in this line. `ts` is the last token's — fine for a
+   * single channel, but with two channels a long utterance completes after several
+   * short ones from the other side, so completion order is not speaking order.
+   * A reader that wants the conversation in the order it was spoken sorts on this.
+   */
+  startTs?: number;
+  /**
+   * True when this line was cut without a sentence boundary (own-silence or overflow
+   * flush) — the utterance continues in the speaker's next line. Without this a reader
+   * cannot tell a finished thought from a severed one.
+   */
+  partial?: boolean;
+  /** True when this line resumes the speaker's previous `partial` line. */
+  cont?: boolean;
+  /**
+   * Only on a `cont` line: the resumed text did NOT start at a word boundary, so the
+   * previous line's last word and this line's first word are two halves of ONE word.
+   * Join them with no separator; a `cont` line without this flag takes a space.
+   *
+   * Soniox marks word boundaries with a leading space on the token, and that space is
+   * the only evidence — trimming it at flush time destroys it irrecoverably. This flag
+   * preserves the fact after the trim.
+   */
+  midWord?: boolean;
   /** Keyword-index matches (entity names, features, decision ids) — omitted when empty */
   topics?: string[];
   /** Set to "high" when the text matches a `detect.urgency` pattern */
@@ -65,9 +90,19 @@ function compileDetector(sources: string[], kind: string): RegExp | null {
  *
  * Accumulates finalized words per speaker. Flushes to JSONL when:
  * 1. A sentence boundary is detected (. ? ! followed by space or end)
- * 2. Speaker changes (the other channel produces output)
- * 3. Silence timeout (no new words for N seconds)
- * 4. Buffer exceeds max length (safety flush)
+ * 2. Silence timeout (no new words from THAT speaker for N seconds)
+ * 3. Buffer exceeds max length (safety flush)
+ *
+ * A speaker change deliberately does NOT flush the other channel. It used to, on a
+ * "natural turn-taking" assumption that only holds for a single diarized stream: with
+ * two independent channels the speech genuinely overlaps, and constant backchannel
+ * ("mhm", "aha") on one channel severed the other's sentence — mid-word, because the
+ * cut lands wherever the token stream happens to be. Measured on a 3-hour two-channel
+ * recording: 460 mid-word cuts, 44% of them immediately after a cross-channel
+ * interjection, 154 of those after a backchannel of three words or less.
+ *
+ * Each speaker's own sentence and silence rules are what bound its buffer; the reader
+ * orders the conversation with `startTs`.
  *
  * Each flushed line gets a "topics" field with keyword-index matches so the
  * copilot can route on pre-matched topics instead of re-scanning the raw text.
@@ -77,7 +112,23 @@ function compileDetector(sources: string[], kind: string): RegExp | null {
  */
 export class TranscriptWriter {
   private outputPath: string;
-  private buffers: Record<"mic" | "system", { text: string; tokenCount: number; lastTs: number; lastActivity: number }>;
+  private buffers: Record<
+    "mic" | "system",
+    {
+      text: string;
+      tokenCount: number;
+      lastTs: number;
+      lastActivity: number;
+      /** Timestamp of the first token currently in the buffer */
+      startTs: number;
+      /** The last line written for this speaker was cut mid-utterance */
+      severed: boolean;
+      /** The buffer was refilled after a severed line — the next line continues it */
+      resuming: boolean;
+      /** The resumed text did not start at a word boundary (no leading space) */
+      resumedMidWord: boolean;
+    }
+  >;
   private silenceTimeoutMs: number;
   private maxBufferTokens: number;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -101,10 +152,17 @@ export class TranscriptWriter {
     this.questionRe = compileDetector(detect.question, "question");
     this.commandRe = compileDetector(detect.command ?? [], "command");
 
-    this.buffers = {
-      mic: { text: "", tokenCount: 0, lastTs: 0, lastActivity: 0 },
-      system: { text: "", tokenCount: 0, lastTs: 0, lastActivity: 0 },
-    };
+    const emptyBuffer = () => ({
+      text: "",
+      tokenCount: 0,
+      lastTs: 0,
+      lastActivity: 0,
+      startTs: 0,
+      severed: false,
+      resuming: false,
+      resumedMidWord: false,
+    });
+    this.buffers = { mic: emptyBuffer(), system: emptyBuffer() };
 
     const dir = dirname(outputPath);
     if (!existsSync(dir)) {
@@ -121,6 +179,19 @@ export class TranscriptWriter {
 
     const buf = this.buffers[event.speaker];
 
+    // First token of a fresh buffer: remember when the utterance started, and — if the
+    // previous line was severed — whether this token opens a new word. Soniox marks a
+    // word boundary with a leading space, and `flushBuffer` trims it away, so it has to
+    // be captured HERE or it is gone.
+    if (!buf.text) {
+      buf.startTs = event.timestampMs;
+      if (buf.severed) {
+        buf.resuming = true;
+        buf.resumedMidWord = !/^\s/.test(event.text);
+        buf.severed = false;
+      }
+    }
+
     // Soniox RT v5 tokens include leading spaces for word boundaries.
     // Concatenate directly — do NOT join with extra spaces.
     buf.text += event.text;
@@ -136,29 +207,16 @@ export class TranscriptWriter {
     const sentences = this.extractCompleteSentences(accumulated);
 
     if (sentences.completed.length > 0) {
-      this.writeLine(event.speaker, sentences.completed, buf.lastTs);
+      this.writeLine(event.speaker, sentences.completed, buf);
       buf.text = sentences.remainder;
       buf.tokenCount = sentences.remainder ? 1 : 0;
+      buf.startTs = sentences.remainder ? buf.lastTs : 0;
     }
 
     // Safety flush if buffer is too long
     if (buf.tokenCount > this.maxBufferTokens) {
-      const text = buf.text.trim();
-      if (text) {
-        this.writeLine(event.speaker, text, buf.lastTs);
-      }
-      buf.text = "";
-      buf.tokenCount = 0;
+      this.flushBuffer(event.speaker, { partial: true });
     }
-  }
-
-  /**
-   * When one speaker produces output, flush the OTHER speaker's buffer.
-   * This handles the natural turn-taking in conversation.
-   */
-  onSpeakerChange(activeSpeaker: "mic" | "system"): void {
-    const other = activeSpeaker === "mic" ? "system" : "mic";
-    this.flushBuffer(other);
   }
 
   private checkSilence(): void {
@@ -167,7 +225,7 @@ export class TranscriptWriter {
       const buf = this.buffers[speaker];
       if (buf.text.length > 0 && buf.lastActivity > 0) {
         if (now - buf.lastActivity > this.silenceTimeoutMs) {
-          this.flushBuffer(speaker);
+          this.flushBuffer(speaker, { partial: true });
         }
       }
     }
@@ -210,20 +268,46 @@ export class TranscriptWriter {
     return { completed: "", remainder: text };
   }
 
-  private flushBuffer(speaker: "mic" | "system"): void {
+  /**
+   * Write out whatever the speaker has buffered.
+   *
+   * `partial` marks a cut that is NOT a sentence boundary — the thought continues in
+   * this speaker's next line. The buffer remembers that (`severed`) so the resuming
+   * line can record whether it picked up mid-word.
+   */
+  private flushBuffer(speaker: "mic" | "system", opts: { partial?: boolean } = {}): void {
     const buf = this.buffers[speaker];
     if (!buf.text) return;
 
     const text = buf.text.trim();
     if (text) {
-      this.writeLine(speaker, text, buf.lastTs);
+      this.writeLine(speaker, text, buf, { partial: opts.partial });
+      if (opts.partial) buf.severed = true;
     }
     buf.text = "";
     buf.tokenCount = 0;
+    buf.startTs = 0;
   }
 
-  private writeLine(speaker: "mic" | "system", text: string, ts: number): void {
-    const line: TranscriptLine = { ts, speaker, text, final: true };
+  private writeLine(
+    speaker: "mic" | "system",
+    text: string,
+    buf: { lastTs: number; startTs: number; resuming: boolean; resumedMidWord: boolean },
+    opts: { partial?: boolean } = {},
+  ): void {
+    const line: TranscriptLine = { ts: buf.lastTs, speaker, text, final: true };
+    if (buf.startTs && buf.startTs !== buf.lastTs) {
+      line.startTs = buf.startTs;
+    }
+    if (opts.partial) {
+      line.partial = true;
+    }
+    if (buf.resuming) {
+      line.cont = true;
+      if (buf.resumedMidWord) line.midWord = true;
+      buf.resuming = false;
+      buf.resumedMidWord = false;
+    }
     const topics = this.topicMatcher(text);
     if (topics.length > 0) {
       line.topics = topics;
