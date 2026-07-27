@@ -9,6 +9,13 @@ rename, no dead region) are already folded into that change and are **not** repe
 
 ## P0 — breaks the live demo
 
+> **Also P0, filed separately with full evidence and an acceptance list:**
+> [handoff-transcript-stitch.md](handoff-transcript-stitch.md) — raw JSONL lines are still
+> sentence fragments after `a30d12f` (38% of lines on a post-fix recording), nobody consumes
+> `cont`/`midWord`/`startTs`, and a real client fact was **lost from a knowledge base** because
+> the note-taking step read the fragments. Asks for a `transcript` command + stop-time
+> stitching; a working reference implementation already exists in `consumer-c`.
+
 1. **Live-narration text box stalls on "copilot kész".** The #1 field complaint (2 sessions):
    the left text/narration box stops refreshing and freezes on a terminal line, while graph/
    chart draws keep working. → Investigate the `live-narration` / `wall-liveness` stream
