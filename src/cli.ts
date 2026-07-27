@@ -6,6 +6,7 @@
  *   init                     scaffold skills + config into the current project
  *   capture [--mic-only]     start audio capture + transcription
  *   stop                     stop the running capture (via PID file)
+ *   transcript               stitch a raw transcript into readable .md + sentence .jsonl
  *   status                   is capture running? how many lines captured?
  *   digest                   (re)build the knowledge index/context/digest
  *   prompt                   print the copilot policy (alert categories + instructions)
@@ -34,6 +35,9 @@ import {
   digestMarkdownPath, type CopilotConfig,
 } from "./config.js";
 import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce } from "./handover.js";
+import {
+  formatStats, loadRedactions, parseSpeakerMap, resolveInputs, stitchFile,
+} from "./transcript-stitch-run.js";
 import { playTone } from "./tones.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -53,6 +57,7 @@ async function main(): Promise<void> {
       });
     }
     case "stop": return cmdStop(args.includes("--print"));
+    case "transcript": return cmdTranscript(args);
     case "status": return cmdStatus();
     case "digest": {
       const { runDigest } = await import("./knowledge/run-digest.js");
@@ -301,11 +306,87 @@ function cmdStop(print = false): void {
  * post-meeting step at the saved artifact.
  */
 function handoverAtStop(cfg: CopilotConfig, print: boolean): void {
+  // Dictation returns here: the raw text IS the user's message, not a document, so it
+  // gets no derived artifacts.
   if (print) { printTranscriptOnce(cfg); return; }
   const saved = handoverTranscriptOnce(cfg);
-  console.log(saved
-    ? `[set-copilot] Transcript saved: ${saved}`
-    : "[set-copilot] Nothing to hand over");
+  if (!saved) { console.log("[set-copilot] Nothing to hand over"); return; }
+  console.log(`[set-copilot] Transcript saved: ${saved}`);
+  if (cfg.transcript.stitchOnStop) stitchAtStop(cfg, saved);
+}
+
+/**
+ * Produce the readable + structured transcripts from the ARCHIVED file, after the rename.
+ *
+ * Running it here rather than leaving it to a later command is the whole point: the loss
+ * this exists to prevent came from a processing step reading the raw JSONL because that
+ * was the file at hand. Running it AFTER the rename keeps the single `renameSync` the sole
+ * source of truth for "handed over exactly once" — and a failure here is reported, never
+ * fatal, because the archive is the invariant and these files are the convenience.
+ */
+function stitchAtStop(cfg: CopilotConfig, archived: string): void {
+  try {
+    const out = stitchFile(archived, cfg);
+    if (!out) return; // nothing said — no zero-byte artifacts
+    // Aligned with "Transcript saved: " so the three paths read as one block.
+    console.log(`[set-copilot] Readable:         ${out.markdown}`);
+    console.log(`[set-copilot] Structured:       ${out.structured}`);
+  } catch (err) {
+    console.error(
+      `[set-copilot] Could not build the readable transcript: ${(err as Error).message}\n` +
+      `              The archived transcript is intact — retry with: set-copilot transcript --input ${archived}`,
+    );
+  }
+}
+
+// ---- transcript stitch -----------------------------------------------------
+
+/**
+ * `set-copilot transcript` — raw transcript JSONL → readable markdown + sentence-level
+ * JSONL. The post-process the fields `a30d12f` added were recorded FOR, and the backfill
+ * path for an archive written before any of this existed.
+ */
+function cmdTranscript(args: string[]): void {
+  const cfg = loadConfig();
+  const speakersArg = flag(args, "--speakers");
+  const redactArg = flag(args, "--redact");
+  const outArg = flag(args, "--out");
+  const inputArg = flag(args, "--input");
+
+  const inputs = inputArg ? resolveInputs(inputArg) : [lastTranscript(cfg)].filter((p) => existsSync(p));
+  if (!inputs.length) {
+    console.error(`[set-copilot] No transcript to stitch${inputArg ? `: ${inputArg}` : " in " + cfg.runtimeDir}`);
+    process.exit(1);
+  }
+  // `--out` names ONE file, so it cannot apply to a batch — silently writing all of them
+  // to the same path would destroy every result but the last.
+  if (outArg && inputs.length > 1) {
+    console.error(`[set-copilot] --out takes a single input, but ${inputs.length} matched — drop --out to write beside each`);
+    process.exit(1);
+  }
+
+  const opts = {
+    out: outArg,
+    speakers: speakersArg ? parseSpeakerMap(speakersArg) : undefined,
+    redactions: redactArg ? loadRedactions(redactArg) : undefined,
+  };
+
+  let done = 0;
+  for (const input of inputs) {
+    try {
+      const result = stitchFile(input, cfg, opts);
+      if (!result) { console.error(`[set-copilot] Nothing to stitch: ${input}`); continue; }
+      done++;
+      console.log(result.markdown);
+      console.log(result.structured);
+      if (args.includes("--stats")) console.error(formatStats(result));
+    } catch (err) {
+      // One unreadable file must not abort a 179-file backfill.
+      console.error(`[set-copilot] Failed on ${input}: ${(err as Error).message}`);
+    }
+  }
+  if (inputs.length > 1) console.error(`[set-copilot] Stitched ${done}/${inputs.length} transcripts`);
+  if (!done) process.exit(1);
 }
 
 // ---- wall lifecycle --------------------------------------------------------
@@ -509,6 +590,12 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot stop [--print]       stop the running capture (--print: also emit the
                                    transcript, then archive it so it is handed over
                                    exactly once)
+  set-copilot transcript [--input <jsonl|dir|glob>] [--out <md>]
+              [--speakers mic=A,system=B] [--redact <json>] [--stats]
+                                   stitch a raw transcript back into sentences:
+                                   readable .md + sentence-level .jsonl. Default
+                                   input is this runtime dir's last transcript;
+                                   a dir/glob backfills a whole archive
   set-copilot status               capture state + transcript line count
   set-copilot digest               (re)build knowledge index/context/digest
   set-copilot prompt               print the copilot policy the skill loads

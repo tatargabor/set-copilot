@@ -1,8 +1,20 @@
 # Handoff — transcript-stitch: a darabolt sorokból olvasható, AI-barát átirat
 
 **Bejelentő:** `consumer-f` projekt (2026-07-27, élő meeting-copilot session)
-**Státusz:** kérés, nincs elkezdve. `/opsx:propose` anyagnak szánva.
+**Státusz:** ✅ **megvalósítva** (2026-07-27) — `openspec/changes/transcript-stitch/`.
 **Prioritás:** P0 — bizonyítottan *tudásvesztést* okoz, nem kényelmi kérdés.
+
+> **Mi lett belőle.** `set-copilot transcript [--input <jsonl|mappa|glob>] [--out] [--speakers]
+> [--redact] [--stats]`, és a `stop` az archiválás után magától előállítja a `.md`-t és a
+> mondatonkénti `.jsonl`-t (`transcript.stitchOnStop`, default be; a `/dd` ág érintetlen).
+> A motor: `src/transcript-build.ts` (tiszta, 30 unit-teszt, szintetikus fixture-rel),
+> a fájlkezelés: `src/transcript-stitch-run.ts`. A §6 mind az 5 elfogadási kritériuma
+> ellenőrizve az épített CLI-n.
+>
+> Két eltérés a kérésétől, mindkettő bővítés:
+> - a §4/4. „megfontolandó" stitchelt `.jsonl` **mindig** elkészül, nem opcionálisan;
+> - a `COMPLETE_WORDS` lista **configba** került (`transcript.completeWords`, HU+EN default) —
+>   hardcode-olva a `CLAUDE.md` engine-semlegességi szabályát sértette volna.
 
 ---
 

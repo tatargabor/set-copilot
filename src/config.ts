@@ -196,6 +196,27 @@ export interface DetectionConfig {
   command: string[];
 }
 
+/**
+ * Post-processing of a finished transcript: turning the capture's fragments back
+ * into sentences. Everything here is a seam, for the usual reason — the shipped
+ * `completeWords` list is a *language* fact, not an engine one, and a project
+ * working in Portuguese must be able to replace it without touching `src/`.
+ */
+export interface TranscriptConfig {
+  /** Channel → display name in the readable transcript ("mic" → "Gábor") */
+  speakers: Record<string, string>;
+  /** Produce the readable + structured artifacts at stop (default true) */
+  stitchOnStop: boolean;
+  /**
+   * High-frequency words that are COMPLETE on their own. Used only by the heuristic
+   * fallback, for recordings that predate `cont`/`midWord`: if either side of a join
+   * is one of these, the cut was at a word boundary, so the parts take a space.
+   */
+  completeWords: string[];
+  /** A gap at least this long between two fragments is a word boundary (heuristic only) */
+  pauseGapMs: number;
+}
+
 export interface CopilotConfig {
   /** Language hint passed to Soniox (e.g. "hu", "en") */
   language: string;
@@ -229,6 +250,8 @@ export interface CopilotConfig {
   detect: DetectionConfig;
   /** The monitor-wall display: categories + windows + port, all config/data */
   wall: WallConfig;
+  /** Post-processing of a finished transcript (the stitch) */
+  transcript: TranscriptConfig;
   /** Absolute path of the project root the config was loaded from */
   projectRoot: string;
 }
@@ -328,6 +351,29 @@ export const DEFAULT_DETECT: DetectionConfig = {
     "(?:^|[.!]\\s+)(mi[tck]?soda|hogyan|miért|mikor|hol|ki |mennyit?|melyik|hány|mit |milyen|hogy\\b|kell-e|lehet-e|van-e|tudunk-e)",
   ],
 };
+
+/**
+ * Words that stand complete on their own — the dictionary behind the stitch's
+ * heuristic word-boundary fallback. English + Hungarian out of the box, matching
+ * `detect.*`; a project in another language replaces the list via
+ * `transcript.completeWords`.
+ *
+ * Function words, deliberately: the heuristic asks "could this fragment end (or
+ * start) a real word?", and the words that most often sit at a flush boundary are
+ * the high-frequency short ones. Domain nouns are the wrong population — they are
+ * exactly what the keyword index holds, and exactly what does NOT help here.
+ */
+export const DEFAULT_COMPLETE_WORDS = (
+  // hu
+  "a az egy és de hogy nem is meg már még csak akkor ez ezt azt ott itt van volt lesz kell " +
+  "új jó hát így úgy mert vagy ha mi mit ki ő te én ne se sem aminek amit ami aki végül majd " +
+  "most pedig vissza össze át el be fel le szerintem igen persze tehát ugye aha ilyen olyan " +
+  "minden nagyon lehet kicsit vagyis illetve szóval " +
+  // en
+  "a an the and or but so if then that this these those is are was were be been will would " +
+  "can could should i you we they it he she not no yes ok okay just now well right yeah " +
+  "for to of in on at with from by about up down out here there what why how when who which"
+).split(" ");
 
 /**
  * Deferred/out-of-scope markers the markdown adapter greps for. Defaults are
@@ -604,6 +650,12 @@ const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
   },
   detect: DEFAULT_DETECT,
   wall: DEFAULT_WALL,
+  transcript: {
+    speakers: {},
+    stitchOnStop: true,
+    completeWords: DEFAULT_COMPLETE_WORDS,
+    pauseGapMs: 2500,
+  },
 };
 
 const ENGAGEMENTS: Engagement[] = ["silent", "reactive", "participant"];
@@ -682,6 +734,7 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
     : DEFAULT_NAMES;
   const detect = { ...userCfg.detect, ...projCfg.detect };
   const wall = { ...userCfg.wall, ...projCfg.wall };
+  const transcript = { ...userCfg.transcript, ...projCfg.transcript };
   // Resolve redaction patterns fail-SAFE: this is a safety seam feeding a public
   // narration box that ships enabled, so it must never resolve to "no redaction". An
   // empty list is the obvious case; the subtler one is a non-empty list whose entries
@@ -832,6 +885,30 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         ? [...wall.layouts, ...DEFAULT_WALL.layouts.filter((d) => !wall.layouts!.some((l) => l.id === d.id))]
         : DEFAULT_WALL.layouts,
       windows: Array.isArray(wall.windows) ? wall.windows : DEFAULT_WALL.windows,
+    },
+    transcript: {
+      speakers:
+        transcript.speakers && typeof transcript.speakers === "object"
+          ? Object.fromEntries(
+              Object.entries(transcript.speakers).filter(
+                ([, v]) => typeof v === "string" && !!v.trim(),
+              ),
+            )
+          : DEFAULTS.transcript.speakers,
+      // Absent key → on. Only an explicit `false` disables it, so a config predating
+      // the stitch still gets the readable artifact.
+      stitchOnStop: transcript.stitchOnStop !== false,
+      // Unlike `wall.redaction`, an EMPTY list here is a legitimate "no heuristic":
+      // it makes the stitch refuse to guess and take a space at every unmarked join.
+      // That is a lossless, if less pretty, outcome — nothing leaks, so the fallback
+      // fires only on an absent or malformed key, the way `detect.*` behaves.
+      completeWords: Array.isArray(transcript.completeWords)
+        ? transcript.completeWords.filter((w): w is string => typeof w === "string")
+        : DEFAULTS.transcript.completeWords,
+      pauseGapMs:
+        typeof transcript.pauseGapMs === "number" && transcript.pauseGapMs > 0
+          ? Math.floor(transcript.pauseGapMs)
+          : DEFAULTS.transcript.pauseGapMs,
     },
     projectRoot: root,
   };

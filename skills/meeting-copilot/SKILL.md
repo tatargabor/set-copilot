@@ -331,12 +331,26 @@ started, and only ever stops the wall in THIS runtime dir — never another proj
 Monitor exits on its own (the in-flight poll returns `{"type":"capture-dead"}`).
 
 `stop` archives the live meeting transcript exactly once (no `--print` — that would replay the
-whole transcript into the session as if freshly spoken) and prints the saved path as
-`[set-copilot] Transcript saved: <path>`. Capture that line.
+whole transcript into the session as if freshly spoken) and prints **three** paths:
+
+```
+[set-copilot] Transcript saved: …/transcript-<stamp>.jsonl   ← archive of record
+[set-copilot] Readable:         …/transcript-<stamp>.md      ← for reading / note-taking
+[set-copilot] Structured:       …/transcript-<stamp>-stitched.jsonl  ← for tools
+```
+
+Capture all three lines. The raw `.jsonl` is **fragments**, not sentences: the capture flushes on
+its own timers, so a single utterance is cut across many lines — sometimes mid-word — and with two
+channels those fragments interleave. The `.md` is that put back together. A client fact was once
+lost exactly here, by a note-taking step reading the raw file because it was the one at hand.
+
+**So: any post-meeting step — notes, knowledge extraction, summarization — reads the `.md`.** Point
+to the raw `.jsonl` only as the archive. (Only the two older lines appear if `transcript.stitchOnStop`
+is off, or if nothing was said.)
 
 Then report a summary: meeting duration, alert counts by type (⚠/📋/✏/❓), any new decisions
-detected, and the **saved transcript path** from that line (so a post-meeting step can find the
-full transcript).
+detected, and the **readable transcript path** (naming the raw archive alongside it), so a
+post-meeting step can find the full transcript.
 
 ### `/meeting-copilot status`
 

@@ -51,6 +51,24 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   - `startTs` — the utterance's **start** (`ts` is where it ended). With two channels, completion order is not speaking order; sort on `startTs`.
   - `partial` — this line was cut without a sentence boundary; the thought continues in that speaker's next line.
   - `cont` / `midWord` on the resuming line — `midWord` means the two lines' adjoining words are halves of **one** word (join with no separator); `cont` alone takes a space. Soniox's leading space is the only evidence of a word boundary and `flushBuffer` trims it, so the fact is recorded at token time or it is gone for good.
+- **`src/transcript-build.ts`** — the stitch: the *consumer* side of those three fields, and the
+  only thing that reads them. It reverses the flush boundaries — rebuild each channel on its own
+  (its fragments are complete *within* the channel; only the interleaving destroyed readability),
+  split *that* into sentences, then merge the finished sentences on `startTs`. Emits a readable
+  `.md` and a sentence-level `.jsonl`. `src/transcript-stitch-run.ts` is the file-facing half
+  (input resolution, artifact writing); `transcript-build.ts` stays pure and unit-tested.
+
+  Word boundaries: `cont`/`midWord` are the **authority** when present. Only a pre-`a30d12f`
+  recording reaches the heuristic, which is biased toward inserting a space — an unnecessary space
+  is cosmetic, a wrongly glued pair destroys two words — and `--stats` reports how many boundaries
+  it had to guess (0 on any post-fix input). Ordering ties are broken by **file order** (`seq`),
+  never by kind: a `reconnect` event's `ts` is the last speech *before* it, so it always ties with
+  the line it followed, and ranking events first prints every break one turn early.
+
+  `stop` runs it on the **archived** file, after the rename — the `renameSync` stays the sole
+  source of truth for "handed over exactly once", and a stitch failure is reported, never fatal.
+  The `--print` (dictation) path produces nothing derived: there the raw text is the user's
+  message, not a document.
 - **`src/capture.ts`** — wires the above together; also owns the runtime-dir invariants (below).
 - **`src/poll.ts`** — long-poll consumed by the meeting-copilot Monitor loop. Tracks a byte-independent line offset in `poll-offset`, dedups mic/system echo, returns early on an urgent/question/silence event, and emits `{"type":"capture-dead"}` when the capture PID is gone.
 - **`src/config.ts`** — resolution order (later wins): defaults → `~/.config/set-copilot/set-copilot.config.json` → project `set-copilot.config.json` → env (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, …). Nested sections merge key by key. `SONIOX_API_KEY` comes only from env / project `.env` / user `.env` — never the committed config.
@@ -83,12 +101,20 @@ Two rules deliberately break the wall's usual "drop it with a warning and carry 
 
 ### Everything project-specific is config, not code
 
-This package was extracted from one ERP project, and the recurring failure mode is that project leaking back into the engine. Five seams exist to prevent it — when a behavior feels domain-specific, it belongs behind one of them, not in a regex in `src/`:
+This package was extracted from one ERP project, and the recurring failure mode is that project leaking back into the engine. Six seams exist to prevent it — when a behavior feels domain-specific, it belongs behind one of them, not in a regex in `src/`:
 
 - **`copilot.alerts`** — the alert taxonomy (⚠ contradiction / 📋 context / ✏ new decision / ❓ question) is *data with defaults in `config.ts`*, not prose in the skill. `SKILL.md` owns the mechanics; the policy comes from `set-copilot prompt`. Adding a category must never mean editing the skill.
 - **`detect.urgency` / `detect.question`** — the regexes behind the per-line flags. Defaults cover English + Hungarian; anything else is configured, and a user-supplied bad regex is dropped with a warning rather than killing the capture.
 - **`knowledge.keywords` + `autoKeywords`** — a flat `[{topic, stems}]` list (named groups are flattened for back-compat), with topics auto-derived from page titles, `##` headings, and frontmatter tags.
 - **`copilot.drawing` (the drawing contract)** — the knowledge a producer fork needs to draw the wall: the category-registry summary, the `wall-emit` payload shapes, the render types, and the when-to-graph/chart/text conventions. Like `copilot.alerts`, it is *data with defaults in `config.ts`*, rendered into `set-copilot prompt` as its own block — so a project can rename its categories or reshape what gets drawn without forking the skill. It lives in the base context (loaded once, cache-warm) precisely because every draw needs it; the per-draw fork prompt stays a one-line mandate.
+- **`transcript.completeWords` (+ `speakers`, `pauseGapMs`, `stitchOnStop`)** — the stitch's
+  heuristic dictionary is a *language* fact, not an engine one. The reference implementation
+  carried a hardcoded Hungarian function-word list; shipping that in `src/` would be exactly this
+  failure mode, so it is config with HU+EN defaults, like `detect.*`. An **empty** list is honoured
+  as a deliberate "never guess" (every unmarked join takes a space — lossless, just less pretty);
+  only an absent or malformed key falls back. Note this is the *opposite* posture from
+  `wall.redaction`, where an empty list must never mean "publish everything" — nothing leaks here,
+  so "no rules" is a safe answer.
 - **`wall.redaction`** — the public-zone redaction *taxonomy* (patterns, replacement, the `[belső]`/`[internal]` marking convention, the input-length cap). The *mechanism* (recursive walk, URL withholding, fail-closed, ReDoS bound, per-delta replay zoning) is engine, in `redaction.ts`; only the taxonomy is config. The shipped default is domain-neutral — it matches a marking convention, not any project's names — so a fresh project never silently redacts, or fails to redact, against another project's vocabulary. The convention the default relies on is taught to the producer in the drawing contract, not left as a phantom.
 
 Word boundaries are Unicode (`\p{L}\p{N}`), never `\b` or an enumerated Latin+Hungarian character class — `\b` treats `á` as a boundary and silently breaks every accented language.

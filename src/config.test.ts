@@ -403,3 +403,57 @@ describe("predictive-staging config", () => {
     expect(loadConfig(project).wall.staging.ttlMs).toBe(120_000);
   });
 });
+
+describe("transcript config (the stitch seam)", () => {
+  it("defaults: stitch on, no speaker names, HU+EN complete words, 2.5s pause gap", () => {
+    const t = loadConfig(project).transcript;
+    expect(t.stitchOnStop).toBe(true);
+    expect(t.speakers).toEqual({});
+    expect(t.pauseGapMs).toBe(2500);
+    expect(t.completeWords).toContain("illetve"); // hu
+    expect(t.completeWords).toContain("just"); // en
+  });
+
+  it("a project replaces completeWords and speakers without restating the rest", () => {
+    writeCfg(project, {
+      transcript: { completeWords: ["e", "o", "que"], speakers: { mic: "Gábor", system: "Robi" } },
+    });
+    const t = loadConfig(project).transcript;
+    expect(t.completeWords).toEqual(["e", "o", "que"]);
+    expect(t.speakers).toEqual({ mic: "Gábor", system: "Robi" });
+    // untouched keys keep their defaults
+    expect(t.stitchOnStop).toBe(true);
+    expect(t.pauseGapMs).toBe(2500);
+  });
+
+  it("merges key by key over the user-level config", () => {
+    writeCfg(userHome, { transcript: { speakers: { mic: "Gábor" }, pauseGapMs: 4000 } });
+    writeCfg(project, { transcript: { stitchOnStop: false } });
+    const t = loadConfig(project).transcript;
+    expect(t.stitchOnStop).toBe(false);
+    expect(t.speakers).toEqual({ mic: "Gábor" });
+    expect(t.pauseGapMs).toBe(4000);
+  });
+
+  it("only an explicit false disables stop-time stitching", () => {
+    writeCfg(project, { transcript: {} });
+    expect(loadConfig(project).transcript.stitchOnStop).toBe(true);
+    writeCfg(project, { transcript: { stitchOnStop: false } });
+    expect(loadConfig(project).transcript.stitchOnStop).toBe(false);
+  });
+
+  it("an EMPTY completeWords list is honoured — 'never guess' is a valid, lossless choice", () => {
+    writeCfg(project, { transcript: { completeWords: [] } });
+    expect(loadConfig(project).transcript.completeWords).toEqual([]);
+  });
+
+  it("drops malformed entries back to defaults", () => {
+    writeCfg(project, {
+      transcript: { completeWords: "nem lista", pauseGapMs: -1, speakers: { mic: 42, system: "Robi" } },
+    });
+    const t = loadConfig(project).transcript;
+    expect(t.completeWords).toContain("illetve");
+    expect(t.pauseGapMs).toBe(2500);
+    expect(t.speakers).toEqual({ system: "Robi" });
+  });
+});
