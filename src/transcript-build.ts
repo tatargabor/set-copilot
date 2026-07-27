@@ -114,6 +114,17 @@ const SENTENCE_END = /[.?!…]/;
 const ROTATION_GAP_MS = 60_000;
 /** How far to look for an overlapping sentence from the other channel. */
 const OVERLAP_WINDOW = 8;
+/**
+ * Length past which a terminator splits even if the text resumes lowercase — a bound on
+ * how much damage the false-terminator rule can do when its assumption fails.
+ *
+ * It fails when one channel carries TWO overlapping remote speakers: their fragments
+ * interleave inside the channel, every join looks like a mid-sentence continuation, and
+ * the rule merges the lot. Measured on a real pre-`a30d12f` recording, that produced one
+ * 1162-character wall of text per file. A genuine spoken sentence does not reach 600
+ * characters (~100 words); the cleanest measured post-fix recording peaked at 487.
+ */
+const MAX_MERGED_SENTENCE = 600;
 
 /**
  * Tolerant JSONL parse. A transcript can end in a half-written line (a capture killed
@@ -356,7 +367,8 @@ export function splitSentences(channel: RebuiltChannel, speaker: string): Stitch
   let start = 0;
   for (let i = 0; i < text.length; i++) {
     const nextIsBoundary = i + 1 >= text.length || /\s/u.test(text[i + 1]!);
-    if (SENTENCE_END.test(text[i]!) && nextIsBoundary && !resumesLowercase(text, i + 1)) {
+    const merged = i + 1 - start > MAX_MERGED_SENTENCE;
+    if (SENTENCE_END.test(text[i]!) && nextIsBoundary && (merged || !resumesLowercase(text, i + 1))) {
       push(start, i + 1);
       start = i + 1;
     }

@@ -93,6 +93,15 @@ describe("false sentence terminators (the recognizer's own mis-punctuation)", ()
     expect(one("dehogy. ma").join("")).toContain("dehogy. ma");
   });
 
+  it("stops merging once the sentence grows past the cap", () => {
+    // When one channel carries two overlapping speakers, every join looks like a
+    // continuation and the rule would merge a whole meeting into one wall of text.
+    const chunk = "és akkor ez az egész dolog megint elkezdett valahogy másképp működni. ";
+    const r = stitchText(jsonl([{ ts: 1000, speaker: "mic", text: chunk.repeat(30) }]), OPTS)!;
+    expect(r.sentences.length).toBeGreaterThan(1);
+    expect(Math.max(...r.sentences.map((s) => s.text.length))).toBeLessThan(700);
+  });
+
   it("never merges a case-less script into one blob", () => {
     // Chinese is \p{Lo}, not \p{Ll} — a "not uppercase" rule would swallow the lot.
     expect(one("这是第一句。这是第二句。").length).toBeGreaterThan(0);
