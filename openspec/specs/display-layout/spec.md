@@ -18,9 +18,12 @@ box-scoped policy (see `box-policy`).
 
 A window SHALL therefore declare which layout it uses and which box occupies each of that
 layout's positions. All three layers SHALL be data-driven, so a window can be recomposed — and a
-layout swapped for a differently-shaped one — by changing config, without code changes. Swapping a
-layout is a configuration change that takes effect when the wall server (re)starts; live,
-no-restart replacement of a running window's layout is not required.
+layout swapped for a differently-shaped one — by changing config, without code changes.
+
+Swapping which layout a window uses SHALL be possible at runtime, without restarting the wall
+server: a live window MAY be switched from one named layout to another mid-session, re-deriving
+its grid from the new layout while keeping its box definitions unchanged. A layout switch SHALL
+only re-arrange geometry; it SHALL NOT alter what any box holds or how it behaves.
 
 The layer separation is normative: a box position SHALL NOT determine what kind of content a box
 holds, and a box SHALL NOT determine its own geometry.
@@ -38,6 +41,13 @@ holds, and a box SHALL NOT determine its own geometry.
 - **WHEN** a window's `layout` is changed from `third-two-thirds` to the stacked default, with the
   box assignments otherwise unchanged
 - **THEN** the same boxes render in the new geometry without any change to the box definitions
+
+#### Scenario: Switch a live window's layout at runtime
+
+- **WHEN** a running window using the stacked layout is switched to the `chat-wide` layout mid-session
+  (a big left column plus an equal right column), with its box assignments otherwise unchanged
+- **THEN** the window SHALL re-derive its grid from the `chat-wide` layout without a server restart,
+  each box keeping its behavior, pacing, and subscriptions
 
 #### Scenario: Box ignores unsubscribed categories
 
