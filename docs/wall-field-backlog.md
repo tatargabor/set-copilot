@@ -89,6 +89,170 @@ rename, no dead region) are already folded into that change and are **not** repe
 - **Naming** — "Copilot" is a Microsoft brand; the differentiator pitched is live
   narrate+analyze+visual-cue on a shared wall.
 
+---
+
+# Second field pass — 2026-07-28
+
+A second mining round over the Claude Code sessions of 2026-07-25…28 (`set-promo`,
+`consumer-c`, `set-core`, `consumer-f`, `consumer-a`), plus the operator's own dictated
+feature list of 2026-07-28. Section **A** is what the field produced; section **B** is what the
+operator explicitly asked for. Items marked *(dup)* are the same defect as an item above and
+count as evidence that it is still open, not as a new entry.
+
+The frame the operator stated for this round: *"a copilotot azt megmutassuk, hogy ez egyébként
+egy együttműködő rendszer. Most ez egy nekem, a meeting résztvevőnek segítő rendszer."* — the
+wall today shows what the copilot decided to publish; what it is *doing* stays in a terminal only
+the operator sees. Most of section B follows from that one gap.
+
+## A — mined from usage
+
+### A1. `init` is an invisible prerequisite; a stale project config silently degrades the wall (P0)
+
+Verified, not inferred, on the project that ran a live wall on 2026-07-28:
+`~/code2/set-promo/set-copilot.config.json` is dated **2026-07-13** and
+
+- has **no `wall` section at all** — so no layout/box/redaction config could be applied to it;
+- sets `"runtimeDir": "/tmp/set-copilot"`, a fixed global dir that directly fights the
+  session-scoped `SET_COPILOT_DIR` the `/ds`, `/dd` and `/meeting-copilot` skills export;
+- still uses the **old flat-string** `knowledge.keywords` form, not `[{topic, stems}]`.
+
+Nothing anywhere reports this. The operator's reading was *"init nélkül is régi volt a config a
+projektben, ezért nem tudtuk a régi JSON fájlra beállítani az új megjelenítést a falon"* — and
+that reading is correct. → `doctor` (and `init` when it finds an existing file) must report config
+**age and schema drift**: unknown/legacy keys, missing `wall` section, and a `runtimeDir` that
+will be overridden by the skills' env var.
+
+### A2. The chat→wall mirror silently no-ops when the Stop hook was never installed (P0)
+
+Same session, verified: the project has **no `.claude/hooks/` directory**, no `Stop` entry
+pointing at `wall-mirror.sh` in either `set-promo/.claude/settings.json` or
+`~/.claude/settings.json`, and **no `wall-mirror.enabled` marker** in any runtime dir. The hook is
+*both* opt-in (marker) *and* self-gating (silent exit) — so the two independent failure modes are
+each invisible. The operator's *"a mirror alapvetően nem működött, ugyanezen okból, vagy nem volt
+bekapcsolva"* is exactly right, and there is no way to tell those two apart from the wall.
+
+→ `/meeting-copilot … mirror` must **verify the hook is registered** and fail loudly if not;
+`doctor` must report mirror readiness as a three-state answer (hook installed? marker set? wall
+running?). This is hook-enforcement's blind spot: the enforcement is real, its *absence* is
+silent.
+
+### A3. Text box still observed not refreshing *(dup of P0 #1 / #2)*
+
+2026-07-28, mid-meeting: *"meg még mindig nem láttuk alul frissíteni, de lehet, hogy refreshelnem
+kell a szövegeset."* Third session with this symptom. Still open.
+
+### A4. The layout does not match how the operator reads the wall (P1)
+
+*"jelenleg a döntéseket látom bal oldalt, a chat alul, nem megy"* and *"ebbe nem látom az összes
+copilotos üzenetet, nem is biztos, hogy optimális így a layoutnak az elrendezése."* Distinct from
+#8 (config merge): the shipped default geometry itself is wrong for the live use. Section **B4**
+is the operator's own answer to this.
+
+### A5. Crowded at 1920px — the dev screen is not the demo screen (P1)
+
+*"most így egy kicsit zsúfolt a kép, meg bár neked elfér a giga képernyődön, de nekem ilyen kis
+gagyi 1900-as képernyőim vannak."* The wall is tuned on a large monitor and shown on a laptop or
+a shared Meet window. → A density/scale pass with 1920×1080 as the reference target, not the
+maximum.
+
+### A6. Text is drawn too slowly / with the wrong line breaks (P1)
+
+*"melós nekiállt írni az alsó szövegdobozt"*; and from the dictation, *"nem megfelelő
+gyorsasággal rajzolt ki egy szöveget, nem volt jó a sortörés."* → Revisit text pacing separately
+from the director's canvas pacing (text is not paced today, so the latency is upstream: turn
+boundary → hook → 200 ms tail), and the wrap behaviour in the text box.
+
+### A7. No inline formatting in a wall text line; markdown tables are illegible *(sharpens #14)*
+
+Confirmed in code: `wall.js:349` sets the line body with `textContent`, so a text line has **no
+inner formatting at all** — only `white-space: pre-wrap` (`wall.css:87`, landed in `002b3cd`)
+survives, and only for newlines. Formatting exists solely inside the special payloads (graph,
+chart). The operator's version: *"tipikusan nincsen belső formázása egy szövegsornak, csak
+valamelyik speciális elembe tettünk bele ilyet… a markdownból a karakterre rajzolt táblázatot nem
+tudtuk megjeleníteni."* → Decide explicitly: a minimal safe inline renderer (bold/code/lists/
+tables) versus documenting plain text forever. **B1 makes this a blocker, not polish.**
+
+### A8. Voice-driven layout change is expected to work (P2 → product)
+
+*"mondhatom azt a falnak, hogy az ábra nézetet oszd meg jobb oldalt, tegyél le egy kisebb dobozt,
+és akkor abból legyenek kipinelve a feladatok."* Runtime layout push exists since
+`wall-chat-mirror`; what is missing is a *spoken* path to it. Overlaps **B6** (a mouse-draggable
+splitter is the cheaper half of the same need).
+
+### A9. Screen awareness, now with a concrete mechanism ask *(sharpens the product-shaped item)*
+
+*"az lenne a tuti, hogyha tudná csinálni a képernyőképet a megnyitott Chrome-os ablakomról,
+mikor arról beszélünk, hogy mit látunk."* The earlier entry said "the copilot is blind to the
+UI"; this names the fix — a screenshot capture the copilot can request.
+
+## B — the operator's feature list (dictated 2026-07-28)
+
+Ordered as dictated; **B1 is explicitly the most important.**
+
+1. **B1 — Render the Claude Code session itself into a wall text box, Claude-Code-like.** *"a
+   Claude Code-ba futó sessionnek a falon lévő szövegboxba való megjelenítése nekem az nagyon
+   hiányzik… méghozzá ugyanazzal a formázással."* Three sub-requirements, all load-bearing:
+   - **Same formatting.** Today a table arrives as one bullet per text line; it must read like
+     Claude Code renders it — compact and scannable. Depends on **A7**.
+   - **No filler.** Drop the progress/waiting chatter (*"folyamatban", "várok", "csendben
+     hallgatok"*) — this is the `hook filler filter` widened from a 40-char threshold to a real
+     policy.
+   - It is the *messages you write into the CC session context* that must appear, i.e. what the
+     `wall-mirror` hook already targets — so this is a rendering + policy change on an existing
+     seam, not a new transport. The research from session `a79afe6e` (turn boundary → jq/awk →
+     `wall-emit` → 200 ms tail → SSE) is the starting point.
+2. **B2 — The public zone must be able to carry the same stream as the private one.** *"jelenleg
+   a public az egy általad elképzelt lehatárolás, de valójában simán lehet, hogy én a publicon
+   ugyanezt a folyamatot akarom látni, mint a private-ben."* And the inverse case: **only** a
+   public wall on the screen, while the private view is the operator's own Claude Code. → The
+   private/public asymmetry currently baked into the *default* box set is a policy default, and
+   should be configurable per window; the zone *mechanism* (and redaction) stays untouched.
+3. **B3 — A pinned text box that does not move while the conversation scrolls.** *"egy
+   szövegboxban a beszélgetést, egy másikban bulletpontokkal az agenda… ami nem változik,
+   miközben beszélgetünk, vagy csak időnként változik."* This is backlog **#9**, and it is the
+   summary box `chat-wide` deliberately deferred (`config.ts:453-455`). Now explicitly requested.
+4. **B4 — The target layout, in the operator's own words.** Two columns:
+   - **left**: the message stream only, "as it would go in the copilot", optionally filtered to
+     fewer lines — a continuous message wall;
+   - **right, upper ⅔–½**: the drawable canvas (graph / chart);
+   - **right, lower**: the pinnable text box from **B3** (agenda, tasks, key decisions).
+
+   *"És ez a hármas felosztás azt gondolom, hogy ez körülbelül mindenre elég."* Note this is
+   geometry — a new `layouts` entry plus a default window using it, per the layout/box split.
+5. **B5 — Keep the top activity strip, but per channel and better looking.** *"a felül az a rövid
+   sáv, ami mutatja, hogy beszélek… ez jó. Itt akár ki lehet bontani csatornánként is."* Today
+   `wall.js:103-112` renders a single textual liveness status (`🎙 figyelek` / `💤 csend`), not a
+   per-channel (mic vs system) visual meter. → Per-channel, visual, modernized.
+6. **B6 — Draggable layout splitters. "Szerintem ez nagyon kell."** *"tudjam állítani egy
+   húzókával, hogy hol vannak ezek a layout határok, tehát hogy le lehessen húzni a vertikális
+   meg a horizontális elválasztókat."* Note the design constraint this implies: a dragged
+   splitter is a *runtime* override of a layout's `columns`/`rows`, and must not turn geometry
+   into per-box state — the window→layout→position→box separation has to survive it.
+7. **B7 — Autozoom + manual scale on the diagrams.** *"kellene egy autozoom, hogy folyamatosan
+   kizoomol vagy belezoomol, folyamatosan autoszkálál, meg egy manuális scale."* Partially there:
+   `wall.js:453` runs the Cytoscape layout with `fit: true`, so it re-fits **on relayout** — but
+   there is no continuous re-fit as the graph grows, and no exposed scale control.
+8. **B8 — General UI modernization.** *"jó lenne valahogy javítani rajta, modernebbé tenni,
+   vizuálisabbá… szebbé, dizájnosabbá."* Pairs with **A5** (density at 1920px).
+
+**Explicitly dropped during the dictation:** multi-screen / multi-monitor handling — the operator
+started it and cut it off himself: *"maradjunk ennyinél, ne is bonyolítsuk tovább."* Recorded so
+it is not re-proposed as an oversight. (The related, still-live idea is the *auto-switching*
+presentation entry in "Product-shaped" above, which solves the same Meet constraint without a
+second screen.)
+
+## Suggested order for the next changes
+
+1. **`doctor`/`init` config + mirror readiness diagnostics** (A1+A2) — cheapest, and it is what
+   made a live meeting silently degrade twice. Nothing else is trustworthy until a misconfigured
+   project says so out loud.
+2. **Inline text rendering + filler policy** (A7+B1a/B1b) — the blocker under the #1 feature ask.
+3. **The B4 layout + the pinned box** (B3+B4, closes #9) — geometry and one deferred box.
+4. **Live-narration/text-refresh wedge** (A3, still P0 #1/#2).
+5. **Public-zone parity as a window default** (B2).
+6. **Splitters, autozoom, activity strip, density pass** (B6+B7+B5+B8+A5) — one UI-modernization
+   change, sized as such.
+
 ## What worked well — protect, do not regress
 
 Knowledge cross-referencing with source-cited contradiction-catching (the star, every meeting) ·
