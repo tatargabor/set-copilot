@@ -243,15 +243,26 @@ second screen.)
 
 ## Suggested order for the next changes
 
-1. **`doctor`/`init` config + mirror readiness diagnostics** (A1+A2) — cheapest, and it is what
-   made a live meeting silently degrade twice. Nothing else is trustworthy until a misconfigured
-   project says so out loud.
-2. **Inline text rendering + filler policy** (A7+B1a/B1b) — the blocker under the #1 feature ask.
-3. **The B4 layout + the pinned box** (B3+B4, closes #9) — geometry and one deferred box.
-4. **Live-narration/text-refresh wedge** (A3, still P0 #1/#2).
-5. **Public-zone parity as a window default** (B2).
-6. **Splitters, autozoom, activity strip, density pass** (B6+B7+B5+B8+A5) — one UI-modernization
-   change, sized as such.
+All six are proposed in `openspec/changes/` as of 2026-07-28; none is applied yet.
+
+1. **`wall-config-and-mirror-diagnostics`** (A1+A2) — cheapest, and it is what made a live
+   meeting silently degrade twice. Nothing else is trustworthy until a misconfigured project
+   says so out loud.
+2. **`wall-text-formatting-and-mirror-policy`** (A7+B1) — the blocker under the #1 feature ask:
+   a closed inline vocabulary for `text`, and the filler/length/code-block judgement moved into
+   the existing `copilot.mirror` config seam.
+3. **`wall-three-region-layout`** (B3+B4, closes #9) — the operator's geometry and the pinned box
+   `chat-wide` deferred. Also closes a blank-wall hole: `badLayout` never checked that a
+   multi-cell position is a rectangle.
+4. **`wall-stream-recovery`** (A3, P0 #1/#2) — client-side watchdog on heartbeat *absence*,
+   resumable SSE delivery, re-bootstrap on reconnect. Does not claim a root cause for the
+   narration wedge; builds the visibility and carries the reproduction.
+5. **`wall-public-surface`** (B2) — and it found a leak: `isPublicClient` infers the audience
+   from `!zones.includes("private")`, so widening a public window's zones to "show more"
+   silently turns redaction **off** in front of an audience.
+6. **`wall-viewport-and-activity`** (B5+B6+B7+B8+A5) — splitters as a per-viewer viewport
+   override, graph auto-fit with a manual scale that wins, per-channel activity in the
+   heartbeat, and a 1920×1080 density pass.
 
 ## What worked well — protect, do not regress
 
