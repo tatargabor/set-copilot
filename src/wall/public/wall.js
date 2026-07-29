@@ -5,6 +5,8 @@
  */
 
 import { gridTemplate, boxesForCategory, renderForEvent } from "./wall-core.mjs";
+import { parseWallText } from "./text-format.mjs";
+import { appendBlocks } from "./text-render.mjs";
 
 const route = location.pathname;
 const registry = new Map(); // category id → {render, icon, label}
@@ -344,9 +346,19 @@ function renderText(el, box, cat, ev) {
   if (ev.speaker) line.classList.add(`speaker-${ev.speaker}`); // mic="én" vs system
   if (ev.priority === "immediate") line.classList.add("immediate");
   if (ev.redaction) line.classList.add(`redaction-${ev.redaction}`); // private-view marker
-  line.innerHTML = `<span class="time"></span><span class="icon">${cat.icon ?? ""}</span><span class="txt"></span>`;
-  line.querySelector(".time").textContent = clock();
-  line.querySelector(".txt").textContent = ev.text ?? "";
+  const time = document.createElement("span");
+  time.className = "time";
+  time.textContent = clock();
+  const icon = document.createElement("span");
+  icon.className = "icon";
+  icon.textContent = cat.icon ?? "";
+  const txt = document.createElement("span");
+  txt.className = "txt";
+  // Formatting is DERIVED from the plain string at render time — the payload is still one
+  // string, so producers, the redaction funnel (which ran server-side, before this) and
+  // the replayed accumulated state are all untouched.
+  appendBlocks(txt, parseWallText(ev.text ?? ""));
+  line.append(time, icon, txt);
 
   if (box.behavior === "latest") {
     el.replaceChildren(line); // only the newest survives

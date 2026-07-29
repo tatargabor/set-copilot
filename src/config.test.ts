@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { loadConfig, normalizeKeywords, namePattern, DEFAULT_ALERTS, DEFAULT_REDACTION, CONFIG_FILENAME } from "./config.js";
+import {
+  loadConfig, normalizeKeywords, namePattern, isFillerMessage,
+  DEFAULT_ALERTS, DEFAULT_REDACTION, DEFAULT_FILLER_PHRASES, CONFIG_FILENAME,
+} from "./config.js";
 
 /** loadConfig() reads the real user config dir — point it at an empty temp dir so
  *  the developer's own ~/.config/set-copilot cannot leak into the assertions. */
@@ -161,6 +164,88 @@ describe("chat-mirror config (wall-chat-mirror)", () => {
     // unfilled dead region (the summary third is deferred, not shipped empty).
     expect(wide!.areas).toEqual([["szöveg", "prezentáció"]]);
     expect(wide!.columns).toEqual(["1fr", "1fr"]);
+  });
+});
+
+describe("mirror content policy (wall-text-formatting-and-mirror-policy)", () => {
+  it("resolves the shipped defaults, including keeping code blocks", () => {
+    const m = loadConfig(project).copilot.mirror;
+    expect(m.minLength).toBe(40);
+    expect(m.maxLength).toBe(600);
+    expect(m.codeBlocks).toBe("keep"); // deliberate change from the old unconditional strip
+    expect(m.fillerPhrases).toEqual(DEFAULT_FILLER_PHRASES);
+  });
+
+  it("lets a project override the numbers and the code-block handling", () => {
+    writeCfg(project, { copilot: { mirror: { minLength: 10, maxLength: 2000, codeBlocks: "collapse" } } });
+    const m = loadConfig(project).copilot.mirror;
+    expect(m.minLength).toBe(10);
+    expect(m.maxLength).toBe(2000);
+    expect(m.codeBlocks).toBe("collapse");
+  });
+
+  it("falls back on a malformed value rather than resolving to nonsense", () => {
+    writeCfg(project, { copilot: { mirror: { minLength: "lots", maxLength: 0, codeBlocks: "shred" } } });
+    const m = loadConfig(project).copilot.mirror;
+    expect(m.minLength).toBe(40);
+    expect(m.maxLength).toBe(600);
+    expect(m.codeBlocks).toBe("keep");
+  });
+
+  it("honours an explicitly empty phrase list as 'length floor only'", () => {
+    // Same posture as transcript.completeWords, the opposite of wall.redaction: nothing
+    // leaks by suppressing less, so "no rules" is a legitimate answer here.
+    writeCfg(project, { copilot: { mirror: { fillerPhrases: [] } } });
+    expect(loadConfig(project).copilot.mirror.fillerPhrases).toEqual([]);
+  });
+
+  it("falls back to defaults when the key is absent or malformed", () => {
+    writeCfg(project, { copilot: { mirror: { fillerPhrases: "nope" } } });
+    expect(loadConfig(project).copilot.mirror.fillerPhrases).toEqual(DEFAULT_FILLER_PHRASES);
+  });
+
+  it("drops an invalid pattern with a warning and keeps the rest", () => {
+    const warnings: string[] = [];
+    const orig = console.warn;
+    console.warn = (msg: string) => warnings.push(String(msg));
+    try {
+      writeCfg(project, { copilot: { mirror: { fillerPhrases: ["jó", "(unclosed", 7] } } });
+      expect(loadConfig(project).copilot.mirror.fillerPhrases).toEqual(["jó"]);
+    } finally {
+      console.warn = orig;
+    }
+    expect(warnings.join("\n")).toContain("fillerPhrases");
+    expect(warnings).toHaveLength(2); // the bad regex and the non-string
+  });
+});
+
+describe("isFillerMessage", () => {
+  it("suppresses a progress statement even when it is over the length floor", () => {
+    const msg = "Dolgozom rajta, mindjárt jelentkezem az eredménnyel";
+    expect(msg.length).toBeGreaterThan(40); // the length floor alone would let it through
+    expect(isFillerMessage(msg, DEFAULT_FILLER_PHRASES)).toBe(true);
+  });
+
+  it("suppresses a bare acknowledgement", () => {
+    for (const s of ["Rendben.", "  ok!  ", "Megvan", "Understood."]) {
+      expect(isFillerMessage(s, DEFAULT_FILLER_PHRASES)).toBe(true);
+    }
+  });
+
+  it("does not suppress a substantive line that merely opens with an acknowledgement", () => {
+    expect(isFillerMessage("Rendben, akkor a következő lépés a redakció bekötése.", DEFAULT_FILLER_PHRASES)).toBe(false);
+  });
+
+  it("does not suppress a message that says it is working AND says something", () => {
+    expect(isFillerMessage("Dolgozom a javításon. A hiba a redakciós sétában volt.", DEFAULT_FILLER_PHRASES)).toBe(false);
+  });
+
+  it("matches the whole message, never a substring anywhere in it", () => {
+    expect(isFillerMessage("A teszt eredménye rendben van, mehet a deploy.", DEFAULT_FILLER_PHRASES)).toBe(false);
+  });
+
+  it("suppresses nothing when the phrase list is empty", () => {
+    expect(isFillerMessage("Rendben.", [])).toBe(false);
   });
 });
 

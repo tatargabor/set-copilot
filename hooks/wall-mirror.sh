@@ -44,19 +44,37 @@ TEXT="$(jq -rs '
 
 [ -n "$TEXT" ] || exit 0
 
-# A code block is noise on the wall: strip the fenced blocks, keep the prose around them.
-TEXT="$(printf '%s' "$TEXT" | awk '
-  /^[[:space:]]*```/ { inblock = !inblock; next }
-  !inblock { print }
-')"
-TEXT="$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sed '/^$/d')"
+# Content policy — filler suppression, length cap, code-block handling — comes from
+# `copilot.mirror` config and is APPLIED BY THE CLI, not here. This script used to hold the
+# judgement itself: an awk pass that discarded every fenced code block (most of a coding
+# copilot's message) and a bare 40-character floor. Both are project-specific decisions, and
+# the filler phrases are Unicode-anchored regexes — re-implementing that in bash would give
+# one policy two implementations, free to disagree.
+#
+# `--apply` exits 3 for "not wall material" — a DISTINCT code, because a crashing Node
+# exits 1 and must not be mistaken for "this was filler" (that would drop mirroring
+# silently, the exact class of failure this project keeps closing).
+# `set +e` around it: under `set -e` the failing command substitution would take the whole
+# hook down before the fallback below could run.
+set +e
+POLICED="$(printf '%s' "$TEXT" | SET_COPILOT_DIR="$DIR" set-copilot mirror-policy --apply 2>/dev/null)"
+POLICY_RC=$?
+set -e
 
-# Filler filter: short acknowledgements ("Csend.", "Done", "Ok") are not wall material.
-# Measured 2026-07-25: without this the hook put "Csend." on the wall and viewers read it
-# as a real message.
-[ "${#TEXT}" -ge 40 ] || exit 0
-
-[ "${#TEXT}" -le 600 ] || TEXT="${TEXT:0:597}…"
+if [ "$POLICY_RC" -eq 3 ]; then
+  exit 0                                    # the policy classified it as not wall material
+elif [ "$POLICY_RC" -ne 0 ] || [ -z "$POLICED" ]; then
+  # The lookup itself failed (no CLI, a broken config, anything). Mirroring is a display
+  # convenience: losing it silently because a policy lookup failed is worse than mirroring
+  # with the built-in constants, so fall back to them and mirror anyway. Note this is the
+  # OPPOSITE of the redaction seam's fail-closed rule, and for the opposite reason —
+  # nothing is disclosed by mirroring with default filtering.
+  TEXT="$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sed '/^$/d')"
+  [ "${#TEXT}" -ge 40 ] || exit 0
+  [ "${#TEXT}" -le 600 ] || TEXT="${TEXT:0:597}…"
+else
+  TEXT="$POLICED"
+fi
 
 # Dedup: the same message must not go out twice (a manual hook test run and the self-firing
 # run can overlap — measured 2026-07-25).

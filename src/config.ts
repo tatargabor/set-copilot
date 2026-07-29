@@ -130,6 +130,30 @@ export interface MirrorConfig {
   enabled: boolean;
   /** Which text category a mirrored line is emitted under. Default "tükör". */
   category: string;
+  /** Below this many characters a message is filler and is not mirrored. Default 40. */
+  minLength: number;
+  /** A mirrored line is truncated to this many characters. Default 600. */
+  maxLength: number;
+  /**
+   * Regex sources for progress/acknowledgement phrases that are never wall material
+   * ("dolgozom rajta", "working on it", "csendben hallgatok"). Matched against the WHOLE
+   * trimmed message, not as a substring anywhere — a legitimate message that happens to
+   * contain such a phrase still reaches the wall.
+   *
+   * Like `detect.*` this is a language fact, so it is config with HU+EN defaults, an
+   * invalid entry is dropped with a warning rather than breaking mirroring, and — like
+   * `transcript.completeWords` — an explicitly EMPTY list is honoured as a deliberate
+   * "length floor only". Nothing leaks by suppressing less, so "no rules" is safe here;
+   * the opposite of `wall.redaction`.
+   */
+  fillerPhrases: string[];
+  /**
+   * What happens to a fenced code block in a mirrored message. Default `keep`: a coding
+   * copilot's message is largely code, and the hook used to discard every block
+   * unconditionally, which defeated the purpose of mirroring. `collapse` renders each
+   * block as a one-line marker for a meeting-facing project that finds code noisy.
+   */
+  codeBlocks: "keep" | "strip" | "collapse";
 }
 
 /** How talkative the continuous-narration channel is. Rendered into the policy mandate. */
@@ -601,6 +625,30 @@ export const DEFAULT_WALL: WallConfig = {
   windows: DEFAULT_WINDOWS,
 };
 
+/**
+ * Progress/acknowledgement phrases that are never wall material, HU + EN.
+ *
+ * These are regex sources matched against the WHOLE message (see `MirrorConfig`), so a
+ * fragment is enough — `dolgozom` matches "Dolgozom rajta." but not a sentence that
+ * merely mentions it. Word boundaries, where needed, use Unicode classes (`\p{L}\p{N}`)
+ * and never `\b`, which treats `á` as a boundary and breaks every accented language.
+ *
+ * The operator's ask, verbatim: *"a fölösleges folyamatos visszajelző, várakozó
+ * szövegsorok — ez a 'folyamatban', 'várok', 'csendben hallgatok' — ezek nélkül."*
+ */
+export const DEFAULT_FILLER_PHRASES: string[] = [
+  // Progress statements. `[^.!?]*` lets the phrase carry the rest of ITS OWN sentence
+  // ("Dolgozom rajta, mindjárt jelentkezem.") but stops at a sentence end — a message that
+  // says it is working AND then says something is substantive and reaches the wall.
+  "(dolgozom|folyamatban|megnézem|megnezem|nézem|nezem|várok|varok|figyelek|hallgatok|csendben)[^.!?]*",
+  "(working on it|in progress|on it|one moment|standing by|listening|waiting|checking)[^.!?]*",
+  // Bare acknowledgements. Deliberately NOT allowed a trailing clause: "Rendben, akkor a
+  // következő lépés …" is a normal way to open a substantive line, so only the bare form
+  // (plus punctuation) counts as filler here.
+  "(rendben|oké|oke|értem|ertem|kész|kesz|megvan|persze)",
+  "(ok|okay|done|got it|understood|sure|noted)",
+];
+
 /** The default name — the copilot answers to itself unless a project renames it. */
 export const DEFAULT_NAMES: string[] = ["copilot"];
 
@@ -649,7 +697,14 @@ export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     acknowledge: true,
     drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },
     narration: { enabled: true, verbosity: "normal", maxLines: 1 },
-    mirror: { enabled: false, category: "tükör" },
+    mirror: {
+      enabled: false,
+      category: "tükör",
+      minLength: 40,
+      maxLength: 600,
+      fillerPhrases: DEFAULT_FILLER_PHRASES,
+      codeBlocks: "keep",
+    },
     names: DEFAULT_NAMES,
   },
   detect: DEFAULT_DETECT,
@@ -701,6 +756,54 @@ export function normalizeKeywords(raw: unknown): KeywordPattern[] {
   if (Array.isArray(raw)) push(raw);
   else if (raw && typeof raw === "object") for (const group of Object.values(raw)) push(group);
   return flat;
+}
+
+/**
+ * Keep the filler phrases that actually compile, drop the rest with a warning.
+ *
+ * Same posture as `compileDetector` for `detect.*`: these are user-supplied patterns on a
+ * display path, so one bad entry must not break mirroring for the whole session. The `u`
+ * flag matches how the phrases are used at match time, so a pattern that only fails under
+ * Unicode mode is caught here rather than at the first turn of a live meeting.
+ */
+function validFillerPhrases(raw: unknown[]): string[] {
+  const good: string[] = [];
+  for (const p of raw) {
+    if (typeof p !== "string" || !p.trim()) {
+      console.warn(`[set-copilot] Ignoring malformed copilot.mirror.fillerPhrases entry: ${JSON.stringify(p)}`);
+      continue;
+    }
+    try {
+      new RegExp(p, "iu");
+      good.push(p);
+    } catch (err) {
+      console.warn(
+        `[set-copilot] Ignoring invalid copilot.mirror.fillerPhrases pattern ${JSON.stringify(p)}: ${(err as Error).message}`,
+      );
+    }
+  }
+  return good;
+}
+
+/**
+ * Does this whole message read as filler?
+ *
+ * Anchored to the WHOLE trimmed message, never substring-present-anywhere: a legitimate
+ * message that happens to contain "rendben" must still reach the wall. Trailing
+ * punctuation is allowed so "Rendben." and "Ok!" classify like their bare forms.
+ *
+ * Exported because both the CLI (which hands the resolved policy to the hook) and the
+ * tests need the one definition — the hook must never grow a second one.
+ */
+export function isFillerMessage(text: string, phrases: string[]): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || !phrases.length) return false;
+  for (const p of phrases) {
+    try {
+      if (new RegExp(`^[\\p{P}\\s]*(?:${p})[\\p{P}\\s]*$`, "iu").test(trimmed)) return true;
+    } catch { /* already validated at load; a survivor that throws here is simply not a match */ }
+  }
+  return false;
 }
 
 /** Drop malformed alert entries rather than letting them reach the prompt as `undefined`. */
@@ -838,6 +941,25 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
           typeof copilot.mirror?.category === "string" && copilot.mirror.category.trim()
             ? copilot.mirror.category.trim()
             : DEFAULTS.copilot.mirror.category,
+        minLength:
+          typeof copilot.mirror?.minLength === "number" && copilot.mirror.minLength >= 0
+            ? Math.floor(copilot.mirror.minLength)
+            : DEFAULTS.copilot.mirror.minLength,
+        maxLength:
+          typeof copilot.mirror?.maxLength === "number" && copilot.mirror.maxLength > 0
+            ? Math.floor(copilot.mirror.maxLength)
+            : DEFAULTS.copilot.mirror.maxLength,
+        // An EMPTY list is a deliberate "length floor only" and is honoured, like
+        // `transcript.completeWords`; only an absent or malformed key falls back. Invalid
+        // entries are dropped with a warning, like `detect.*` — a bad phrase must not take
+        // mirroring down with it.
+        fillerPhrases: Array.isArray(copilot.mirror?.fillerPhrases)
+          ? validFillerPhrases(copilot.mirror.fillerPhrases)
+          : DEFAULTS.copilot.mirror.fillerPhrases,
+        codeBlocks:
+          copilot.mirror?.codeBlocks === "strip" || copilot.mirror?.codeBlocks === "collapse"
+            ? copilot.mirror.codeBlocks
+            : DEFAULTS.copilot.mirror.codeBlocks,
       },
       names: resolvedNames,
     },

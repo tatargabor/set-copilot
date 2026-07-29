@@ -15,6 +15,8 @@
  *   wall-stop                stop the wall serving this runtime dir (via wall.pid)
  *   wall-shot <url>          screenshot a URL (headless Chromium) onto the wall
  *   wall-layout <route> <id> switch a live window's layout at runtime (geometry only)
+ *   mirror-policy [--apply]  print the resolved chat→wall mirror policy as JSON;
+ *                            --apply filters a message on stdin by it (exit 3 = drop)
  *   sources                  list audio input devices
  *   doctor [--mirror]        audio + env + setup health check (probes real signal);
  *                            --mirror checks only chat→wall readiness and exits non-zero
@@ -131,6 +133,7 @@ async function main(): Promise<void> {
       console.log(`[wall-layout] switched ${route} → ${layout}`);
       return;
     }
+    case "mirror-policy": return cmdMirrorPolicy(args.includes("--apply"));
     case "sources": {
       const { listSources } = await import("./audio.js");
       for (const s of await listSources()) console.log(`  ${s}`);
@@ -293,6 +296,84 @@ Next steps:
   4. Edit ${CONFIG_FILENAME} — set knowledge.sources to your docs (optional; dictation needs none)
   5. In Claude Code:  /ds  (start dictation) · /dd (stop) · /meeting-copilot start
 `);
+}
+
+// ---- mirror policy ---------------------------------------------------------
+
+/**
+ * Apply the code-block part of the mirror policy.
+ *
+ * `keep` is the default and the point of the feature — a coding copilot's message is
+ * largely code, and the hook used to discard every block unconditionally. `collapse` is
+ * the escape hatch for a meeting-facing project that finds code noisy: one marker line
+ * with the language and the size, which reads at wall distance without pretending to be
+ * code.
+ */
+function applyCodeBlocks(text: string, mode: "keep" | "strip" | "collapse"): string {
+  if (mode === "keep") return text;
+  const out: string[] = [];
+  let block: string[] | null = null;
+  let lang = "";
+  for (const line of text.split("\n")) {
+    const fence = /^\s*```(.*)$/.exec(line);
+    if (fence) {
+      if (block === null) { block = []; lang = fence[1].trim(); continue; }
+      if (mode === "collapse") out.push(`[kód${lang ? `: ${lang}` : ""}, ${block.length} sor]`);
+      block = null;
+      continue;
+    }
+    if (block) block.push(line);
+    else out.push(line);
+  }
+  // An unterminated fence: its content was buffered, so put it back rather than losing it.
+  if (block) out.push(...block);
+  return out.join("\n");
+}
+
+/**
+ * `mirror-policy` prints the project's resolved chat→wall mirror policy as JSON;
+ * `--apply` reads a message on stdin and writes the mirror-ready text, exiting 1 when the
+ * policy says this message is not wall material.
+ *
+ * Why the CLI applies it and not the hook: the whole point of this seam is that
+ * `hooks/wall-mirror.sh` stops being where the judgement lives. `fillerPhrases` are
+ * Unicode-anchored whole-message regexes, and re-implementing that in bash would recreate
+ * the failure this change exists to remove — two implementations of one policy, free to
+ * disagree. The hook keeps only the sequencing and its dedup stamp.
+ */
+async function cmdMirrorPolicy(apply: boolean): Promise<void> {
+  const { isFillerMessage } = await import("./config.js");
+  const cfg = loadConfig();
+  const p = cfg.copilot.mirror;
+  if (!apply) {
+    console.log(JSON.stringify({
+      enabled: p.enabled, category: p.category, minLength: p.minLength,
+      maxLength: p.maxLength, fillerPhrases: p.fillerPhrases, codeBlocks: p.codeBlocks,
+    }));
+    return;
+  }
+
+  const chunks: Buffer[] = [];
+  for await (const c of process.stdin) chunks.push(c as Buffer);
+  const raw = Buffer.concat(chunks).toString("utf-8");
+
+  // Drop leading/trailing blank lines only. Deliberately NOT a per-line trim (which the
+  // old shell version did): now that code blocks survive, per-line trimming would flatten
+  // their indentation, and indentation is most of what makes code readable.
+  const lines = applyCodeBlocks(raw, p.codeBlocks).split("\n");
+  while (lines.length && !lines[0].trim()) lines.shift();
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  let text = lines.join("\n");
+
+  // Filler: the cheap length floor first, then the phrase policy — which applies
+  // INDEPENDENTLY of length, so a long-winded "dolgozom rajta" is suppressed too.
+  // Exit 3, not 1: the hook must be able to tell "the policy rejected this" apart from
+  // "the lookup broke" (a crashing Node exits 1). Conflating them would make a broken
+  // policy lookup look like a filler verdict and drop mirroring without a word.
+  if (text.length < p.minLength || isFillerMessage(text, p.fillerPhrases)) process.exit(3);
+  if (text.length > p.maxLength) text = `${text.slice(0, p.maxLength - 1)}…`;
+
+  process.stdout.write(text);
 }
 
 // ---- stop / status ---------------------------------------------------------
@@ -650,6 +731,9 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot wall-layout <route> <layout-id>
                                    switch a live window's layout at runtime (e.g.
                                    /wall mirror) — geometry only, no restart
+  set-copilot mirror-policy [--apply]
+                                   resolved chat→wall mirror policy as JSON; --apply
+                                   filters stdin by it (exit 3 = not wall material)
   set-copilot sources              list audio input devices
   set-copilot doctor               audio + env + setup health check (probes real
                                    signal; also reports config drift + mirror readiness)

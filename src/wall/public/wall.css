@@ -81,10 +81,58 @@ body {
 .line:last-child { border-bottom: 0; }
 .line .time { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .line .icon { flex: 0 0 auto; }
-/* `pre-wrap`: a szöveg `textContent`-tel kerül be (wall.js), így a sortörés csak
-   CSS-sel marad meg. Enélkül a többsoros esemény (pl. egy kitűzött lista) egyetlen
-   összefolyó bekezdéssé olvad — mérve 2026-07-25 egy élő meetingen. */
-.line .txt { flex: 1 1 auto; white-space: pre-wrap; }
+/* A szövegsor belső szerkezete valódi elemekből épül (wall.js `appendBlocks`), ezért a
+   `pre-wrap` a bekezdésre került: ott őrzi a sortörést, amit korábban az egész `.txt`-n
+   kellett (a többsoros esemény enélkül egyetlen összefolyó bekezdéssé olvad — mérve
+   2026-07-25 egy élő meetingen). Az `min-width: 0` a flex-gyereken az, ami engedi a
+   táblázatnak, hogy a saját dobozán belül görgessen, ahelyett hogy szétfeszítené. */
+.line .txt { flex: 1 1 auto; min-width: 0; }
+.line .txt .p { margin: 0; white-space: pre-wrap; }
+.line .txt .p + .p,
+.line .txt > * + * { margin-top: 4px; }
+
+/* Tömörség: a fal 1920×1080-on, távolról olvasódik — egy lista annyi helyet foglaljon,
+   amennyit a szerkezete megkíván, és ne többet. Ezért a szűk margók és a `2px` sortáv. */
+.line .txt ul,
+.line .txt ol { margin: 0; padding-left: 1.2em; }
+.line .txt li { margin: 0; }
+.line .txt li + li { margin-top: 2px; }
+
+.line .txt strong { font-weight: 700; }
+.line .txt em { font-style: italic; }
+.line .txt code.ic {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(127, 127, 127, 0.18);
+}
+.line .txt pre.cb {
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(127, 127, 127, 0.14);
+  border-left: 2px solid var(--muted);
+  overflow-x: auto;               /* hosszú sor a blokkon belül gördül, nem a falon */
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+  line-height: 1.35;
+}
+.line .txt pre.cb code { font: inherit; }
+
+/* A doboz birtokolja a túlcsordulást (D4): egy széles táblázat itt gördül, és soha nem
+   méretezi át a layoutot, sem nem görgeti oldalra az oldalt. */
+.line .txt .tbl-wrap { overflow-x: auto; max-width: 100%; }
+.line .txt table.tbl { border-collapse: collapse; font-size: 0.94em; }
+.line .txt table.tbl th,
+.line .txt table.tbl td {
+  padding: 1px 8px 1px 0;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.28);
+  white-space: nowrap;
+  vertical-align: top;
+}
+.line .txt table.tbl th { font-weight: 700; color: var(--muted); }
+.line .txt table.tbl tr:last-child td { border-bottom: 0; }
 
 /* Media (image / webpage) — fill the box without stretching or overflowing it. */
 .media {
