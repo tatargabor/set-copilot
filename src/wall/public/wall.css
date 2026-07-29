@@ -55,6 +55,24 @@ body {
   border-left-color: var(--alert);
   background: color-mix(in srgb, var(--alert) 12%, var(--panel));
 }
+/* Nincs kapcsolat (wall-stream-recovery): a legerősebb jelzés, mert ez az egyetlen
+   állapot, amiben MINDEN, amit a falon látsz, elavult lehet.
+
+   Csak a csík változik, a dobozok tartalmát nem halványítjuk: az operátor lehet, hogy épp
+   azt olvassa, és elhalványítani azt, amit olvas, az visszalépés visszajelzésnek álcázva
+   (design nyitott kérdés — a csík mellett döntöttünk). A lassú pulzálás azt mondja el, amit
+   a statikus szín nem: hogy a fal maga még él és próbálkozik. */
+.status-strip.status-disconnected {
+  color: var(--alert);
+  border-left-color: var(--alert);
+  background: color-mix(in srgb, var(--alert) 22%, var(--panel));
+  font-weight: 600;
+  animation: disconnected-pulse 2s ease-in-out infinite;
+}
+@keyframes disconnected-pulse { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  .status-strip.status-disconnected { animation: none; }
+}
 
 .slot {
   background: var(--panel);

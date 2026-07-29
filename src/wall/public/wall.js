@@ -4,7 +4,7 @@
  * lib is Cytoscape, and only for `graph` slots; text slots are ~20-line renderers.
  */
 
-import { gridTemplate, boxesForCategory, renderForEvent } from "./wall-core.mjs";
+import { gridTemplate, boxesForCategory, renderForEvent, connectionState } from "./wall-core.mjs";
 import { parseWallText } from "./text-format.mjs";
 import { appendBlocks } from "./text-render.mjs";
 
@@ -12,18 +12,55 @@ const route = location.pathname;
 const registry = new Map(); // category id → {render, icon, label}
 const boxEls = new Map(); // position → { el, box, lazily-built renderers }
 
+/** The bootstrap payload we are currently mounted on, serialized — the diff key for D5. */
+let mountedFingerprint = null;
+/** The heartbeat interval the SERVER advertises; 0 means this wall sends none. */
+let heartbeatIntervalMs = 0;
+
+/**
+ * Fetch the window definition and mount it — but only re-derive when it actually changed.
+ *
+ * Called on EVERY stream open, not just at page load (wall-stream-recovery D5). The
+ * bootstrap used to be fetched once, which is why a box, category or layout change needed
+ * a hard reload to land. A reconnect must not flash or tear down a display that is fine,
+ * so an unchanged definition is a no-op.
+ */
+async function bootstrapAndMount() {
+  let payload;
+  try {
+    const res = await fetch(`/api/bootstrap?route=${encodeURIComponent(route)}`);
+    if (!res.ok) { document.body.textContent = `no window for ${route}`; return false; }
+    payload = await res.json();
+  } catch {
+    return false; // a failed re-bootstrap during a flap: keep showing what we have
+  }
+  const fingerprint = JSON.stringify(payload);
+  if (fingerprint === mountedFingerprint) return true; // unchanged — leave the display alone
+  mountedFingerprint = fingerprint;
+
+  heartbeatIntervalMs = payload.heartbeatMs ?? 0;
+  registry.clear();
+  for (const c of payload.categories) registry.set(c.id, c);
+  document.title = `set-copilot · ${payload.window.name}`;
+  mountGrid(payload.window);
+  return true;
+}
+
 async function boot() {
-  const res = await fetch(`/api/bootstrap?route=${encodeURIComponent(route)}`);
-  if (!res.ok) { document.body.textContent = `no window for ${route}`; return; }
-  const { window: win, categories } = await res.json();
-  for (const c of categories) registry.set(c.id, c);
-  document.title = `set-copilot · ${win.name}`;
-  mountGrid(win);
+  if (!(await bootstrapAndMount())) return;
   connect();
+  // The watchdog judges the transport from the ABSENCE of heartbeats, so it has to run on
+  // its own clock — an event-driven check could never fire when nothing is arriving, which
+  // is precisely the condition it exists to detect.
+  setInterval(refreshStatus, 1000);
 }
 
 function mountGrid(win) {
   const root = document.getElementById("wall");
+  // Remount, not append: this runs again whenever the window definition changes under a
+  // live client, and the old boxes are no longer the ones being described.
+  root.replaceChildren();
+  boxEls.clear();
   const t = gridTemplate(win.layout, win.boxes);
   root.style.display = "grid";
   root.style.gridTemplateAreas = t.gridTemplateAreas;
@@ -64,8 +101,16 @@ function onLayout(msg) {
   }
 }
 
+/** The live EventSource — read for `readyState`, which refines the watchdog's verdict. */
+let es = null;
+
 function connect() {
-  const es = new EventSource(`/events?route=${encodeURIComponent(route)}`);
+  es = new EventSource(`/events?route=${encodeURIComponent(route)}`);
+  // The browser reconnects natively (the server writes `retry: 2000`) and re-presents the
+  // last `id:` it saw as `Last-Event-ID`, so the server can send just the missed span. All
+  // this handler has to do is pick up config changes that landed while we were away.
+  es.onopen = () => { bootstrapAndMount(); refreshStatus(); };
+  es.onerror = () => refreshStatus();
   es.onmessage = (e) => {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
@@ -74,8 +119,31 @@ function connect() {
     if (msg.kind === "pending") return onPending(msg);
     if (msg.kind === "stage-expired") return onStageExpired(msg);
     if (msg.kind === "layout") return onLayout(msg);
+    if (msg.kind === "replay") return onFullReplay();
     onEvent(msg);
   };
+}
+
+/**
+ * The server could not satisfy our resume and is sending full state instead.
+ *
+ * Rebuild rather than append: a full replay legitimately repeats content we may still be
+ * showing, so appending would double every line. The server announces this branch for
+ * exactly that reason — it is the honest failure, not a silent one.
+ */
+function onFullReplay() {
+  for (const entry of boxEls.values()) {
+    entry.el.replaceChildren();
+    entry.graph = null;
+    entry.chart = null;
+    entry.panes = new Map();
+    entry.shown = null;
+    entry.shownAt = 0;
+    entry.pending = null;
+    entry.pendingOverlay = null;
+    clearTimeout(entry.pendingTimer);
+    clearTimeout(entry.pendingTtl);
+  }
 }
 
 // ---- liveness status strip (wall-liveness) ----
@@ -96,23 +164,42 @@ function humanAge(ms) {
   return `${m} perc`;
 }
 
+/** The last heartbeat received, and WHEN — its arrival time is the transport evidence. */
+let lastHb = null;
+let lastHeartbeatAt = null;
+
 function onHeartbeat(hb) {
+  lastHb = hb;
+  lastHeartbeatAt = Date.now();
+  refreshStatus();
+}
+
+/**
+ * Paint the status strip from the transport's evidence plus the last heartbeat's contents.
+ *
+ * The decision itself lives in `connectionState` (DOM-free, unit-tested); this only
+ * renders it. A wall that is not receiving must not be able to look like a wall with
+ * nothing to say — before this, a dead stream simply froze the last heartbeat on screen,
+ * and a stale wall was pixel-identical to a quiet one.
+ */
+function refreshStatus() {
   if (!statusEl) statusEl = document.getElementById("status-strip");
   if (!statusEl) return;
-  statusEl.classList.remove("status-listening", "status-quiet", "status-dead");
-  if (!hb.captureAlive) {
-    statusEl.classList.add("status-dead");
-    statusEl.textContent = "⚠ a capture leállt";
-    return;
-  }
-  const age = hb.lastHeardMsAgo;
-  if (age != null && age < QUIET_THRESHOLD_MS) {
-    statusEl.classList.add("status-listening");
-    statusEl.textContent = "🎙 figyelek";
-  } else {
-    statusEl.classList.add("status-quiet");
-    statusEl.textContent = age == null ? "💤 csend" : `💤 csend · ${humanAge(age)} óta`;
-  }
+  if (!heartbeatIntervalMs) return; // this wall sends no heartbeats — nothing to judge
+  const st = connectionState({
+    lastHeartbeatAgeMs: lastHeartbeatAt == null ? null : Date.now() - lastHeartbeatAt,
+    readyState: es ? es.readyState : 2,
+    heartbeatIntervalMs,
+    captureAlive: lastHb ? lastHb.captureAlive : undefined,
+    lastHeardMsAgo: lastHb ? lastHb.lastHeardMsAgo : null,
+    quietThresholdMs: QUIET_THRESHOLD_MS,
+  });
+  statusEl.classList.remove("status-listening", "status-quiet", "status-dead", "status-disconnected");
+  statusEl.classList.add(`status-${st.state}`);
+  const age = lastHb ? lastHb.lastHeardMsAgo : null;
+  statusEl.textContent = st.state === "quiet" && age != null
+    ? `${st.label} · ${humanAge(age)} óta`
+    : st.label;
 }
 
 // ---- pending placeholder (wall-pending-indicator) ----

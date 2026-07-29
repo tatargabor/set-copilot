@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 // The client's pure logic lives in a browser-loadable ES module; import it here
 // directly so the same code the browser runs is what the test exercises.
-import { boxesForCategory, gridTemplate, renderForEvent, zoneMatches } from "./public/wall-core.mjs";
+import { boxesForCategory, connectionState, gridTemplate, renderForEvent, zoneMatches } from "./public/wall-core.mjs";
 
 const stacked = { id: "stacked", areas: [["pinned"], ["stream"], ["canvas"]] };
 const boxes = [
@@ -111,5 +111,67 @@ describe("zoneMatches (client mirror)", () => {
   it("agrees with the server zone rule", () => {
     expect(zoneMatches("both", ["private", "both"])).toBe(true);
     expect(zoneMatches("private", ["public", "both"])).toBe(false);
+  });
+});
+
+describe("connectionState (wall-stream-recovery)", () => {
+  const OPEN = 1, CLOSED = 2;
+  const healthy = {
+    lastHeartbeatAgeMs: 200, readyState: OPEN, heartbeatIntervalMs: 1000,
+    captureAlive: true, lastHeardMsAgo: 500,
+  };
+
+  it("reports listening while heartbeats arrive and speech is fresh", () => {
+    expect(connectionState(healthy).state).toBe("listening");
+  });
+
+  it("reports quiet while heartbeats arrive but nothing has been heard lately", () => {
+    expect(connectionState({ ...healthy, lastHeardMsAgo: 30_000 }).state).toBe("quiet");
+    expect(connectionState({ ...healthy, lastHeardMsAgo: null }).state).toBe("quiet");
+  });
+
+  it("tolerates a gap just under the threshold — a hiccup is not a dead pipe", () => {
+    expect(connectionState({ ...healthy, lastHeartbeatAgeMs: 3_900 }).state).toBe("listening");
+  });
+
+  it("calls a gap past the threshold disconnected, even with the stream still OPEN", () => {
+    // The observed field symptom: the stream stops delivering while the object still looks
+    // open. Silence is the evidence; readyState cannot be trusted to notice.
+    expect(connectionState({ ...healthy, lastHeartbeatAgeMs: 4_100 }).state).toBe("disconnected");
+  });
+
+  it("calls a CLOSED stream disconnected regardless of the last heartbeat", () => {
+    expect(connectionState({ ...healthy, readyState: CLOSED }).state).toBe("disconnected");
+  });
+
+  it("treats never having received a heartbeat as disconnected", () => {
+    expect(connectionState({ ...healthy, lastHeartbeatAgeMs: null }).state).toBe("disconnected");
+  });
+
+  it("recovers as soon as heartbeats resume", () => {
+    const dead = connectionState({ ...healthy, lastHeartbeatAgeMs: 10_000 });
+    expect(dead.state).toBe("disconnected");
+    expect(connectionState(healthy).state).toBe("listening");
+  });
+
+  it("does not let a healthy connection mask capture-stopped", () => {
+    // Trading one silent failure for another is not an improvement.
+    expect(connectionState({ ...healthy, captureAlive: false }).state).toBe("dead");
+  });
+
+  it("derives the threshold from the server's advertised interval, not a second constant", () => {
+    const slow = { ...healthy, heartbeatIntervalMs: 5000, lastHeartbeatAgeMs: 15_000 };
+    expect(connectionState(slow).state).toBe("listening"); // 15s is fine at a 5s interval
+    expect(connectionState({ ...slow, lastHeartbeatAgeMs: 21_000 }).state).toBe("disconnected");
+  });
+
+  it("distinguishes all four states from one another", () => {
+    const states = new Set([
+      connectionState(healthy).state,
+      connectionState({ ...healthy, lastHeardMsAgo: 60_000 }).state,
+      connectionState({ ...healthy, captureAlive: false }).state,
+      connectionState({ ...healthy, readyState: CLOSED }).state,
+    ]);
+    expect(states).toEqual(new Set(["listening", "quiet", "dead", "disconnected"]));
   });
 });

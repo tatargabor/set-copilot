@@ -70,3 +70,50 @@ export function renderForEvent(ev) {
 export function zoneMatches(eventZone, windowZones) {
   return eventZone === "both" || windowZones.includes(eventZone);
 }
+
+/**
+ * The status strip's state, decided from the transport's own evidence
+ * (wall-stream-recovery D4).
+ *
+ * `wall-liveness` established the invariant one layer down: the thing whose aliveness is in
+ * question cannot be the source of the aliveness signal — which is why the heartbeat is
+ * derived by the server from the runtime dir rather than emitted by the copilot. But the
+ * heartbeat travels over the connection whose health is in question. When the stream dies
+ * the client keeps displaying the last heartbeat it got, and **a stale wall is
+ * pixel-identical to a quiet one**. Only the client can observe that nothing is arriving,
+ * so the same invariant, applied outward, puts this decision here.
+ *
+ * The primary signal is the ABSENCE of heartbeats, not `onerror`: the observed field
+ * symptom is a stream that stops delivering while the object still looks open, so
+ * `readyState` only refines a verdict it cannot make. The threshold is derived from the
+ * interval the server actually advertises — never a second hardcoded copy of it.
+ *
+ * @param {{lastHeartbeatAgeMs: number|null, readyState: number, heartbeatIntervalMs: number,
+ *          captureAlive?: boolean, lastHeardMsAgo?: number|null, quietThresholdMs?: number}} s
+ * @returns {{state: "disconnected"|"dead"|"listening"|"quiet", label: string}}
+ */
+export function connectionState(s) {
+  const interval = s.heartbeatIntervalMs > 0 ? s.heartbeatIntervalMs : 1000;
+  // Four missed beats: long enough that a scheduling hiccup or a GC pause cannot trip it,
+  // short enough that the operator learns before deciding the meeting has gone quiet.
+  const deadline = interval * 4;
+  const age = s.lastHeartbeatAgeMs;
+
+  // CLOSED (2) is unambiguous. Otherwise it takes silence to convict: an OPEN stream that
+  // has stopped delivering is exactly the failure this exists to catch.
+  const noBeat = age == null || age > deadline;
+  if (s.readyState === 2 || noBeat) {
+    return { state: "disconnected", label: "⛔ nincs kapcsolat a fallal" };
+  }
+
+  // Heartbeats ARE arriving, so believe what they say. A healthy connection must never
+  // suppress capture-stopped — that would trade one silent failure for another.
+  if (s.captureAlive === false) return { state: "dead", label: "⚠ a capture leállt" };
+
+  const quiet = s.quietThresholdMs ?? 4000;
+  const heard = s.lastHeardMsAgo;
+  if (heard != null && heard < quiet) return { state: "listening", label: "🎙 figyelek" };
+  // The "N perc óta" suffix is the caller's to add: humanising a duration is a rendering
+  // concern, and keeping it out of here is what leaves this function DOM-free and testable.
+  return { state: "quiet", label: "💤 csend" };
+}

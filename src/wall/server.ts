@@ -77,6 +77,25 @@ interface Client {
 }
 
 /**
+ * One retained broadcast, kept so a reconnecting client can be given what it missed
+ * (wall-stream-recovery D1).
+ *
+ * It stores what was broadcast, NOT what any particular client received: the zone and
+ * category gates are re-applied per client at resume time, through the same predicates
+ * the live broadcast uses. Storing a per-client rendering would make resume a second
+ * delivery path with its own copy of the zone rules — the one thing this must not be,
+ * since a public client resuming across a private event is exactly the leak to avoid.
+ */
+interface TailEntry {
+  seq: number;
+  kind: "event" | "show" | "pending" | "stage-expired" | "layout";
+  /** kind === "event": both zone variants, `public: null` meaning withheld. */
+  variants?: EventVariants;
+  /** every other kind: the message as broadcast, still carrying its own gate fields. */
+  msg?: Record<string, unknown>;
+}
+
+/**
  * One zone's slice of an accumulated visual: nodes by id, edges in order.
  *
  * A visual no longer carries a single zone (public-redaction D3). Its deltas are
@@ -196,6 +215,30 @@ export class WallServer {
    * so an ordinary private graph is neither expirable nor promotable-by-accident.
    */
   private readonly staged = new Map<string, number>();
+
+  // ---- resumable delivery (wall-stream-recovery) ----
+  //
+  // The wall's most-repeated field failure is that it goes stale and only a hard reload
+  // brings it back. The browser's native reconnect already fires; what was missing is that
+  // the server re-ran history the client was already showing, so a reconnect could not be
+  // made idempotent. Riding the SSE `id:` field means the BROWSER tracks the cursor and
+  // re-presents it as `Last-Event-ID` — no handshake, no query parameter, no client state.
+
+  /**
+   * Identity of THIS server run. A restarted server's counter starts over, so without it
+   * a stale "id 40" would look satisfiable and the client would be told it is up to date
+   * while silently missing everything — the exact failure class this change removes.
+   */
+  private readonly runId = `${process.pid}-${Date.now().toString(36)}`;
+  private seq = 0;
+  private readonly tail: TailEntry[] = [];
+  /**
+   * How many broadcasts stay resumable. Deliberately small: the observed field
+   * disconnection was ~13 minutes, far past any sane buffer, so the FALLBACK is the common
+   * path and is what deserves to be good (D2). This is the scroll ring's bounding
+   * discipline, one order up.
+   */
+  private readonly tailN = 200;
 
   // ---- accumulated display state (for replay + the director) ----
   /** category → visual id → accumulated graph, split into private/public zone slices. */
@@ -369,12 +412,7 @@ export class WallServer {
 
   /** Broadcast a pending marker, gated by zone and the window's category appetite (D4). */
   private broadcastPending(p: Pending): void {
-    const payload = `data: ${JSON.stringify(p)}\n\n`;
-    for (const c of this.clients) {
-      if (!zoneMatches(p.zone, c.zones)) continue;
-      if (!c.cats.has(p.category)) continue;
-      c.res.write(payload);
-    }
+    this.emit({ kind: "pending", msg: p as unknown as Record<string, unknown> });
   }
 
   // ---- predictive staging (predictive-staging) ----
@@ -431,12 +469,7 @@ export class WallServer {
 
   /** Tell the private view a staged prediction expired — never a public client (D4). */
   private broadcastStageExpired(m: StageExpired): void {
-    const payload = `data: ${JSON.stringify(m)}\n\n`;
-    for (const c of this.clients) {
-      if (this.isPublicClient(c)) continue; // a stage-expired marker is private-only
-      if (!c.cats.has(m.category)) continue;
-      c.res.write(payload);
-    }
+    this.emit({ kind: "stage-expired", msg: m as unknown as Record<string, unknown> });
   }
 
   // ---- runtime layout switch (wall-chat-mirror) ----
@@ -461,10 +494,7 @@ export class WallServer {
     // new geometry, then push the full layout to every live client on this route — the
     // geometry rides the message, so the client re-derives its grid with no extra fetch.
     this.layoutOverrides.set(cmd.route, layout);
-    const payload = `data: ${JSON.stringify({ kind: "layout", route: cmd.route, layout })}\n\n`;
-    for (const c of this.clients) {
-      if (c.route === cmd.route) c.res.write(payload);
-    }
+    this.emit({ kind: "layout", msg: { kind: "layout", route: cmd.route, layout } });
   }
 
   // ---- ingest + accumulate ----
@@ -644,22 +674,69 @@ export class WallServer {
     return !client.zones.includes("private");
   }
 
-  /** Broadcast a display event's zone-appropriate variant to each client. */
-  private broadcastEvent(variants: EventVariants): void {
-    const privStr = `data: ${JSON.stringify(variants.private)}\n\n`;
-    const pubStr = variants.public ? `data: ${JSON.stringify(variants.public)}\n\n` : null;
-    for (const c of this.clients) {
-      const isPub = this.isPublicClient(c);
-      const ev = isPub ? variants.public : variants.private;
-      if (!ev) continue; // withheld from the public zone
+  /**
+   * What this client should receive for one retained broadcast, or null if the gates
+   * exclude it.
+   *
+   * THE single place the per-client gates live. Live broadcast and resume both go through
+   * it, so resume cannot drift into a second, subtly different delivery path — the risk
+   * the design named as this change's highest-stakes part.
+   */
+  private payloadFor(entry: TailEntry, client: Client): string | null {
+    const isPub = this.isPublicClient(client);
+    if (entry.kind === "event") {
+      const ev = isPub ? entry.variants!.public : entry.variants!.private;
+      if (!ev) return null; // withheld from the public zone
       // A display event must clear BOTH gates: its zone reaches the window, and the
       // window actually has a box for its category. The category gate matters even
       // apart from redaction: a `both` event no box asked for would otherwise sit on
       // a window's wire unrendered — data on the socket is data delivered.
-      if (!zoneMatches(ev.zone, c.zones)) continue;
-      if (!c.cats.has(ev.category)) continue;
-      c.res.write(isPub ? pubStr! : privStr);
+      if (!zoneMatches(ev.zone, client.zones)) return null;
+      if (!client.cats.has(ev.category)) return null;
+      return `data: ${JSON.stringify(ev)}\n\n`;
     }
+    const m = entry.msg!;
+    if (entry.kind === "show") {
+      const zone = m.zone as Zone | undefined;
+      if (zone && !zoneMatches(zone, client.zones)) return null;
+      return `data: ${JSON.stringify(m)}\n\n`;
+    }
+    if (entry.kind === "pending") {
+      if (!zoneMatches(m.zone as Zone, client.zones)) return null;
+      if (!client.cats.has(m.category as string)) return null;
+      return `data: ${JSON.stringify(m)}\n\n`;
+    }
+    if (entry.kind === "stage-expired") {
+      if (isPub) return null; // a stage-expired marker is private-only
+      if (!client.cats.has(m.category as string)) return null;
+      return `data: ${JSON.stringify(m)}\n\n`;
+    }
+    // layout: targets one route
+    if (m.route !== client.route) return null;
+    return `data: ${JSON.stringify(m)}\n\n`;
+  }
+
+  /**
+   * Assign the next resume id, retain the broadcast, and deliver it to every client the
+   * gates admit.
+   *
+   * Heartbeats deliberately do NOT come through here: they arrive once a second, would
+   * evict the tail within seconds, and carry nothing worth resuming. Leaving them without
+   * an id also means a client's `Last-Event-ID` stays pinned to the last real broadcast.
+   */
+  private emit(entry: Omit<TailEntry, "seq">): void {
+    const full: TailEntry = { ...entry, seq: ++this.seq };
+    this.tail.push(full);
+    if (this.tail.length > this.tailN) this.tail.shift();
+    for (const c of this.clients) {
+      const payload = this.payloadFor(full, c);
+      if (payload) c.res.write(`id: ${this.runId}:${full.seq}\n${payload}`);
+    }
+  }
+
+  /** Broadcast a display event's zone-appropriate variant to each client. */
+  private broadcastEvent(variants: EventVariants): void {
+    this.emit({ kind: "event", variants });
   }
 
   /**
@@ -696,11 +773,7 @@ export class WallServer {
 
   /** Broadcast a `show` command, filtered by its zone (an absent zone reaches everyone). */
   private broadcastShow(show: ShowCommand): void {
-    const payload = `data: ${JSON.stringify(show)}\n\n`;
-    for (const c of this.clients) {
-      if (show.zone && !zoneMatches(show.zone, c.zones)) continue;
-      c.res.write(payload);
-    }
+    this.emit({ kind: "show", msg: show as unknown as Record<string, unknown> });
   }
 
   /** Send the current display state to a freshly-connected client (its zones + categories only). */
@@ -769,7 +842,12 @@ export class WallServer {
     const path = url.pathname;
 
     if (path === "/events") {
-      this.handleSse(url, res);
+      // `Last-Event-ID` is the browser's own reconnect cursor — it re-presents the last
+      // `id:` it saw with no client code involved. The query parameter is the escape hatch
+      // for a non-browser client (and for the tests).
+      const header = req.headers["last-event-id"];
+      const lastEventId = (Array.isArray(header) ? header[0] : header) ?? url.searchParams.get("lastEventId") ?? undefined;
+      this.handleSse(url, res, lastEventId);
       return;
     }
     if (path === "/api/bootstrap") {
@@ -780,7 +858,17 @@ export class WallServer {
       // connects after a switch bootstraps into the new geometry. Boxes are unchanged.
       const override = this.layoutOverrides.get(route);
       const shaped = override ? { ...win, layout: override } : win;
-      return this.json(res, { window: publicWindowShape(shaped), categories: this.opts.registry.list() });
+      // The heartbeat interval is advertised so the client can derive its
+      // stream-liveness threshold from it rather than hardcode a second copy
+      // (wall-stream-recovery D4). Zero means this wall sends no heartbeats at all (no
+      // runtime dir to watch), which is not the same as a dead stream — the client must
+      // be able to tell those apart or it would report every fake-feed wall as broken.
+      const heartbeatMs = this.opts.runtimeDir ? (this.opts.heartbeatMs ?? 1000) : 0;
+      return this.json(res, {
+        window: publicWindowShape(shaped),
+        categories: this.opts.registry.list(),
+        heartbeatMs,
+      });
     }
     if (path === "/media") {
       return this.serveMedia(res, url.searchParams.get("src") ?? "");
@@ -790,7 +878,27 @@ export class WallServer {
     this.serveFile(res, join(this.opts.publicDir, "." + path));
   }
 
-  private handleSse(url: URL, res: ServerResponse): void {
+  /**
+   * Can we give this client exactly what it missed?
+   *
+   * Only when the id names THIS run and the tail still reaches back that far. Anything
+   * else — another run, an evicted position, a malformed or absent header — is
+   * unsatisfiable, and the honest answer is a full replay rather than a silent gap.
+   */
+  private resumeFrom(lastEventId: string | undefined): TailEntry[] | null {
+    if (!lastEventId) return null;
+    const sep = lastEventId.lastIndexOf(":");
+    if (sep < 0) return null;
+    if (lastEventId.slice(0, sep) !== this.runId) return null; // a different server run
+    const from = Number(lastEventId.slice(sep + 1));
+    if (!Number.isFinite(from)) return null;
+    if (from >= this.seq) return []; // already current — nothing missed
+    // Retained back far enough? The oldest entry must be no newer than the next one owed.
+    if (!this.tail.length || this.tail[0].seq > from + 1) return null;
+    return this.tail.filter((e) => e.seq > from);
+  }
+
+  private handleSse(url: URL, res: ServerResponse, lastEventId?: string): void {
     const win = this.windowFor(url.searchParams.get("route") ?? "/");
     if (!win) return this.notFound(res);
     res.writeHead(200, {
@@ -802,7 +910,26 @@ export class WallServer {
     const cats = windowCats(win.boxes);
     const client: Client = { res, route: win.route, zones: win.zones, cats };
     this.clients.add(client);
-    this.replay(client);
+
+    const missed = this.resumeFrom(lastEventId);
+    if (missed) {
+      // Resume: only the span this client did not get, through the SAME gates the live
+      // broadcast used. Its display ends up identical to a client that never dropped.
+      for (const entry of missed) {
+        const payload = this.payloadFor(entry, client);
+        if (payload) res.write(`id: ${this.runId}:${entry.seq}\n${payload}`);
+      }
+      if (this.opts.runtimeDir) {
+        res.write(`data: ${JSON.stringify(this.computeHeartbeat(Date.now()))}\n\n`);
+      }
+    } else {
+      // Fallback (D2): a full state replay, announced as such. The client REBUILDS its
+      // lanes from it rather than appending, because a full replay legitimately repeats
+      // what the client may still be showing. Announcing it is what keeps the branch
+      // honest — it is the one most likely to be optimized away later.
+      res.write(`data: ${JSON.stringify({ kind: "replay", mode: "full" })}\n\n`);
+      this.replay(client);
+    }
     res.on("close", () => this.clients.delete(client));
   }
 

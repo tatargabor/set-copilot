@@ -20,6 +20,23 @@ rename, no dead region) are already folded into that change and are **not** repe
    the left text/narration box stops refreshing and freezes on a terminal line, while graph/
    chart draws keep working. → Investigate the `live-narration` / `wall-liveness` stream
    lifecycle; a terminal message must not wedge the lane.
+
+   **Status 2026-07-29 (`wall-stream-recovery` applied): NOT REPRODUCED — still open, now
+   observable.** Attempted against a real wall driven through a real browser over CDP: a
+   terminal-sounding narration line ("Ezzel készen vagyunk, a megbeszélés véget ért…"),
+   then follow-up lines — all rendered. Repeated with an empty text, a bare "Vége.", an
+   8 KB line, and "Rendben, ennyi volt mára — a wall leáll."; the lane kept rendering every
+   subsequent event. So no *content* of an event puts a text box into a non-accepting state
+   in the current code.
+
+   What changed is that the next report will arrive with evidence. The client now judges
+   the transport from heartbeat **absence**, so "the stream died and everything you see is
+   stale" shows as `⛔ nincs kapcsolat a fallal` instead of looking identical to a quiet
+   meeting. That makes the two candidate explanations distinguishable from the wall itself:
+   if the strip says disconnected, it was #2 (the transport) all along; if the strip says
+   listening while the box does not update, it is a genuine render-side wedge and the
+   reproduction should target the box, not the stream. **Do not close this item on the
+   strength of the non-reproduction** — ask for the strip's state next time it happens.
 2. **SSE client does not auto-reconnect.** After a drop the wall goes stale (observed ~13 min)
    and only a hard reload recovers; box/category changes also need a reload. The server sends
    `retry: 2000` but the client never re-bootstraps. → Client reconnect + re-bootstrap on SSE
