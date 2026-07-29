@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 // The client's pure logic lives in a browser-loadable ES module; import it here
 // directly so the same code the browser runs is what the test exercises.
-import { boxesForCategory, connectionState, gridTemplate, renderForEvent, zoneMatches } from "./public/wall-core.mjs";
+import {
+  applyViewportOverride, boxesForCategory, connectionState, gridTemplate, MIN_TRACK_SHARE,
+  renderForEvent, stripState, zoneMatches,
+} from "./public/wall-core.mjs";
 
 const stacked = { id: "stacked", areas: [["pinned"], ["stream"], ["canvas"]] };
 const boxes = [
@@ -79,6 +82,100 @@ describe("gridTemplate", () => {
     expect(t.gridTemplateAreas).toBe(`"szöveg prezentáció"`);
     expect(t.gridTemplateColumns).toBe("1fr 1fr");
     expect(t.gridTemplateRows).toBe("1fr"); // from the scroll box in the row
+  });
+});
+
+describe("applyViewportOverride (wall-viewport-and-activity)", () => {
+  const layout = {
+    id: "három-régió",
+    areas: [["szöveg", "prezentáció"], ["szöveg", "kitűzött"]],
+    columns: ["1fr", "1fr"],
+    rows: ["2fr", "1fr"],
+  };
+  const template = () => gridTemplate(layout, []);
+  const tracks = (s: string) => s.trim().split(/\s+/).map((t) => parseFloat(t));
+
+  it("applies the viewer's proportions to both axes", () => {
+    const t = applyViewportOverride(template(), { layoutId: "három-régió", columns: [1.4, 0.6], rows: [2.5, 0.5] }, "három-régió");
+    // Shares, not the raw numbers: `fr` is relative, so 1.4/0.6 and 0.7/0.3 are the same
+    // geometry. Asserting the ratio is asserting what the viewer actually sees.
+    const [c1, c2] = tracks(t.gridTemplateColumns);
+    expect(c1 / (c1 + c2)).toBeCloseTo(1.4 / 2, 3);
+    const [r1, r2] = tracks(t.gridTemplateRows);
+    expect(r1 / (r1 + r2)).toBeCloseTo(2.5 / 3, 3);
+    // The arrangement itself is untouched — an override is track sizes, nothing else.
+    expect(t.gridTemplateAreas).toBe(template().gridTemplateAreas);
+  });
+
+  it("leaves an axis the override does not mention at its declared proportions", () => {
+    const t = applyViewportOverride(template(), { layoutId: "három-régió", columns: [1.4, 0.6] }, "három-régió");
+    expect(t.gridTemplateRows).toBe("2fr 1fr");
+  });
+
+  it("rejects an override made against a DIFFERENT layout (D2)", () => {
+    // A runtime layout switch changes what the tracks mean; a translated override would be
+    // a geometry nobody chose.
+    const t = applyViewportOverride(template(), { layoutId: "stacked", columns: [1.4, 0.6] }, "három-régió");
+    expect(t).toEqual(template());
+  });
+
+  it("rejects an override whose track count no longer matches the layout", () => {
+    const t = applyViewportOverride(template(), { layoutId: "három-régió", columns: [1, 1, 1] }, "három-régió");
+    expect(t.gridTemplateColumns).toBe("1fr 1fr");
+  });
+
+  it("rejects a malformed track list rather than emitting broken CSS", () => {
+    for (const columns of [[1, NaN], [1, -2], [1, "2fr"], []]) {
+      const t = applyViewportOverride(template(), { layoutId: "három-régió", columns }, "három-régió");
+      expect(t.gridTemplateColumns).toBe("1fr 1fr");
+    }
+  });
+
+  it("clamps a region dragged toward zero so it can never collapse", () => {
+    const t = applyViewportOverride(template(), { layoutId: "három-régió", columns: [1, 0] }, "három-régió");
+    const [c1, c2] = tracks(t.gridTemplateColumns);
+    // A collapsed region takes its content AND its own drag handle with it — there would be
+    // nothing left to grab to bring it back.
+    expect(c2 / (c1 + c2)).toBeGreaterThanOrEqual(MIN_TRACK_SHARE - 1e-6);
+    expect(c1).toBeGreaterThan(c2);
+  });
+
+  it("clamps at the other end too — the far region survives the opposite drag", () => {
+    const t = applyViewportOverride(template(), { layoutId: "három-régió", columns: [0, 1] }, "három-régió");
+    const [c1, c2] = tracks(t.gridTemplateColumns);
+    expect(c1 / (c1 + c2)).toBeGreaterThanOrEqual(MIN_TRACK_SHARE - 1e-6);
+    expect(c2).toBeGreaterThan(c1);
+  });
+
+  it("keeps every track above the floor even when several are starved at once", () => {
+    const wide = { id: "w", areas: [["a", "b", "c"]], columns: ["1fr", "1fr", "1fr"] };
+    const t = applyViewportOverride(gridTemplate(wide, []), { layoutId: "w", columns: [0, 0, 5] }, "w");
+    const ts = tracks(t.gridTemplateColumns);
+    const sum = ts.reduce((a, b) => a + b, 0);
+    for (const v of ts) expect(v / sum).toBeGreaterThanOrEqual(MIN_TRACK_SHARE - 1e-6);
+  });
+
+  it("cannot reach a box — it takes a template, not a window (structural, D3)", () => {
+    // The guarantee "an override affects geometry only" is enforced by the signature, not
+    // by discipline. If someone later passes a window in here to make a box-aware decision,
+    // this test is where the intent is written down.
+    expect(applyViewportOverride.length).toBe(3);
+    const boxes = [{ position: "szöveg", behavior: "scroll", cats: ["narráció"], pacing: { minDwellMs: 1 } }];
+    const before = JSON.stringify(boxes);
+    applyViewportOverride(gridTemplate(layout, boxes), { layoutId: "három-régió", columns: [3, 1] }, "három-régió");
+    expect(JSON.stringify(boxes)).toBe(before);
+  });
+
+  it("passes the template through untouched when there is no override", () => {
+    for (const o of [null, undefined, {}, "nope"]) {
+      expect(applyViewportOverride(template(), o, "három-régió")).toEqual(template());
+    }
+  });
+
+  it("does not mutate the template it was given", () => {
+    const t = template();
+    applyViewportOverride(t, { layoutId: "három-régió", columns: [3, 1] }, "három-régió");
+    expect(t.gridTemplateColumns).toBe("1fr 1fr");
   });
 });
 
@@ -173,5 +270,69 @@ describe("connectionState (wall-stream-recovery)", () => {
       connectionState({ ...healthy, readyState: CLOSED }).state,
     ]);
     expect(states).toEqual(new Set(["listening", "quiet", "dead", "disconnected"]));
+  });
+});
+
+describe("stripState (wall-viewport-and-activity D6)", () => {
+  const hb = (mic: unknown, system: unknown, captureAlive = true) => ({ kind: "heartbeat", captureAlive, channels: { mic, system } });
+  const heard = (ms: number | null) => ({ present: true, lastHeardMsAgo: ms });
+
+  it("shows the mic active while the system channel is quiet — the difference the strip exists for", () => {
+    const s = stripState(hb(heard(300), heard(60_000)));
+    expect(s.mic.state).toBe("active");
+    expect(s.system.state).toBe("quiet");
+  });
+
+  it("shows both active when both are being heard", () => {
+    const s = stripState(hb(heard(100), heard(200)));
+    expect([s.mic.state, s.system.state]).toEqual(["active", "active"]);
+  });
+
+  it("reports an unused channel as ABSENT, never as quiet", () => {
+    // A dictation capture has no system channel. "Quiet" would read as a captured channel
+    // that has gone silent — i.e. a normal dictation looking like a broken meeting capture.
+    const s = stripState(hb(heard(100), { present: false, lastHeardMsAgo: null }));
+    expect(s.system.state).toBe("absent");
+    expect(s.mic.state).toBe("active");
+  });
+
+  it("reports a present channel that has said nothing yet as quiet, not absent", () => {
+    expect(stripState(hb(heard(100), heard(null))).system.state).toBe("quiet");
+  });
+
+  it("reports every channel stopped when the capture is gone", () => {
+    const s = stripState(hb(heard(100), heard(100), false));
+    expect([s.mic.state, s.system.state]).toEqual(["stopped", "stopped"]);
+  });
+
+  it("still reports an absent channel as absent when the capture stopped", () => {
+    // Absence is a fact about the capture's shape, not about its liveness — a dictation run
+    // that has ended still had no system channel.
+    const s = stripState(hb(heard(100), { present: false, lastHeardMsAgo: null }, false));
+    expect(s.system.state).toBe("absent");
+    expect(s.mic.state).toBe("stopped");
+  });
+
+  it("reports unknown on a disconnected stream rather than a remembered verdict", () => {
+    // Every age in a stale heartbeat is at least as old as the heartbeat itself. Painting a
+    // confident "active" from it is exactly what wall-stream-recovery exists to prevent.
+    const s = stripState(hb(heard(100), heard(100)), { connection: "disconnected" });
+    expect([s.mic.state, s.system.state]).toEqual(["unknown", "unknown"]);
+  });
+
+  it("reports unknown when the server sends no per-channel data (older server)", () => {
+    const s = stripState({ kind: "heartbeat", captureAlive: true, lastHeardMsAgo: 100 });
+    expect([s.mic.state, s.system.state]).toEqual(["unknown", "unknown"]);
+    expect(stripState(null).mic.state).toBe("unknown");
+  });
+
+  it("honours a caller-supplied quiet threshold instead of a second hardcoded copy", () => {
+    expect(stripState(hb(heard(5000), heard(5000)), { quietThresholdMs: 10_000 }).mic.state).toBe("active");
+    expect(stripState(hb(heard(5000), heard(5000)), { quietThresholdMs: 1000 }).mic.state).toBe("quiet");
+  });
+
+  it("carries the age through so the renderer can humanise it without re-deriving anything", () => {
+    expect(stripState(hb(heard(12_345), heard(null))).mic.msAgo).toBe(12_345);
+    expect(stripState(hb(heard(12_345), heard(null))).system.msAgo).toBeNull();
   });
 });

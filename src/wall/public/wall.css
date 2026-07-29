@@ -1,3 +1,8 @@
+/* Density reference: 1920×1080 (wall-viewport-and-activity D7). Every size below is
+   tuned for a wall seen from across a room on the operator's actual screen, not for a
+   development monitor — the type scale, the box padding, the line rhythm and the status
+   strip's own height are one budget, and the strip spends from the same pool as the
+   content it sits above. */
 :root {
   --bg: #0f1420;
   --panel: #161d2e;
@@ -6,6 +11,32 @@
   --muted: #8aa0c0;
   --accent: #4f8cff;
   --alert: #ff6b6b;
+  --ok: #4fd08a;
+
+  /* The density budget, in one place so a pass is a pass and not a per-component
+     negotiation. */
+  --gap: 8px;
+  --box-pad: 10px 12px;
+  --radius: 10px;
+  --font: 16px;
+  --font-sm: 13px;
+  --strip-pad: 3px 10px;
+}
+
+/* A projector in a bright room is the one place the dark wall loses. The palette is
+   already variables, so the light reading is a variable swap — same density, same
+   rhythm, same component sizes. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f6fb;
+    --panel: #ffffff;
+    --line: #d8e0ee;
+    --text: #17203a;
+    --muted: #5c6b87;
+    --accent: #2563eb;
+    --alert: #d92d20;
+    --ok: #17864a;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -15,7 +46,7 @@ html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font: var(--font)/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   /* Column so the always-visible status strip sits above the wall and the wall takes
      the rest — the strip is layout furniture, never a grid box (wall-liveness D2). */
   display: flex;
@@ -29,8 +60,11 @@ body {
 #wall {
   flex: 1 1 auto;
   min-height: 0;
-  gap: 10px;
-  padding: 10px;
+  gap: var(--gap);
+  padding: var(--gap);
+  /* The splitter handles are absolutely-positioned grid children, pulled outward over the
+     gap; without this they would be clipped at the wall's edge. */
+  position: relative;
 }
 
 /* Liveness status strip (wall-liveness D2): always present, three ranged states.
@@ -39,15 +73,16 @@ body {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  font-size: 13px;
+  gap: 10px;
+  padding: var(--strip-pad);
+  font-size: var(--font-sm);
   font-variant-numeric: tabular-nums;
   border-bottom: 1px solid var(--line);
   border-left: 3px solid var(--muted);
   background: var(--panel);
   color: var(--muted);
 }
+.status-label { flex: 0 0 auto; }
 .status-strip.status-listening { color: var(--text); border-left-color: var(--accent); }
 .status-strip.status-quiet { color: var(--muted); border-left-color: var(--muted); }
 .status-strip.status-dead {
@@ -74,11 +109,140 @@ body {
   .status-strip.status-disconnected { animation: none; }
 }
 
+/* Per-channel activity indicators (wall-viewport-and-activity D6). mic = "én",
+   system = "mások" — the project's load-bearing speaker primitive, finally visible in the
+   one place the operator already looks.
+
+   Read as a SHAPE first: a filled, pulsing bar is a channel being heard; a thin flat bar
+   is a channel that has gone quiet; a dashed outline is a channel that is not part of this
+   capture at all. The colour repeats the same fact for anyone close enough to see it, and
+   the tooltip spells it out — but none of the three requires reading a sentence, which is
+   the point at wall distance. */
+.chan-group { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.chan {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px 1px 5px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  line-height: 1.2;
+}
+.chan-icon { font-size: 12px; opacity: 0.85; }
+.chan-name { font-size: 11px; letter-spacing: 0.02em; }
+/* The bar carries the state; it is wide enough to read as a level from across a room. */
+.chan-bar {
+  width: 30px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+}
+
+.chan-active { color: var(--text); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.chan-active .chan-bar { background: var(--ok); animation: chan-pulse 1.1s ease-in-out infinite; }
+.chan-quiet { color: var(--muted); }
+.chan-quiet .chan-bar { height: 2px; background: var(--muted); opacity: 0.55; }
+/* Absent ≠ quiet: a dictation capture has no system channel, and drawing it as a silent
+   one would make a perfectly normal dictation read as a broken meeting capture. */
+.chan-absent { color: var(--muted); opacity: 0.5; }
+.chan-absent .chan-bar { background: none; border: 1px dashed var(--muted); height: 6px; }
+.chan-stopped { color: var(--alert); }
+.chan-stopped .chan-bar { background: var(--alert); opacity: 0.7; }
+.chan-unknown { color: var(--muted); opacity: 0.6; }
+.chan-unknown .chan-bar { background: repeating-linear-gradient(90deg, var(--muted) 0 3px, transparent 3px 6px); opacity: 0.5; }
+
+@keyframes chan-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .chan-active .chan-bar { animation: none; }
+}
+
+/* Reset-the-proportions escape hatch (wall-viewport-and-activity 2.4). It lives in the
+   strip because the strip is the one thing guaranteed to exist in every layout, and it is
+   hidden until an override actually exists — an undragged wall carries no extra chrome. */
+.viewport-reset {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.viewport-reset:hover { color: var(--text); border-color: var(--accent); }
+.viewport-reset[hidden] { display: none; }
+
+/* Splitter handles (wall-viewport-and-activity D1). Quiet until approached: a hairline
+   that thickens and picks up the accent on hover, so it is findable without competing
+   with the content on either side of it. They straddle the gap and occupy no track. */
+.splitter {
+  position: relative;
+  z-index: 4;
+  align-self: stretch;
+  justify-self: stretch;
+  background: transparent;
+}
+.splitter::after {
+  content: "";
+  position: absolute;
+  background: var(--line);
+  border-radius: 2px;
+  transition: background 120ms ease;
+}
+.splitter-v {
+  width: calc(var(--gap) + 6px);
+  justify-self: end;
+  margin-right: calc((var(--gap) + 6px) / -2 - var(--gap) / -2);
+  cursor: col-resize;
+}
+.splitter-v::after { top: 12px; bottom: 12px; left: 50%; width: 2px; transform: translateX(-50%); }
+.splitter-h {
+  height: calc(var(--gap) + 6px);
+  align-self: end;
+  margin-bottom: calc((var(--gap) + 6px) / -2 - var(--gap) / -2);
+  cursor: row-resize;
+}
+.splitter-h::after { left: 12px; right: 12px; top: 50%; height: 2px; transform: translateY(-50%); }
+.splitter:hover::after { background: var(--accent); }
+/* While dragging, the cursor must not flicker as the pointer crosses a box. */
+body.dragging-col, body.dragging-col * { cursor: col-resize !important; user-select: none; }
+body.dragging-row, body.dragging-row * { cursor: row-resize !important; user-select: none; }
+
+/* Graph scale controls (wall-viewport-and-activity D4): present only in a box holding a
+   graph, and marked while a manual scale is in effect so "why is this not re-fitting?"
+   has a visible answer. */
+.graph-controls {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 6;
+  display: flex;
+  gap: 4px;
+  opacity: 0.35;
+  transition: opacity 120ms ease;
+}
+.slot:hover .graph-controls, .graph-controls.manual { opacity: 1; }
+.graph-btn {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  min-width: 24px;
+  padding: 3px 5px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.graph-btn:hover { color: var(--text); border-color: var(--accent); }
+.graph-controls.manual .graph-btn:last-child { color: var(--accent); border-color: var(--accent); }
+
 .slot {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 14px;
+  border-radius: var(--radius);
+  padding: var(--box-pad);
   overflow: auto;
   min-height: 0;
   min-width: 0;
@@ -88,16 +252,20 @@ body {
 .slot-paced.fade { animation: fade 0.4s ease; }
 @keyframes fade { from { opacity: 0.35; } to { opacity: 1; } }
 
-/* Text lanes */
+/* Text lanes.
+   The stream lane carries the most content of any box, so it is where the density budget
+   is actually spent (6.2): a tighter rhythm between lines, and a timestamp that steps back
+   to give the words the width. The separator is a hairline in both themes — it has to
+   group lines without drawing a table. */
 .line {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  padding: 4px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  padding: 3px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
 }
 .line:last-child { border-bottom: 0; }
-.line .time { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.line .time { flex: 0 0 auto; color: var(--muted); font-size: 12px; opacity: 0.8; font-variant-numeric: tabular-nums; }
 .line .icon { flex: 0 0 auto; }
 /* A szövegsor belső szerkezete valódi elemekből épül (wall.js `appendBlocks`), ezért a
    `pre-wrap` a bekezdésre került: ott őrzi a sortörést, amit korábban az egész `.txt`-n
@@ -187,7 +355,7 @@ body {
 
 /* A pinned latest slot centers its single item (an alert line or a chart). */
 .slot-latest:not(.slot-paced) { display: flex; align-items: center; justify-content: center; }
-.slot-latest:not(.slot-paced) .line { border: 0; font-size: 17px; width: 100%; }
+.slot-latest:not(.slot-paced) .line { border: 0; font-size: 18px; width: 100%; }
 
 /* A kitűzött (pinned) régió — hivatkozás, nem folyam (wall-three-region-layout).
    Vizuálisan el kell válnia a görgő üzenetfolyamtól: az egyik azt mutatja, ami épp
@@ -205,7 +373,11 @@ body {
   background: color-mix(in srgb, var(--accent, #7aa2f7) 7%, var(--panel));
   border-color: color-mix(in srgb, var(--accent, #7aa2f7) 35%, var(--line));
 }
-.slot[data-area="kitűzött"] .line { font-size: 16px; align-items: flex-start; }
+/* The pinned region is reference material read at a glance, not a stream: it gets a step
+   up in size over the flowing lane, and its own tighter list rhythm so an agenda of six
+   points still fits without scrolling at 1920×1080 (6.2). */
+.slot[data-area="kitűzött"] .line { font-size: 17px; align-items: flex-start; }
+.slot[data-area="kitűzött"] .line .txt li + li { margin-top: 1px; }
 /* A kitűzött tartalom ideje nem érdekes — az számít, hogy ott van. */
 .slot[data-area="kitűzött"] .line .time { display: none; }
 

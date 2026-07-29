@@ -95,6 +95,13 @@ rename, no dead region) are already folded into that change and are **not** repe
 16. **Custom knowledge adapter can silently ignore `knowledge.sources`** (a project adapter
     hardcoded its domain dir). → Make `ctx.sources` the documented single source of truth, or
     validate/warn when an adapter never reads it.
+17. **A `##` heading in a wall text line renders literally** (`## Napirend` appears with the
+    hashes). Observed while reviewing the pinned region at 1920×1080 during
+    `wall-viewport-and-activity`. The text vocabulary in `text-format.mjs` is closed by
+    design — `text/bold/italic/code/paragraph/codeblock/bullets/numbers/table`, no heading —
+    so this is a *gap*, not a regression, and a producer writing markdown out of habit hits
+    it. → Either add a heading node type (an engine change, deliberately) or teach the
+    drawing contract that the pinned block leads with a **bold** line, not a heading.
 
 ## Product-shaped (not bugs — future direction)
 

@@ -13,10 +13,11 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 
 import type { CategoryRegistry } from "./categories.js";
+import { channelActivity, type ChannelActivitySet } from "./channels.js";
 import {
   type CanvasState, emptyCanvas, offerCandidate, nextSwap, commitSwap, overrideSwap,
 } from "./director.js";
@@ -51,6 +52,17 @@ const MIME: Record<string, string> = {
  * read out of the project.
  */
 const MEDIA_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
+
+/**
+ * How much of the transcript's tail the per-channel heartbeat reads (wall-viewport-and-activity).
+ *
+ * A meeting transcript grows to megabytes and this runs once a second, so the whole file is
+ * out of the question; the newest line per channel is near the end by definition. 256 KB is
+ * several thousand lines — far more than a one-sided stretch long enough to matter, and a
+ * channel whose newest line has fallen outside it reads as "nothing heard", which is the
+ * honest answer at that point anyway.
+ */
+const CHANNEL_TAIL_BYTES = 256 * 1024;
 
 /**
  * What the browser is told about a window.
@@ -193,6 +205,15 @@ export interface WallServerOptions {
    * mtime is the "last heard" clock; absent or missing → `null` (nothing heard yet).
    */
   transcriptPath?: string;
+  /**
+   * Path the *dictation* transcript would take for this runtime dir. Only used to tell a
+   * `--mic-only` capture apart from a meeting one: the capture records which file it
+   * writes in `capture.output`, and a match here is what makes the system channel report
+   * as **absent** rather than silent (wall-viewport-and-activity D5). Omitting it means a
+   * dictation capture's system channel reads as present-but-quiet — the pre-existing
+   * behavior, never a leak of anything.
+   */
+  dictationPath?: string;
   /** How often the liveness heartbeat is broadcast. Default 1000 ms. */
   heartbeatMs?: number;
   /**
@@ -384,11 +405,71 @@ export class WallServer {
 
   /** Build the current heartbeat from the capture PID + transcript freshness. */
   private computeHeartbeat(now: number): Heartbeat {
+    const active = this.activeTranscript();
     return {
       kind: "heartbeat",
       captureAlive: this.captureAlive(),
-      lastHeardMsAgo: this.lastHeardMsAgo(now),
+      lastHeardMsAgo: this.fileAgeMs(active, now),
+      channels: this.channelActivity(active, now),
     };
+  }
+
+  /**
+   * The transcript the RUNNING capture is actually writing.
+   *
+   * `capture.output` is written by the capture itself and is the only thing that knows
+   * whether this run is dictation or meeting mode — the same marker `stop` and `status`
+   * read. Following it (rather than the configured meeting path) is what keeps the
+   * heartbeat honest during a `--mic-only` run, where the configured path is a stale file
+   * from a previous meeting and its mtime would report an age from another session.
+   */
+  private activeTranscript(): string | undefined {
+    const dir = this.opts.runtimeDir;
+    if (dir) {
+      const marker = join(dir, "capture.output");
+      if (existsSync(marker)) {
+        try {
+          const p = readFileSync(marker, "utf-8").trim();
+          if (p) return p;
+        } catch { /* fall through to the configured path */ }
+      }
+    }
+    return this.opts.transcriptPath;
+  }
+
+  /**
+   * Per-channel activity for the heartbeat (D5).
+   *
+   * Reads only the TAIL of the transcript: a three-hour meeting is megabytes and this runs
+   * once a second, while the newest line per channel is by definition near the end. The
+   * window is large enough to hold both channels' newest lines through a long one-sided
+   * stretch; if a channel's newest line falls outside it, that channel reports "nothing
+   * heard" — which at that point is the honest reading anyway.
+   */
+  private channelActivity(path: string | undefined, now: number): ChannelActivitySet | undefined {
+    if (!path || !existsSync(path)) return undefined;
+    const micOnly = !!this.opts.dictationPath && path === this.opts.dictationPath;
+    try {
+      const size = statSync(path).size;
+      const start = Math.max(0, size - CHANNEL_TAIL_BYTES);
+      const fd = openSync(path, "r");
+      let buf: Buffer;
+      try {
+        buf = Buffer.alloc(size - start);
+        readSync(fd, buf, 0, buf.length, start);
+      } finally { closeSync(fd); }
+      // A mid-line start would yield one unparseable fragment; `channelActivity` skips it.
+      const lines = buf.toString("utf-8").split("\n");
+      return channelActivity(lines, { fileAgeMs: this.fileAgeMs(path, now), micOnly });
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Age of a file by mtime, or null when it does not exist / cannot be read. */
+  private fileAgeMs(path: string | undefined, now: number): number | null {
+    if (!path || !existsSync(path)) return null;
+    try { return Math.max(0, Math.round(now - statSync(path).mtimeMs)); } catch { return null; }
   }
 
   /** Is the capture process for this runtime dir alive? Same probe as `stop`/`poll`. */
@@ -400,13 +481,6 @@ export class WallServer {
     const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
     if (!Number.isFinite(pid)) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
-  }
-
-  /** Age of the newest transcript line (by mtime), or null if nothing heard yet. */
-  private lastHeardMsAgo(now: number): number | null {
-    const p = this.opts.transcriptPath;
-    if (!p || !existsSync(p)) return null;
-    try { return Math.max(0, Math.round(now - statSync(p).mtimeMs)); } catch { return null; }
   }
 
   /** Send a heartbeat to every connected client — liveness is zone-independent. */

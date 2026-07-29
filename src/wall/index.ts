@@ -115,7 +115,7 @@ export async function runWall(cfg: CopilotConfig, opts: RunWallOptions = {}): Pr
   let port = startPort;
   for (let attempt = 0; attempt < PORT_FALLBACK_TRIES; attempt++) {
     port = startPort + attempt;
-    const candidate = new WallServer({ port, windows, layouts: cfg.wall.layouts, registry, publicDir, projectRoot: cfg.projectRoot, redaction: cfg.wall.redaction, scrollHistory: cfg.wall.scrollHistory, runtimeDir: cfg.runtimeDir, transcriptPath: cfg.transcriptOutput, stagingTtlMs: cfg.wall.staging.ttlMs });
+    const candidate = new WallServer({ port, windows, layouts: cfg.wall.layouts, registry, publicDir, projectRoot: cfg.projectRoot, redaction: cfg.wall.redaction, scrollHistory: cfg.wall.scrollHistory, runtimeDir: cfg.runtimeDir, transcriptPath: cfg.transcriptOutput, dictationPath: cfg.dictationOutput, stagingTtlMs: cfg.wall.staging.ttlMs });
     candidate.addSource(jsonlTailSource(wallEventsPath(cfg)));
     if (opts.fakeFeed !== false) candidate.addSource(fakeFeedSource());
     try {

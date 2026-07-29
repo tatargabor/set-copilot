@@ -44,6 +44,91 @@ export function gridTemplate(layout, boxes = []) {
 }
 
 /**
+ * The smallest share of an axis a single region may be dragged down to.
+ *
+ * A region dragged to zero is not "small", it is *gone*: its content becomes unreachable
+ * and there is no handle left to drag it back, because the handle sits on a boundary that
+ * has collapsed onto the edge. 6% is small enough to be a deliberate "get this out of my
+ * way" and large enough to stay grabbable at 1920×1080 (~115px on the long axis).
+ */
+export const MIN_TRACK_SHARE = 0.06;
+
+/**
+ * Clamp a list of track weights into shares of 1, none below `min`.
+ *
+ * Water-filling rather than a per-value `Math.max`: raising a starved track has to take
+ * the space from somewhere, and taking it proportionally from the tracks that have room
+ * is what keeps the *other* boundaries where the viewer put them. Iterated because a
+ * donation can itself starve a donor; with 2–4 tracks it settles in one or two passes.
+ */
+function clampShares(values, min) {
+  const n = values.length;
+  if (!n) return values;
+  const floor = Math.min(min, 1 / n); // n tracks cannot all exceed 1/n
+  const total = values.reduce((a, b) => a + Math.max(0, b), 0);
+  if (!(total > 0)) return Array(n).fill(1 / n);
+  let shares = values.map((v) => Math.max(0, v) / total);
+  for (let pass = 0; pass < 8; pass++) {
+    const deficit = shares.reduce((a, s) => a + Math.max(0, floor - s), 0);
+    if (deficit <= 1e-9) break;
+    const donors = shares.map((s) => Math.max(0, s - floor));
+    const pool = donors.reduce((a, b) => a + b, 0);
+    if (pool <= 1e-9) return Array(n).fill(1 / n);
+    shares = shares.map((s, i) => (s < floor ? floor : s - deficit * (donors[i] / pool)));
+  }
+  return shares;
+}
+
+/** Parse a CSS track list ("1fr 2fr") into its track count. */
+function trackCount(list) {
+  return String(list || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** Render shares as an `fr` track list. `fr` is relative, so shares can go out as-is. */
+function toFrTracks(shares) {
+  return shares.map((s) => `${Number(s.toFixed(4))}fr`).join(" ");
+}
+
+/**
+ * Apply a viewer's viewport override to a derived grid template (wall-viewport-and-activity D3).
+ *
+ * An override is a per-viewer adjustment of the *track sizes* a window is rendered with —
+ * what a splitter drag produces. It is deliberately a pure function over a **template**,
+ * not over a window: it has no access to a box, so "the override affects geometry only" is
+ * structural rather than a promise in a comment. That is also why it takes `layoutId`
+ * separately instead of reaching into a layout object.
+ *
+ * Rejection is per axis and silent-but-total: a mismatched override leaves that axis at
+ * the layout's declared proportions. Two ways to mismatch, both real:
+ *
+ *  - **A different layout** (D2). A runtime layout switch changes what the tracks *mean*;
+ *    translating an old override onto new tracks would produce a geometry nobody chose.
+ *  - **A different track count.** The stored override outlived an edit to the layout. The
+ *    declared proportions are the only defensible fallback.
+ *
+ * @param {{gridTemplateAreas: string, gridTemplateRows: string, gridTemplateColumns: string}} template
+ * @param {{layoutId?: string, columns?: number[], rows?: number[]}|null|undefined} override
+ * @param {string} layoutId — the id of the layout `template` was derived from
+ */
+export function applyViewportOverride(template, override, layoutId) {
+  if (!override || typeof override !== "object") return template;
+  if (override.layoutId !== layoutId) return template;
+
+  const axis = (values, current) => {
+    if (!Array.isArray(values) || !values.length) return current;
+    if (values.length !== trackCount(current)) return current;
+    if (!values.every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)) return current;
+    return toFrTracks(clampShares(values, MIN_TRACK_SHARE));
+  };
+
+  return {
+    ...template,
+    gridTemplateColumns: axis(override.columns, template.gridTemplateColumns),
+    gridTemplateRows: axis(override.rows, template.gridTemplateRows),
+  };
+}
+
+/**
  * Which boxes subscribe to a category. Returns the matching box objects (a box
  * renders an event only if the event's category is in its `cats`), so one event
  * can fan out to several boxes or none.
@@ -116,4 +201,48 @@ export function connectionState(s) {
   // The "N perc óta" suffix is the caller's to add: humanising a duration is a rendering
   // concern, and keeping it out of here is what leaves this function DOM-free and testable.
   return { state: "quiet", label: "💤 csend" };
+}
+
+/** Default quiet threshold, shared by `connectionState` and `stripState`. */
+export const QUIET_THRESHOLD_MS = 4000;
+
+/**
+ * Per-channel strip state (wall-viewport-and-activity D6).
+ *
+ * `connectionState` answers "is this wall showing me anything real?"; this answers "who is
+ * being heard right now?". Two questions, kept apart, because the first one *gates* the
+ * second: when the stream is disconnected every channel age on screen is however old the
+ * last heartbeat was, and painting a confident "mic active" from a stale heartbeat is the
+ * exact failure `wall-stream-recovery` exists to prevent. So a disconnected wall reports
+ * `unknown`, not a remembered verdict.
+ *
+ * States, and why each is its own:
+ *  - `active`  — heard within the threshold.
+ *  - `quiet`   — captured, but nothing lately (or nothing yet).
+ *  - `absent`  — not part of this capture at all. A dictation run has no system channel,
+ *                and showing it as quiet would make a normal dictation look broken.
+ *  - `stopped` — the capture is gone; no channel is being listened to.
+ *  - `unknown` — we cannot say: no per-channel data (an older server) or a stale stream.
+ *
+ * @param {{captureAlive?: boolean, channels?: {mic?: object, system?: object}}|null} heartbeat
+ * @param {{quietThresholdMs?: number, connection?: string}} [opts]
+ * @returns {{mic: {state: string, msAgo: number|null}, system: {state: string, msAgo: number|null}}}
+ */
+export function stripState(heartbeat, opts = {}) {
+  const quiet = opts.quietThresholdMs ?? QUIET_THRESHOLD_MS;
+  const unknown = { state: "unknown", msAgo: null };
+
+  if (!heartbeat || opts.connection === "disconnected") return { mic: unknown, system: unknown };
+
+  const one = (ch) => {
+    if (!ch || typeof ch !== "object") return unknown;
+    if (ch.present === false) return { state: "absent", msAgo: null };
+    if (heartbeat.captureAlive === false) return { state: "stopped", msAgo: ch.lastHeardMsAgo ?? null };
+    const age = typeof ch.lastHeardMsAgo === "number" ? ch.lastHeardMsAgo : null;
+    if (age !== null && age < quiet) return { state: "active", msAgo: age };
+    return { state: "quiet", msAgo: age };
+  };
+
+  const chans = heartbeat.channels;
+  return { mic: one(chans?.mic), system: one(chans?.system) };
 }

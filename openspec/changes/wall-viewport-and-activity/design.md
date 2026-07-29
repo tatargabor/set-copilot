@@ -140,9 +140,15 @@ migrate and clearing them is a local action. Rollback is a revert.
 
 ## Open Questions
 
-- Where the "reset to declared proportions" and "return to auto-fit" affordances live —
-  a small control in the strip, a keyboard shortcut, or both. Decide during apply; the
-  spec only requires that they exist.
+- ~~Where the "reset to declared proportions" and "return to auto-fit" affordances live.~~
+  **Decided at apply time, and they landed in different places on purpose.** *Reset
+  proportions* is in the **status strip**, plus a double-click on any boundary: the strip is
+  the one piece of furniture guaranteed to exist in every window and every layout (the same
+  reason the liveness status lives there), so a layout that fills every position cannot hide
+  the escape hatch. It is hidden until an override exists. *Return to auto-fit* is a button
+  **in the graph pane itself**, because it is per-visual state — a strip control would have to
+  name which box it meant. No keyboard shortcut: the wall is a display, and the one machine
+  with a keyboard in front of it is the one that already has the mouse.
 - Whether the per-channel indicator should show a level (amplitude) rather than recency.
   Recency is what the heartbeat can honestly derive from the transcript; a level would need
   a new signal from capture. Out of scope, worth recording.

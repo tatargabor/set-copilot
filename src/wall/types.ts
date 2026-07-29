@@ -202,12 +202,32 @@ export interface ShowCommand {
  * so a stalled copilot can never make the wall look dead while capture is still running.
  * Server-only, exactly like `show`: an injected heartbeat from an event source is dropped.
  */
+/**
+ * One speaker channel's activity (wall-viewport-and-activity D5).
+ *
+ * `present: false` is **absent**, not quiet: a dictation capture never constructs the
+ * system client, and rendering "nothing heard on system" for it would make a perfectly
+ * normal dictation look like a broken meeting capture. That distinction is the reason
+ * this is an object rather than a bare age.
+ */
+export interface ChannelActivity {
+  /** Is this channel part of the running capture at all? */
+  present: boolean;
+  /** Age in ms of this channel's newest line; null when nothing has been heard on it. */
+  lastHeardMsAgo: number | null;
+}
+
 export interface Heartbeat {
   kind: "heartbeat";
   /** Is the capture process for this runtime dir alive (PID file present + reachable)? */
   captureAlive: boolean;
   /** Age in ms of the newest transcript line, or null if nothing has been heard yet. */
   lastHeardMsAgo: number | null;
+  /**
+   * Per-channel activity. Optional on the wire so an older client is unaffected — it reads
+   * the two fields above and ignores this one.
+   */
+  channels?: { mic: ChannelActivity; system: ChannelActivity };
 }
 
 /**

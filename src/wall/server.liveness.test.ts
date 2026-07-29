@@ -6,7 +6,7 @@
  */
 
 import http from "node:http";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -119,6 +119,87 @@ describe("liveness heartbeat", () => {
     s.ingest({ kind: "heartbeat", captureAlive: false, lastHeardMsAgo: 999 } as WireMessage);
     await sleep(20);
     // No extra heartbeat, and certainly not the injected captureAlive:false one.
+    expect(heartbeats(c).length).toBe(before);
+    c.close();
+  });
+
+  // ---- per-channel activity (wall-viewport-and-activity D5) ----
+
+  interface ChannelHb {
+    lastHeardMsAgo: number | null;
+    channels?: { mic: { present: boolean; lastHeardMsAgo: number | null }; system: { present: boolean; lastHeardMsAgo: number | null } };
+  }
+  const lastHb = (c: Sse) => heartbeats(c).at(-1) as ChannelHb;
+
+  /** A runtime dir whose capture writes `name`, with the given transcript lines. */
+  function dirWriting(name: string, lines: string[]): { dir: string; path: string } {
+    const dir = mkdtempSync(join(tmpdir(), "wall-chan-"));
+    writeFileSync(join(dir, "capture.pid"), String(process.pid));
+    const path = join(dir, name);
+    writeFileSync(path, lines.map((l) => `${l}\n`).join(""));
+    writeFileSync(join(dir, "capture.output"), path);
+    return { dir, path };
+  }
+  const tline = (ts: number, speaker: "mic" | "system") => JSON.stringify({ ts, speaker, text: "…", final: true });
+
+  it("carries per-channel activity derived from the transcript, both channels present", async () => {
+    const { dir, path } = dirWriting("transcript.jsonl", [tline(0, "system"), tline(30_000, "mic")]);
+    const s = await startServer({ runtimeDir: dir, transcriptPath: path, dictationPath: join(dir, "dictation.jsonl") });
+    const c = await connect(s.boundPort(), "/priv");
+    await sleep(60);
+
+    const hb = lastHb(c);
+    expect(hb.channels).toBeDefined();
+    expect(hb.channels!.mic.present).toBe(true);
+    expect(hb.channels!.system.present).toBe(true);
+    // The mic spoke last, so it is the fresher of the two by the 30s gap in the transcript.
+    expect(hb.channels!.system.lastHeardMsAgo! - hb.channels!.mic.lastHeardMsAgo!).toBeGreaterThanOrEqual(29_000);
+    c.close();
+  });
+
+  it("reports the system channel ABSENT for a mic-only capture", async () => {
+    // The capture records which file it writes; a dictation output is what makes this a
+    // one-channel run. Absent must not read as "captured but quiet".
+    const { dir, path } = dirWriting("dictation.jsonl", [tline(0, "mic"), tline(1000, "mic")]);
+    const s = await startServer({ runtimeDir: dir, transcriptPath: join(dir, "transcript.jsonl"), dictationPath: path });
+    const c = await connect(s.boundPort(), "/priv");
+    await sleep(60);
+
+    const hb = lastHb(c);
+    expect(hb.channels!.system).toEqual({ present: false, lastHeardMsAgo: null });
+    expect(hb.channels!.mic.present).toBe(true);
+    expect(typeof hb.channels!.mic.lastHeardMsAgo).toBe("number");
+    c.close();
+  });
+
+  it("follows the capture's OWN output file, not the configured meeting path", async () => {
+    // During a dictation run the configured meeting transcript is a stale file from another
+    // session; ageing off it would report a "last heard" from a meeting that ended hours ago.
+    const { dir, path } = dirWriting("dictation.jsonl", [tline(0, "mic")]);
+    const stale = join(dir, "transcript.jsonl");
+    writeFileSync(stale, `${tline(0, "mic")}\n`);
+    // Backdate the stale meeting transcript by an hour.
+    const old = Date.now() - 3_600_000;
+    utimesSync(stale, old / 1000, old / 1000);
+
+    const s = await startServer({ runtimeDir: dir, transcriptPath: stale, dictationPath: path });
+    const c = await connect(s.boundPort(), "/priv");
+    await sleep(60);
+    expect(lastHb(c).lastHeardMsAgo).toBeLessThan(60_000);
+    c.close();
+  });
+
+  it("still rejects an injected heartbeat now that it carries more", async () => {
+    const { dir } = runtimeDirWithCapture();
+    const s = await startServer({ runtimeDir: dir, heartbeatMs: 100_000 });
+    const c = await connect(s.boundPort(), "/priv");
+    await sleep(20);
+    const before = heartbeats(c).length;
+    s.ingest({
+      kind: "heartbeat", captureAlive: true, lastHeardMsAgo: 0,
+      channels: { mic: { present: true, lastHeardMsAgo: 0 }, system: { present: true, lastHeardMsAgo: 0 } },
+    } as WireMessage);
+    await sleep(20);
     expect(heartbeats(c).length).toBe(before);
     c.close();
   });
