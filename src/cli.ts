@@ -6,7 +6,9 @@
  *   init                     scaffold skills + config into the current project
  *   capture [--mic-only]     start audio capture + transcription
  *   stop                     stop the running capture (via PID file)
- *   transcript               stitch a raw transcript into readable .md + sentence .jsonl
+ *   transcript [--force]     stitch a raw transcript into readable .md + sentence .jsonl
+ *                            (skips inputs already recorded in the recovery ledger)
+ *   recovery <sub>           the recovery ledger: status [--json] | claim | mark | abandon
  *   status                   is capture running? how many lines captured?
  *   digest                   (re)build the knowledge index/context/digest
  *   prompt                   print the copilot policy (alert categories + instructions)
@@ -39,7 +41,11 @@ import {
 } from "./config.js";
 import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce } from "./handover.js";
 import {
-  formatStats, loadRedactions, parseSpeakerMap, resolveInputs, stitchFile,
+  appendEntry, doneEntry, fingerprintFile, isDone, isRecoveryStep, ledgerPath, makeEntry,
+  readLedger, stepStatus, RECOVERY_STEPS, STITCH_VERSION,
+} from "./recovery-ledger.js";
+import {
+  formatStats, loadRedactions, parseSpeakerMap, resolveInputs, stitchArtifactsExist, stitchFile,
 } from "./transcript-stitch-run.js";
 import { playTone } from "./tones.js";
 
@@ -61,6 +67,7 @@ async function main(): Promise<void> {
     }
     case "stop": return cmdStop(args.includes("--print"));
     case "transcript": return cmdTranscript(args);
+    case "recovery": return cmdRecovery(args);
     case "status": return cmdStatus();
     case "digest": {
       const { runDigest } = await import("./knowledge/run-digest.js");
@@ -242,7 +249,7 @@ async function cmdInit(global = false): Promise<void> {
     cpSync(src, join(skillsDest, name), { recursive: true });
     copied++;
   }
-  console.log(`✓ Installed ${copied} skills into ${skillsDest} (dictate, dd, ds, meeting-copilot)`);
+  console.log(`✓ Installed ${copied} skills into ${skillsDest} (dictate, dd, ds, meeting-copilot, transcript-recover, set-repair)`);
 
   // Install the wall-mirror Stop hook (wall-chat-mirror). It ENFORCES chat→wall mirroring
   // (the prompt mandate alone was measured to fall behind), and is self-gating: a no-op
@@ -261,6 +268,17 @@ async function cmdInit(global = false): Promise<void> {
       console.log(`✓ Installed wall-mirror Stop hook into ${join(claudeBase, "settings.json")}`);
     } else {
       console.log(`• wall-mirror Stop hook already registered — left untouched`);
+    }
+    // The recovery guard, registered the same way and for the same reason: a recovery
+    // review that is never recorded costs a re-read of a whole meeting. Also self-gating
+    // (`recovery.active`), so a session that is not recovering never sees it.
+    const guardCmd = global
+      ? `bash "${join(hooksDest, "recovery-guard.sh")}"`
+      : `bash "$CLAUDE_PROJECT_DIR/.claude/hooks/recovery-guard.sh"`;
+    if (registerStopHook(join(claudeBase, "settings.json"), guardCmd)) {
+      console.log(`✓ Installed recovery-guard Stop hook into ${join(claudeBase, "settings.json")}`);
+    } else {
+      console.log(`• recovery-guard Stop hook already registered — left untouched`);
     }
   }
 
@@ -487,8 +505,34 @@ function cmdTranscript(args: string[]): void {
     redactions: redactArg ? loadRedactions(redactArg) : undefined,
   };
 
-  let done = 0;
+  // Once fixed, do not fix again (recovery-ledger). A batch over an archive becomes
+  // re-runnable: the second pass does nothing, so adding one recording to a directory of
+  // 258 costs one stitch, not 259 — and a reviewed `.md` is not clobbered by a re-run.
+  const force = args.includes("--force");
+  const ledger = readLedger(ledgerPath(cfg));
+  let skipped = 0;
+  let stale = 0;
+  const todo: string[] = [];
   for (const input of inputs) {
+    if (force) { todo.push(input); continue; }
+    let fp: string;
+    try { fp = fingerprintFile(input); } catch { todo.push(input); continue; }
+    if (!isDone(ledger, fp, "stitch")) { todo.push(input); continue; }
+    skipped++;
+    // Staleness is REPORTED, never acted on: an auto-redo on a version bump turns a patch
+    // release into an unbounded bill across every project's archive. The operator decides.
+    const entry = doneEntry(ledger, fp, "stitch");
+    if ((entry?.version ?? 0) < STITCH_VERSION) stale++;
+  }
+
+  if (!todo.length) {
+    console.error(`[set-copilot] Nothing to do — ${skipped} transcript(s) already stitched. Use --force to redo.`);
+    if (stale) console.error(`[set-copilot] ${stale} of them were stitched under an older algorithm version (now v${STITCH_VERSION}).`);
+    return;
+  }
+
+  let done = 0;
+  for (const input of todo) {
     try {
       const result = stitchFile(input, cfg, opts);
       if (!result) { console.error(`[set-copilot] Nothing to stitch: ${input}`); continue; }
@@ -501,8 +545,203 @@ function cmdTranscript(args: string[]): void {
       console.error(`[set-copilot] Failed on ${input}: ${(err as Error).message}`);
     }
   }
-  if (inputs.length > 1) console.error(`[set-copilot] Stitched ${done}/${inputs.length} transcripts`);
+  if (inputs.length > 1 || skipped) {
+    console.error(`[set-copilot] Stitched ${done}/${todo.length} transcripts${skipped ? `, skipped ${skipped} already done` : ""}`);
+  }
+  if (stale) {
+    console.error(`[set-copilot] ${stale} skipped transcript(s) were stitched under an older algorithm version (now v${STITCH_VERSION}) — re-run with --force to redo them.`);
+  }
   if (!done) process.exit(1);
+}
+
+// ---- recovery ledger -------------------------------------------------------
+
+/**
+ * `set-copilot recovery <status|claim|mark|abandon>` — the ledger's operator surface.
+ *
+ * `mark` is deliberately not bookkeeping after the fact: it is the channel a review's
+ * findings are DELIVERED through, so skipping the record means failing to deliver the work.
+ * That is the same shape as `wall-emit` — the model supplies content, the engine owns the
+ * durable side effect — and it is what makes the correct path the easy one.
+ */
+async function cmdRecovery(args: string[]): Promise<void> {
+  const cfg = loadConfig();
+  const sub = args.find((a) => !a.startsWith("-")) ?? "status";
+  const rest = args.filter((a) => a !== sub);
+  const path = ledgerPath(cfg);
+
+  if (sub === "status") return cmdRecoveryStatus(cfg, rest, path);
+
+  const step = (flag(rest, "--step") ?? "review") as string;
+  if (!isRecoveryStep(step)) {
+    console.error(`[set-copilot] recovery: unknown step "${step}" — expected one of ${RECOVERY_STEPS.join(", ")}`);
+    process.exit(1);
+  }
+  const file = rest.find((a) => !a.startsWith("--") && a !== step);
+  if (!file || !existsSync(file)) {
+    console.error(`[set-copilot] recovery ${sub}: needs a transcript file that exists${file ? ` (not found: ${file})` : ""}`);
+    process.exit(1);
+  }
+  const fp = fingerprintFile(file);
+
+  if (sub === "claim") {
+    appendEntry(path, makeEntry(fp, step, "claimed", { path: file }));
+    console.log(`[set-copilot] claimed ${step} of ${file}`);
+    console.log(`[set-copilot] finish with: set-copilot recovery mark ${file} --step ${step} --findings-file <json>`);
+    return;
+  }
+
+  if (sub === "abandon") {
+    const reason = flag(rest, "--reason") ?? "no reason given";
+    appendEntry(path, makeEntry(fp, step, "abandoned", { path: file, reason }));
+    console.log(`[set-copilot] abandoned ${step} of ${file} (${reason}) — it returns to pending`);
+    return;
+  }
+
+  if (sub === "mark") {
+    const findingsFile = flag(rest, "--findings-file");
+    let payload = "";
+    if (findingsFile) {
+      payload = readFileSync(findingsFile, "utf-8");
+    } else {
+      try { payload = readFileSync(0, "utf-8"); } catch { payload = ""; }
+    }
+    let findings: unknown;
+    try { findings = JSON.parse(payload); } catch {
+      // The record cannot be written without the result it is supposed to carry — that is
+      // the point of routing delivery through `mark`. Recording a completion here with no
+      // findings would assert a review whose output went nowhere.
+      console.error(`[set-copilot] recovery mark: needs the findings as JSON (--findings-file <path>, or on stdin)`);
+      process.exit(1);
+    }
+    if (!Array.isArray(findings)) {
+      console.error(`[set-copilot] recovery mark: the findings must be a JSON array (use [] for "nothing was missed")`);
+      process.exit(1);
+    }
+    appendEntry(path, makeEntry(fp, step, "done", { path: file, outcome: { findings: findings.length } }));
+    console.log(`[set-copilot] recorded ${step} of ${file} — ${findings.length} finding(s)`);
+    return;
+  }
+
+  console.error(`[set-copilot] recovery: unknown subcommand "${sub}" — expected status, claim, mark or abandon`);
+  process.exit(1);
+}
+
+/** Read-only: appends nothing, stitches nothing. */
+function cmdRecoveryStatus(cfg: CopilotConfig, args: string[], path: string): void {
+  const inputArg = flag(args, "--input");
+  const inputs = inputArg ? resolveInputs(inputArg) : defaultRecoveryInputs(cfg);
+  const ledger = readLedger(path);
+
+  interface Row { file: string; stitch: string; review: string; version: number | null }
+  const rows: Row[] = [];
+  for (const file of inputs) {
+    let fp: string;
+    try { fp = fingerprintFile(file); } catch { continue; }
+    // A stitch the ledger has never heard of, whose artifacts are nonetheless on disk, is
+    // its own status — not "pending". It predates the ledger (or was written by another
+    // checkout), so its algorithm version is unknown and it is NOT counted as done either.
+    const stitch = stepStatus(ledger, fp, "stitch");
+    rows.push({
+      file,
+      stitch: stitch === "pending" && stitchArtifactsExist(file) ? "artifacts" : stitch,
+      review: stepStatus(ledger, fp, "review"),
+      version: doneEntry(ledger, fp, "stitch")?.version ?? null,
+    });
+  }
+  const dangling = rows.filter((r) => r.stitch === "claimed" || r.review === "claimed");
+  const hookInstalled = stopHookInstalled(cfg);
+
+  if (args.includes("--json")) {
+    // The machine shape the skills consume, so a skill never parses human text.
+    process.stdout.write(`${JSON.stringify({
+      ledger: path,
+      stitchVersion: STITCH_VERSION,
+      hookInstalled,
+      transcripts: rows,
+      pending: {
+        stitch: rows.filter((r) => r.stitch === "pending").map((r) => r.file),
+        review: rows.filter((r) => r.review === "pending").map((r) => r.file),
+      },
+      dangling: dangling.map((r) => ({ file: r.file, step: r.stitch === "claimed" ? "stitch" : "review" })),
+      artifactsOnly: rows.filter((r) => r.stitch === "artifacts").map((r) => r.file),
+      staleStitch: rows.filter((r) => r.stitch === "done" && (r.version ?? 0) < STITCH_VERSION).map((r) => r.file),
+    }, null, 2)}\n`);
+    return;
+  }
+
+  if (!rows.length) {
+    console.log(`[set-copilot] recovery: no transcripts found${inputArg ? ` for ${inputArg}` : ` under ${cfg.projectRoot}`}`);
+    return;
+  }
+  console.log(`ledger: ${path} (stitch algorithm v${STITCH_VERSION})`);
+  console.log(`enforcement hook: ${hookInstalled ? "installed" : "NOT installed — completion is not enforced in this project"}`);
+  for (const r of rows) {
+    const stale = r.stitch === "done" && (r.version ?? 0) < STITCH_VERSION ? ` (v${r.version})` : "";
+    console.log(`  ${r.stitch.padEnd(9)}${stale.padEnd(6)} ${r.review.padEnd(7)}  ${displayPath(cfg, r.file)}`);
+  }
+  const pendingStitch = rows.filter((r) => r.stitch === "pending").length;
+  const pendingReview = rows.filter((r) => r.review === "pending").length;
+  const onDisk = rows.filter((r) => r.stitch === "artifacts").length;
+  console.log(`\n${rows.length} transcript(s): ${pendingStitch} pending stitch, ${pendingReview} pending review`);
+  if (onDisk) {
+    console.log(`  ${onDisk} already have artifacts on disk with no ledger entry (stitched before the ledger; version unknown).`);
+  }
+  // Dangling claims are reported separately and prominently — never folded into "pending",
+  // because "someone started this and did not finish" is information, not an absence.
+  if (dangling.length) {
+    console.log(`\n⚠ ${dangling.length} unfinished claim(s) — resolve with \`recovery mark\` or \`recovery abandon\`:`);
+    for (const r of dangling) console.log(`  ${r.file}`);
+  }
+}
+
+/**
+ * A path to show the operator: project-relative when it IS under the project, absolute
+ * otherwise. `relative()` alone answers `../../../../../set-copilot/transcript.jsonl` for the
+ * global runtime dir — which reads like a project file, and is the one path a copy-paste is
+ * most likely to get wrong.
+ */
+function displayPath(cfg: CopilotConfig, file: string): string {
+  const rel = relative(cfg.projectRoot, file);
+  return !rel || rel.startsWith("..") ? file : rel;
+}
+
+/** Is a set-copilot Stop hook registered for this project (or globally)? */
+function stopHookInstalled(cfg: CopilotConfig): boolean {
+  for (const base of [join(cfg.projectRoot, ".claude"), join(homedir(), ".claude")]) {
+    const settings = join(base, "settings.json");
+    if (!existsSync(settings)) continue;
+    try {
+      const raw = readFileSync(settings, "utf-8");
+      if (raw.includes("recovery-guard.sh")) return true;
+    } catch { /* unreadable settings: treat as not installed */ }
+  }
+  return false;
+}
+
+/**
+ * Where to look for transcripts when `--input` is not given: every per-session runtime dir
+ * under the project. A recording filed by hand under a non-conventional name needs an
+ * explicit `--input` glob — the directory scan only knows the capture's own naming.
+ */
+function defaultRecoveryInputs(cfg: CopilotConfig): string[] {
+  const base = join(cfg.projectRoot, ".set", "copilot");
+  const found = new Set<string>();
+  for (const dir of [cfg.runtimeDir, ...listDirs(base)]) {
+    for (const f of resolveInputs(dir)) found.add(f);
+  }
+  return [...found].sort();
+}
+
+function listDirs(base: string): string[] {
+  if (!existsSync(base)) return [];
+  try {
+    return readdirSync(base)
+      .map((n) => join(base, n))
+      .filter((p) => { try { return statSync(p).isDirectory(); } catch { return false; } });
+  } catch {
+    return [];
+  }
 }
 
 // ---- wall lifecycle --------------------------------------------------------
@@ -711,7 +950,20 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    stitch a raw transcript back into sentences:
                                    readable .md + sentence-level .jsonl. Default
                                    input is this runtime dir's last transcript;
-                                   a dir/glob backfills a whole archive
+                                   a dir/glob backfills a whole archive. Inputs
+                                   already recorded in the recovery ledger are
+                                   SKIPPED; --force redoes them
+  set-copilot recovery status [--input <dir|glob>] [--json]
+                                   per transcript, per step: pending / done /
+                                   claimed-but-unfinished. Read-only
+  set-copilot recovery claim <file> --step review
+                                   mark an attempt BEFORE the expensive read; a
+                                   claim is never a completion
+  set-copilot recovery mark <file> --step review --findings-file <json>
+                                   deliver a review's findings AND record it, in
+                                   one act ([] means "nothing was missed")
+  set-copilot recovery abandon <file> --step review [--reason <text>]
+                                   resolve a claim without completing it
   set-copilot status               capture state + transcript line count
   set-copilot digest               (re)build knowledge index/context/digest
   set-copilot prompt               print the copilot policy the skill loads

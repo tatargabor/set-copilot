@@ -11,6 +11,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { CopilotConfig } from "./config.js";
 import { globToRegExp } from "./knowledge/sources.js";
+import { appendEntry, fingerprintFile, ledgerPath, makeEntry } from "./recovery-ledger.js";
 import { stitchText, type RedactionWindow, type StitchStats } from "./transcript-build.js";
 
 export interface StitchArtifacts {
@@ -26,6 +27,20 @@ export function artifactPaths(input: string, out?: string): { markdown: string; 
   const markdown = out ?? `${stem}.md`;
   const structured = `${markdown.replace(/\.md$/i, "")}-stitched.jsonl`;
   return { markdown, structured };
+}
+
+/**
+ * Are this input's artifacts already on disk?
+ *
+ * The ledger is advisory; the artifacts are the evidence. Every recording made before the
+ * ledger existed is stitched but unrecorded, and reporting those as untouched would be a
+ * plain falsehood about the disk — the majority reading, at that, since a project's whole
+ * back catalogue is in exactly this state. Both files must be present: a lone `.md` is an
+ * interrupted run, not a finished one.
+ */
+export function stitchArtifactsExist(input: string): boolean {
+  const paths = artifactPaths(input);
+  return existsSync(paths.markdown) && existsSync(paths.structured);
 }
 
 /**
@@ -51,6 +66,26 @@ export function stitchFile(
   const paths = artifactPaths(input, opts.out);
   writeFileSync(paths.markdown, result.markdown);
   writeFileSync(paths.structured, result.jsonl);
+
+  // Record the step HERE, not in the caller (recovery-ledger). The engine writes the ledger
+  // as a side effect of doing the work, so there is no caller opt-in to forget — which is
+  // the whole reason the record is not kept in a prompt. Nothing is recorded above: a
+  // failure throws and a no-op returned already, and neither did the work.
+  //
+  // A ledger write must never cost a stitch that succeeded: the artifacts on disk are the
+  // real evidence and the ledger is advisory, so a broken ledger degrades to redone work.
+  try {
+    appendEntry(
+      ledgerPath(cfg),
+      makeEntry(fingerprintFile(input), "stitch", "done", {
+        path: input,
+        outcome: { sentences: result.stats.sentences, guessed: result.stats.guessed, glued: result.stats.healed },
+      }),
+    );
+  } catch (err) {
+    console.error(`[set-copilot] could not record the stitch in the recovery ledger: ${(err as Error).message}`);
+  }
+
   return { input, markdown: paths.markdown, structured: paths.structured, stats: result.stats };
 }
 

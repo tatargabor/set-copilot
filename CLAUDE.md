@@ -88,6 +88,34 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   have no copy. A badly joined word boundary is visible and recoverable; a vanished dictation
   is not. Note `printTranscriptOnce` is exported from the library, so its output shape is
   public — an external caller that parsed it as JSONL wants the archived file instead.
+- **`src/recovery-ledger.ts`** — migration semantics for recovery. The valuable step is a model
+  *reading* a whole meeting to find what was said that never reached the notes, so it must run
+  **once per transcript, ever**. Two decisions carry that:
+
+  **The record is engine-owned, not prompt-owned.** `stitchFile` appends its own entry; the
+  caller cannot forget to. A skill told to "remember you already reviewed this" eventually will
+  not, and this repo already paid for that lesson once — the chat→wall mirror began as a prompt
+  mandate, measurably fell behind in a live meeting, and became a `Stop` hook. A review is worse
+  than a mirror line: forgetting means re-reading a whole meeting, or losing the knowledge twice
+  if a stale status is believed. So `recovery mark` is not bookkeeping *after* the work — it is
+  how findings are **delivered** (`--findings-file`), and there is deliberately no path that
+  produces findings without writing the record. `hooks/recovery-guard.sh` closes the rest: an
+  open claim blocks the turn (exit 2, stderr fed back — the verified Stop contract). It **never**
+  marks a review complete on the caller's behalf; asserting a review that did not happen is the
+  one failure that loses knowledge silently. The Stop input carries no `stop_hook_active`, so
+  re-entrance is bounded by a nudge counter — three blocks, then the turn ends loudly with the
+  claim still dangling.
+
+  **Identity is a content fingerprint, never a path.** The handover renames every file it
+  archives and recordings get copied between repos. SHA-256 also answers the awkward cases for
+  free: two copies are one transcript, edited content is a new one. The stitch **version** is
+  recorded but never triggers a redo — the algorithm changed twice in one session, and
+  redo-when-stale would turn a patch release into an unbounded model-pass bill across every
+  archive. Staleness is *reported*; `--force` is the operator's. A claim is its own state,
+  distinct from both pending and done, because "started and not finished" is information.
+
+  The ledger is advisory by construction: missing → everything pending, a corrupt line skipped,
+  the artifacts on disk are the real evidence. Losing it costs redone work, never data.
 - **`src/capture.ts`** — wires the above together; also owns the runtime-dir invariants (below).
 - **`src/poll.ts`** — long-poll consumed by the meeting-copilot Monitor loop. Tracks a byte-independent line offset in `poll-offset`, dedups mic/system echo, returns early on an urgent/question/silence event, and emits `{"type":"capture-dead"}` when the capture PID is gone.
 - **`src/config.ts`** — resolution order (later wins): defaults → `~/.config/set-copilot/set-copilot.config.json` → project `set-copilot.config.json` → env (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, …). Nested sections merge key by key. `SONIOX_API_KEY` comes only from env / project `.env` / user `.env` — never the committed config.
@@ -163,7 +191,9 @@ Two rules are load-bearing and were each fixed after a real failure; don't regre
 
 ### Skills
 
-`skills/{ds,dd,dictate,meeting-copilot}/SKILL.md` are shipped in the npm package and copied by `set-copilot init` into `.claude/skills/` (or `~/.claude/skills/` with `--global`). They are *prompts*, not code: they invoke the CLI and define how Claude reacts to transcript batches. Mechanics (the poll loop, the output shape, the phase order) belong in `meeting-copilot/SKILL.md`; *judgement* (what is worth speaking up about) belongs in `copilot.alerts` / `copilot.instructions` so a project can change it without forking the skill.
+`skills/{ds,dd,dictate,meeting-copilot,transcript-recover,set-repair}/SKILL.md` are shipped in the npm package and copied by `set-copilot init` into `.claude/skills/` (or `~/.claude/skills/` with `--global`). They are *prompts*, not code: they invoke the CLI and define how Claude reacts to transcript batches. Mechanics (the poll loop, the output shape, the phase order) belong in `meeting-copilot/SKILL.md`; *judgement* (what is worth speaking up about) belongs in `copilot.alerts` / `copilot.instructions` so a project can change it without forking the skill.
+
+`transcript-recover` and `set-repair` are two halves of recovery, split because their **costs** differ. `set-repair` is mechanical, cheap, safe to run often: orphaned `capture.pid`, a transcript nothing ever handed over (a real project held a 539-line one — an entire meeting — found by accident), a stale `wall.pid`, an archive with no stitched artifacts. It never repairs by a new mechanism — an unconsumed transcript is handed over by `stop`, reusing the one `renameSync` — and reports anything destructive rather than running it. `transcript-recover` is a *content* pass costing a model read per transcript, and it ends by handing off in the other direction. `doctor` probes the audio chain; `set-repair` inspects runtime state; they do not overlap.
 
 ## Positioning — why this exists next to `/voice`
 

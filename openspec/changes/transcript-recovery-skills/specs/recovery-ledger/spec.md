@@ -155,10 +155,11 @@ repeated work, never data.
 - **WHEN** the ledger contains an unparseable line
 - **THEN** that line is skipped and the remaining entries are honoured
 
-#### Scenario: A missing ledger means everything is pending
+#### Scenario: A missing ledger costs repeated work, never data
 
 - **WHEN** no ledger exists
-- **THEN** every transcript is reported as pending and the run proceeds normally
+- **THEN** no transcript is treated as done and the run proceeds normally, redoing the
+  mechanical work
 
 #### Scenario: History is preserved across re-runs
 
@@ -181,3 +182,12 @@ usable both by an operator reading it and by a skill deciding what work remains.
 
 - **WHEN** status is requested
 - **THEN** no transcript is stitched and no ledger entry is appended
+
+#### Scenario: Work the ledger never saw is not reported as untouched
+
+The ledger is advisory; the artifacts are the evidence. Every recording made before the ledger
+existed is stitched but unrecorded, and that is the majority state of any real archive.
+
+- **WHEN** a transcript's stitch artifacts are on disk and the ledger has no entry for it
+- **THEN** it is reported under its own state — neither pending nor done, since its algorithm
+  version is unknown — and its review status is unaffected

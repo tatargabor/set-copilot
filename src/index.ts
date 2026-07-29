@@ -26,6 +26,12 @@ export {
   type StitchResult, type StitchStats, type RedactionWindow,
 } from "./transcript-build.js";
 export { stitchFile, artifactPaths, type StitchArtifacts } from "./transcript-stitch-run.js";
+export {
+  fingerprintFile, ledgerPath, readLedger, appendEntry, makeEntry, entriesFor,
+  stepStatus, isDone, doneEntry, danglingClaims, isRecoveryStep,
+  RECOVERY_STEPS, STITCH_VERSION,
+  type LedgerEntry, type RecoveryStep, type EntryState, type StepStatus,
+} from "./recovery-ledger.js";
 export type {
   KnowledgeAdapter,
   KnowledgeAdapterFactory,
