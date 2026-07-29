@@ -13,7 +13,7 @@
  * operator, and only one of them prints a reason.
  */
 
-import type { ResolvedBox, ResolvedWindow, WallBox, WallLayout, WallWindow } from "./types.js";
+import type { Audience, ResolvedBox, ResolvedWindow, WallBox, WallLayout, WallWindow } from "./types.js";
 
 /** The stacked, one-column arrangement the wall had before layouts existed (design D9). */
 export const STACKED_LAYOUT_ID = "stacked";
@@ -82,6 +82,47 @@ function badSpan(layout: WallLayout): string | null {
   return null;
 }
 
+/**
+ * Decide who is watching this window — FAIL CLOSED (wall-public-surface D1/D2).
+ *
+ * Every public-zone protection keys off this: which redacted variant is broadcast, which
+ * accumulation slice is replayed, whether `stage-expired` is suppressed, how a `show` is
+ * zoned. It used to be INFERRED as `!zones.includes("private")`, which conflated "what may
+ * this window display?" with "is an audience looking at it?" — so widening a public
+ * window's zones to show more silently turned redaction off in front of a room.
+ *
+ * Three rules, all pointing the same way:
+ *
+ * 1. Absent or unreadable → `"public"`. The protected reading. Note this INVERTS the old
+ *    inference, where an unrecognized zone list yielded "not public → no redaction".
+ * 2. `"operator"` plus no `private` zone is a contradiction the old code could not express;
+ *    it warns and resolves public, because an operator view that renders no private content
+ *    is far more likely to be a mislabelled public wall than a deliberate configuration.
+ * 3. A project config predating this field gets rule 1 — so a custom private view becomes
+ *    MORE redacted than before. That is the deliberate direction: a wall that redacts
+ *    content it did not need to is an annoyance; a wall that failed to redact is the thing
+ *    this exists to prevent. The warning names the window and the one-field fix.
+ */
+function resolveAudience(win: WallWindow, warn: (msg: string) => void): Audience {
+  const declared = win.audience;
+  if (declared !== "public" && declared !== "operator") {
+    if (declared !== undefined) {
+      warn(`[set-copilot] wall: window "${win.name}" declares an unknown audience ${JSON.stringify(declared)} — treating it as PUBLIC (redaction on). Use "public" or "operator".`);
+    } else if (!win.zones.includes("private")) {
+      // A window that shows no private content and declares nothing: public either way,
+      // under both the old inference and the new default. Nothing to warn about.
+    } else {
+      warn(`[set-copilot] wall: window "${win.name}" renders private-zone events but declares no audience — treating it as PUBLIC (redaction on, private events withheld). Add \`"audience": "operator"\` if this is your own view.`);
+    }
+    return "public";
+  }
+  if (declared === "operator" && !win.zones.includes("private")) {
+    warn(`[set-copilot] wall: window "${win.name}" declares audience "operator" but renders no private zone — resolving as PUBLIC (the protected reading).`);
+    return "public";
+  }
+  return declared;
+}
+
 /** Build the implicit one-column layout a legacy `slots` window resolves onto. */
 function stackedLayoutFor(areas: string[]): WallLayout {
   return { id: STACKED_LAYOUT_ID, areas: areas.map((a) => [a]) };
@@ -99,7 +140,7 @@ export function resolveWindow(
   layouts: WallLayout[],
   warn: (msg: string) => void = console.warn,
 ): ResolvedWindow | null {
-  const base = { name: win.name, route: win.route, zones: win.zones };
+  const base = { name: win.name, route: win.route, zones: win.zones, audience: resolveAudience(win, warn) };
 
   // Legacy form: a slot list becomes a stacked layout whose positions are the areas.
   if (win.slots && !win.layout) {

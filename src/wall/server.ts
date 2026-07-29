@@ -25,7 +25,7 @@ import type { EventSource } from "./event-source.js";
 import { compileRedactor, splitForZones, type CompiledRedactor, type EventVariants } from "./redaction.js";
 import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
-  type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Heartbeat, type LayoutSwitch, type Pacing,
+  type Audience, type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Heartbeat, type LayoutSwitch, type Pacing,
   type Pending, type Promote, type RedactionConfig, type ResolvedWindow, type ShowCommand, type StageExpired,
   type WallLayout, type WireMessage, type Zone,
   isHeartbeat, isLayoutSwitch, isPending, isPromote, isShowCommand, isStageExpired, reachesPrivate, reachesPublic,
@@ -72,6 +72,11 @@ interface Client {
   /** The window route this client opened — a runtime layout switch targets a route. */
   route: string;
   zones: Zone[];
+  /**
+   * Who is watching. Carried from the window's DECLARATION, never re-derived from
+   * `zones` — see `isPublicClient`.
+   */
+  audience: Audience;
   /** Category ids some box in this window subscribes to — the window's whole appetite. */
   cats: Set<string>;
 }
@@ -669,9 +674,31 @@ export class WallServer {
   // replay private history. It is a shape-matcher, not a security boundary: `zone:
   // "private"` remains the only reliable way to keep something off the public wall.
 
-  /** Is this a public-facing client — a window with no `private` in its zone filter? */
+  /**
+   * Is a live audience looking at this client's window?
+   *
+   * A READ of the window's declaration — never an inference (wall-public-surface D1).
+   * This one predicate is the pivot for every public-zone protection: which redacted
+   * variant `broadcastEvent` writes, which accumulation slice `replay` reads, whether a
+   * `stage-expired` marker is suppressed, and how a `show` is zoned.
+   *
+   * It used to be `!client.zones.includes("private")`, which answered "is an audience
+   * looking?" by negating "what may this window display?". Those are different questions,
+   * and conflating them was a leak: an operator who widened the public wall's zones to
+   * show more — the natural way to do what the field asked for — silently turned redaction
+   * OFF in front of a room, with no warning.
+   *
+   * DO NOT re-derive this from `zones` for convenience. The fail-closed default is
+   * unit-tested by name precisely so that re-inferring breaks a named test.
+   *
+   * Written as "anything that is not explicitly `operator`" rather than "is `public`", so
+   * the fail-closed reading holds even for a `ResolvedWindow` that reached the server
+   * without going through `resolveAudience` — a hand-built window, a future caller, a
+   * partially-applied upgrade. `=== "public"` would make an unset field mean "not public
+   * → no redaction", which is the original defect wearing a new field name.
+   */
   private isPublicClient(client: Client): boolean {
-    return !client.zones.includes("private");
+    return client.audience !== "operator";
   }
 
   /**
@@ -687,6 +714,12 @@ export class WallServer {
     if (entry.kind === "event") {
       const ev = isPub ? entry.variants!.public : entry.variants!.private;
       if (!ev) return null; // withheld from the public zone
+      // A public surface NEVER receives a private-zone event, whatever its zone filter
+      // says (wall-public-surface D3). Enforced here rather than left to the zone filter,
+      // because leaving it to the filter is exactly what broke: `zone: "private"` has to
+      // be the one gate no configuration can route around. Redaction is a shape-matcher,
+      // not a classifier, and it is not what stands between an internal detail and a room.
+      if (isPub && ev.zone === "private") return null;
       // A display event must clear BOTH gates: its zone reaches the window, and the
       // window actually has a box for its category. The category gate matters even
       // apart from redaction: a `both` event no box asked for would otherwise sit on
@@ -696,6 +729,11 @@ export class WallServer {
       return `data: ${JSON.stringify(ev)}\n\n`;
     }
     const m = entry.msg!;
+    // The same D3 gate for the server-authored messages. A `show` carries a visual id
+    // (free producer text, zoned for exactly that reason) and a `pending` carries a
+    // label; both are content. Gating only the display event would leave the zone
+    // routable around on precisely the two messages that name what is being drawn.
+    if (isPub && m.zone === "private") return null;
     if (entry.kind === "show") {
       const zone = m.zone as Zone | undefined;
       if (zone && !zoneMatches(zone, client.zones)) return null;
@@ -908,7 +946,7 @@ export class WallServer {
     });
     res.write("retry: 2000\n\n"); // native auto-reconnect interval
     const cats = windowCats(win.boxes);
-    const client: Client = { res, route: win.route, zones: win.zones, cats };
+    const client: Client = { res, route: win.route, zones: win.zones, audience: win.audience, cats };
     this.clients.add(client);
 
     const missed = this.resumeFrom(lastEventId);

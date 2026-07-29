@@ -23,8 +23,8 @@ const CHAT_WIDE: WallLayout = {
 function windows(): ResolvedWindow[] {
   const box = { behavior: "scroll" as const, cats: ["narráció"], position: "szöveg" };
   return [
-    { name: "priv", route: "/", zones: ["private", "both"], layout: STACKED, boxes: [box] },
-    { name: "pub", route: "/wall", zones: ["public", "both"], layout: STACKED, boxes: [box] },
+    { name: "priv", route: "/", zones: ["private", "both"], audience: "operator", layout: STACKED, boxes: [box] },
+    { name: "pub", route: "/wall", zones: ["public", "both"], audience: "public", layout: STACKED, boxes: [box] },
   ];
 }
 

@@ -21,8 +21,8 @@ function windows(): ResolvedWindow[] {
   const layout = { id: "l", areas: [["p"]] };
   const box = { behavior: "latest" as const, cats: ["előrejelzés"], position: "p", pacing: { minDwellMs: 0 } };
   return [
-    { name: "priv", route: "/priv", zones: ["private", "both"], layout, boxes: [box] },
-    { name: "pub", route: "/pub", zones: ["public", "both"], layout, boxes: [box] },
+    { name: "priv", route: "/priv", zones: ["private", "both"], audience: "operator", layout, boxes: [box] },
+    { name: "pub", route: "/pub", zones: ["public", "both"], audience: "public", layout, boxes: [box] },
   ];
 }
 

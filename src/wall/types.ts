@@ -390,12 +390,29 @@ export interface Slot {
  * working and keeps looking identical. Everything downstream of `resolveWindow`
  * sees only the resolved form.
  */
+/**
+ * Who is looking at this surface (wall-public-surface D1).
+ *
+ * A DIFFERENT AXIS from `zones`. `zones` answers "what may this window display?";
+ * `audience` answers "is a live audience looking at it?". Conflating them is what put a
+ * leak in the wall: the audience used to be INFERRED as `!zones.includes("private")`, so an
+ * operator who widened a public window's zones to show more silently turned redaction OFF
+ * in front of a room.
+ *
+ * `"operator"` rather than `"private"` deliberately — it must not read as a fourth zone.
+ * And it is a DISPLAY audience, not access control: `zone: "private"` remains the only
+ * reliable way to keep content off a public wall.
+ */
+export type Audience = "public" | "operator";
+
 export interface WallWindow {
   name: string;
   /** URL path, e.g. "/" or "/wall". */
   route: string;
   /** Which event zones this window renders. */
   zones: Zone[];
+  /** Who is watching. Absent or unreadable resolves to `"public"` — fail closed. */
+  audience?: Audience;
   /** Layout id, resolved against `WallConfig.layouts`. */
   layout?: string;
   /** Position name → the box occupying it. */
@@ -414,6 +431,8 @@ export interface ResolvedWindow {
   name: string;
   route: string;
   zones: Zone[];
+  /** Resolved, never optional: every consumer reads a decided value, not a maybe. */
+  audience: Audience;
   layout: WallLayout;
   boxes: ResolvedBox[];
 }

@@ -121,8 +121,13 @@ dir).
 
 ## Open Questions
 
-- Should `doctor` report each window's resolved audience? It is cheap and it fits the
-  diagnostics change landing alongside this one — decide when both are applied.
+- ~~Should `doctor` report each window's resolved audience?~~ **Decided at apply time: yes,
+  but in the wall's own startup banner, not in `doctor`.** The banner already prints each
+  window's zones and layout, and it is what the operator is looking at the moment they start
+  a wall; `doctor` is a setup check you run when something is wrong. Printing the *resolved*
+  audience there also makes the fail-closed default visible on a config that did **not** trip
+  a warning — a private window silently reading `public` is exactly what you want to notice
+  before the room fills up.
 - Whether the private view should visibly mark that a box is *also* on a public surface.
   There is already a redaction badge for "what the public did not get"; the inverse marker
   may be redundant. Deferred.

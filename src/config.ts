@@ -528,6 +528,11 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
     name: "én",
     route: "/",
     zones: ["private", "both"],
+    // Who is watching, stated — not inferred from the zone list (wall-public-surface D1/D2).
+    // This is the operator's own screen: no redaction, private events delivered. It is
+    // declared rather than left to the default precisely because the default is now the
+    // protected reading; an undeclared window would be treated as a public wall.
+    audience: "operator",
     layout: "private-staging",
     boxes: {
       szöveg: {
@@ -561,6 +566,9 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
     name: "fal",
     route: "/wall",
     zones: ["public", "both"],
+    // The shared screen. Redaction on, private events never delivered — and now that is
+    // what the window SAYS, so widening `zones` to show more can no longer switch it off.
+    audience: "public",
     // The three-region layout lands on the PUBLIC wall (wall-three-region-layout): this is
     // where the operator wants the tasks pinned on the shared screen, and unlike the
     // private view there is no staging lane to give up for it. The private view keeps

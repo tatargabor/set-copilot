@@ -150,7 +150,14 @@ export async function runWall(cfg: CopilotConfig, opts: RunWallOptions = {}): Pr
 
   console.log(`[set-copilot] wall serving on ${base}`);
   for (const w of windows) {
-    console.log(`  ${w.name.padEnd(10)} ${base}${w.route}   (zones: ${w.zones.join("/")}, layout: ${w.layout.id})`);
+    // The resolved audience is printed, not just warned about: the warning fires only when
+    // something is wrong, and this is the moment the operator is actually looking. It also
+    // makes the fail-closed default visible on the config that did not trip a warning
+    // (wall-public-surface, design open question — decided here rather than in `doctor`,
+    // which is a setup check, not the thing you read while starting a wall).
+    console.log(
+      `  ${w.name.padEnd(10)} ${base}${w.route}   (${w.audience}, zones: ${w.zones.join("/")}, layout: ${w.layout.id})`,
+    );
   }
   console.log(`  events log: ${wallEventsPath(cfg)}`);
   if (opts.fakeFeed !== false) console.log(`  fake-feed:  on (pass --no-fake-feed for real producers only)`);

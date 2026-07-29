@@ -25,8 +25,8 @@ function windows(): ResolvedWindow[] {
   const layout = { id: "l", areas: [["p"]] };
   const box = { behavior: "scroll" as const, cats: ["súgás"], position: "p" };
   return [
-    { name: "priv", route: "/priv", zones: ["private", "both"], layout, boxes: [box] },
-    { name: "pub", route: "/pub", zones: ["public", "both"], layout, boxes: [box] },
+    { name: "priv", route: "/priv", zones: ["private", "both"], audience: "operator", layout, boxes: [box] },
+    { name: "pub", route: "/pub", zones: ["public", "both"], audience: "public", layout, boxes: [box] },
   ];
 }
 

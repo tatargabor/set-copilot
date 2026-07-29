@@ -36,8 +36,8 @@ const boxAllCats = {
 function windows(): ResolvedWindow[] {
   const layout = { id: "l", areas: [["p"]] };
   return [
-    { name: "priv", route: "/priv", zones: ["private", "both"], layout, boxes: [boxAllCats] },
-    { name: "pub", route: "/pub", zones: ["public", "both"], layout, boxes: [boxAllCats] },
+    { name: "priv", route: "/priv", zones: ["private", "both"], audience: "operator", layout, boxes: [boxAllCats] },
+    { name: "pub", route: "/pub", zones: ["public", "both"], audience: "public", layout, boxes: [boxAllCats] },
   ];
 }
 
