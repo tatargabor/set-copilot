@@ -621,7 +621,11 @@ export function namePattern(name: string): string {
   return `(?<=^|[^\\p{L}\\p{N}])${escaped}`;
 }
 
-const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
+/**
+ * Exported for the setup diagnostics: the known-key set is DERIVED from this object
+ * (`knownConfigKeys`), so a new config key cannot drift out of the checker.
+ */
+export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
   language: "en",
   runtimeDir: "/tmp/set-copilot",
   transcriptOutput: "/tmp/set-copilot/transcript.jsonl",

@@ -31,11 +31,18 @@ Both halves are config, not code:
 
 Enforcement is a **`Stop` hook** (`wall-mirror.sh`, installed by `set-copilot init`), NOT your own discipline — a field meeting proved that a prompt-only mandate falls behind (the chat carried far more than the wall). The hook fires at the end of every turn, takes your last message, strips code blocks, skips short filler (<40 chars), dedups, and emits it as a `tükör` event. You do not emit the mirror yourself.
 
-To turn it on for the session, in Phase 2b (right after the wall is up) **create the opt-in marker** the hook gates on, and also export `COPILOT_MIRROR=1` on the Phase-1 `prompt` line so the policy shows a `## Mirroring` block:
+To turn it on for the session, in Phase 2b (right after the wall is up) **check the hook is registered, and only then create the opt-in marker** the hook gates on. Also export `COPILOT_MIRROR=1` on the Phase-1 `prompt` line so the policy shows a `## Mirroring` block:
 ```bash
-: > "$SET_COPILOT_DIR/wall-mirror.enabled"   # marker: the Stop hook mirrors only when this exists
+set-copilot doctor --mirror && : > "$SET_COPILOT_DIR/wall-mirror.enabled"
+# the marker is what the Stop hook gates on — write it ONLY when the check passes
 ```
-Off by default: without `mirror`, no marker exists, the hook is a no-op, and the chat-primary / wall-secondary separation stays. (If `set-copilot init` was never run in this project, the hook isn't installed — mention that mirroring won't fire until it is.)
+**Never write the marker without the check passing.** The hook is self-gating: an unregistered hook and a working-but-idle one look identical from the wall (both: empty wall, no error). A marker with no hook is an opt-in that can never fire — measured on 2026-07-28, that produced a wall that stayed blank for a whole meeting with nothing reporting it anywhere.
+
+If the check fails, **report the CLI's own message verbatim** (it names the missing piece and the command that installs it — `set-copilot init`) and say plainly that mirroring is **not** enabled for this session. Do not claim it is on, and do not create the marker anyway; the rest of the session (wall, capture, narration) proceeds normally without mirroring.
+
+Note what the gate does and does not cover: it checks **hook registration only**. The other two states `doctor --mirror` prints — the marker and a running wall — are reported, not required, because at enable time the marker is what you are about to write and the wall may legitimately still be coming up.
+
+Off by default: without `mirror`, no marker exists, the hook is a no-op, and the chat-primary / wall-secondary separation stays.
 
 #### Phase 0: Scope the runtime dir (do this in EVERY command below)
 
@@ -120,7 +127,21 @@ sleep 1; cat "$(SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-sha
 ```
 
 Tell the user: "🖥 Wall: <url>" (both the private `/` view and the public `/wall` view
-are served there). **After starting: immediately proceed to Phase 3. Do NOT stop.**
+are served there).
+
+**If `mirror` was also in the args**, enable it here — gated, in one call:
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" \
+  npx set-copilot doctor --mirror && : > "$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}/wall-mirror.enabled"
+```
+
+On success tell the user mirroring is on. On a non-zero exit, **do not write the marker**:
+report the command's own message (it names `set-copilot init` as the fix) and state that
+mirroring is off for this session — then continue. See the `mirror` option above for why an
+ungated marker is worse than no marker.
+
+**After starting: immediately proceed to Phase 3. Do NOT stop.**
 
 #### Phase 3: Long-poll Monitor
 

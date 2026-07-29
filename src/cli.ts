@@ -16,7 +16,8 @@
  *   wall-shot <url>          screenshot a URL (headless Chromium) onto the wall
  *   wall-layout <route> <id> switch a live window's layout at runtime (geometry only)
  *   sources                  list audio input devices
- *   doctor                   audio + env health check (probes real signal)
+ *   doctor [--mirror]        audio + env + setup health check (probes real signal);
+ *                            --mirror checks only chat→wall readiness and exits non-zero
  *   beep [--end]             play the OS chime (start: single, end: double)
  *   notify <title> [body]    OS desktop notification (--critical for alerts)
  *   path <name>              print a resolved runtime path (skills use this)
@@ -137,7 +138,7 @@ async function main(): Promise<void> {
     }
     case "doctor": {
       const { runDoctor } = await import("./doctor.js");
-      return runDoctor(loadConfig());
+      return runDoctor(loadConfig(), { mirrorOnly: args.includes("--mirror") });
     }
     case "beep": return void beep(args.includes("--end") ? "end" : "start");
     case "notify": return void notify(args[0] ?? "", args[1] ?? "", args.includes("--critical"));
@@ -192,7 +193,36 @@ export function registerStopHook(settingsPath: string, command: string): boolean
  * Global init (--global) writes into ~/.claude/skills + the user config dir, so
  * /ds works from any cwd — the secret and mic live there once, not per project.
  */
-function cmdInit(global = false): void {
+/**
+ * Print what the diagnostics see in an already-existing config — the same findings
+ * `doctor` reports, so the one command a user runs to set a project up is also the one
+ * that tells them the setup rotted. Reads only; a healthy config gets an explicit
+ * "no drift found", because the healthy case is also an answer.
+ */
+async function reportConfigDrift(): Promise<void> {
+  const { collectConfigState } = await import("./doctor.js");
+  const { diagnoseConfig } = await import("./diagnostics.js");
+  let state;
+  try {
+    state = collectConfigState(loadConfig());
+  } catch (err) {
+    // A malformed config throws in `loadConfig`. init worked before this check existed
+    // and must keep working — report and move on rather than aborting the scaffold.
+    console.log(`  ⚠ could not read the existing config: ${(err as Error).message}`);
+    return;
+  }
+  const findings = diagnoseConfig(state.files, { envRuntimeDir: state.envRuntimeDir, hasWall: state.hasWall });
+  if (!findings.length) {
+    console.log("  ✓ no drift found in the existing config");
+    return;
+  }
+  for (const f of findings) {
+    console.log(`  ${f.level === "warn" ? "⚠" : "•"} ${f.message}`);
+    if (f.fix) console.log(`    → ${f.fix}`);
+  }
+}
+
+async function cmdInit(global = false): Promise<void> {
   const cfgHome = userConfigDir();
   const skillsDest = global
     ? join(homedir(), ".claude", "skills")
@@ -234,6 +264,11 @@ function cmdInit(global = false): void {
   mkdirSync(cfgHome, { recursive: true });
   if (existsSync(cfgPath)) {
     console.log(`• ${cfgPath} already exists — left untouched`);
+    // "Left untouched" is true but not an answer: the 2026-07-28 field failure was a
+    // config that init had happily left alone for two weeks while its keywords resolved
+    // to zero. So report what the existing file actually does. This path READS ONLY —
+    // init still writes nothing here, per "diagnostics report, never repair".
+    await reportConfigDrift();
   } else {
     cpSync(join(PKG_ROOT, "set-copilot.config.example.json"), cfgPath);
     console.log(`✓ Wrote ${cfgPath}`);
@@ -616,7 +651,10 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    switch a live window's layout at runtime (e.g.
                                    /wall mirror) — geometry only, no restart
   set-copilot sources              list audio input devices
-  set-copilot doctor               audio + env health check (probes real signal)
+  set-copilot doctor               audio + env + setup health check (probes real
+                                   signal; also reports config drift + mirror readiness)
+  set-copilot doctor --mirror      chat→wall mirror readiness only (no audio probe);
+                                   exits non-zero when the Stop hook is not registered
   set-copilot beep [--end]         OS chime (start: single, --end: double)
   set-copilot notify <t> [b]       OS desktop notification (--critical)
   set-copilot path <name>          print a resolved runtime path
