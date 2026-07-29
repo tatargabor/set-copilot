@@ -67,8 +67,27 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
 
   `stop` runs it on the **archived** file, after the rename — the `renameSync` stays the sole
   source of truth for "handed over exactly once", and a stitch failure is reported, never fatal.
-  The `--print` (dictation) path produces nothing derived: there the raw text is the user's
-  message, not a document.
+  The `--print` (dictation) path produces nothing derived — no `.md`, no `-stitched.jsonl` —
+  because there the text is the user's **message**, not a document. But it *is* stitched
+  (`dictation-stitched-output`): the distinction that matters is artifacts vs. text, and
+  conflating the two once left the worse half of the problem in place. `dd/SKILL.md` used to
+  say "concatenate the `text` fields", which asks a consumer to supply a separator it cannot
+  know — `cont` without `midWord` means a space, `cont` with it means none — so a real
+  dictation reached the model as `…a ide, ameetingek…`. A meeting transcript is read later by
+  someone who can go back to the recording; a dictation is an *instruction*, corrupted before
+  the model reads it, with no second chance. `renderPlain` is a third renderer over the same
+  sentence stream (never a second reassembly path), emitting sentences and nothing else —
+  `renderMarkdown`'s `**[00:00:11] mic:**` prefixes are meeting furniture that would arrive as
+  part of the instruction.
+
+  **This path fails OPEN, and that is deliberate.** If the stitch throws or yields nothing
+  from a transcript that is not purely non-speech events, the raw contents are printed and the
+  reason goes to stderr. It is the exact inverse of `wall.redaction`'s fail-closed rule, and
+  the difference is the direction of harm: on a public wall a mistake *publishes* something,
+  so withholding is safe; here a mistake would *swallow what the user just said*, and they
+  have no copy. A badly joined word boundary is visible and recoverable; a vanished dictation
+  is not. Note `printTranscriptOnce` is exported from the library, so its output shape is
+  public — an external caller that parsed it as JSONL wants the archived file instead.
 - **`src/capture.ts`** — wires the above together; also owns the runtime-dir invariants (below).
 - **`src/poll.ts`** — long-poll consumed by the meeting-copilot Monitor loop. Tracks a byte-independent line offset in `poll-offset`, dedups mic/system echo, returns early on an urgent/question/silence event, and emits `{"type":"capture-dead"}` when the capture PID is gone.
 - **`src/config.ts`** — resolution order (later wins): defaults → `~/.config/set-copilot/set-copilot.config.json` → project `set-copilot.config.json` → env (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, …). Nested sections merge key by key. `SONIOX_API_KEY` comes only from env / project `.env` / user `.env` — never the committed config.

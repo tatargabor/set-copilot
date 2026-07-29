@@ -36,13 +36,7 @@ SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-co
 
 `--print` emits the transcript and archives it as `dictation-<timestamp>.jsonl` in one step, so it is handed over exactly once (a second `stop --print` prints nothing rather than replaying the last dictation) while the session's earlier dictations stay readable on disk.
 
-Parse the JSONL lines from the output:
-
-```json
-{"ts": 12345, "speaker": "mic", "text": "This is the dictated text.", "final": true}
-```
-
-Concatenate all `text` fields from `final: true` lines into one block. **Skip `{"type":"silence"}` lines entirely** and ignore any `topics` field. Then treat the concatenated text as the user's input — act on it.
+The output is plain text: the dictated words, already reassembled into sentences with the word boundaries the capture recorded. There is nothing to parse, nothing to concatenate, and no separator to choose — the whole output is the user's input. Act on it.
 
 **Rules:**
 - Treat the text as the user's message — answer questions, run commands, write code, whatever it asks.

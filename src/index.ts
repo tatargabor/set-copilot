@@ -21,7 +21,7 @@ export {
 } from "./knowledge/keyword-matcher.js";
 export { TranscriptWriter, type TranscriptLine, type SilenceEvent } from "./transcript-writer.js";
 export {
-  stitchTranscript, stitchText, parseLines,
+  stitchTranscript, stitchText, parseLines, renderPlain,
   type StitchLine, type StitchEvent, type StitchedSentence, type StitchOptions,
   type StitchResult, type StitchStats, type RedactionWindow,
 } from "./transcript-build.js";

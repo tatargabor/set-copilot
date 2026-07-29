@@ -105,6 +105,8 @@ export interface StitchStats {
 export interface StitchResult {
   markdown: string;
   jsonl: string;
+  /** The reassembled text alone — what a dictation's consumer acts on (dictation-output). */
+  plain: string;
   sentences: StitchedSentence[];
   stats: StitchStats;
 }
@@ -484,6 +486,45 @@ export function renderMarkdown(
 }
 
 /**
+ * The reassembled text and nothing else (dictation-output).
+ *
+ * A dictation's output is not a document to read later — it is the user's **message**, and
+ * whatever surrounds the words gets read as part of it. `renderMarkdown`'s
+ * `**[00:00:11] mic:**` prefixes are meeting furniture; here a timestamp would arrive as
+ * part of the instruction. So: sentences, one space between them, nothing else.
+ *
+ * A renderer over the SAME stream as the other two, deliberately — never a second
+ * reassembly path. The word-boundary logic (`cont`/`midWord`) has exactly one
+ * implementation, so the dictation and meeting outputs can never disagree about where a
+ * word begins, which is the whole failure this exists to end.
+ *
+ * Non-sentence items produce nothing: a rotation note or a reconnect warning is a fact
+ * about the recording, not something the speaker said. A redacted window is skipped
+ * without a marker for the same reason (and the dictation path passes no redactions at
+ * all) — a `⏹ cut` line in the middle of an instruction is contamination, and the marker's
+ * purpose, telling a *reader* something was removed, does not apply to a message being
+ * acted on.
+ *
+ * Sentences join with a single space: a dictation is one continuous utterance, and
+ * paragraph structure is not something the transcript knows.
+ */
+export function renderPlain(
+  stream: StreamItem[],
+  opts: { redactions?: RedactionWindow[] } = {},
+): string {
+  const redactions = opts.redactions ?? [];
+  const parts: string[] = [];
+  for (const item of stream) {
+    if (item.kind !== "sentence") continue;
+    const s = item.sentence;
+    if (redactions.some((r) => s.startTs >= r.from && s.startTs <= r.to)) continue;
+    const text = s.text.trim();
+    if (text) parts.push(text);
+  }
+  return parts.join(" ");
+}
+
+/**
  * The structured transcript: one sentence per line, so a tool never has to parse the
  * markdown — and so a transcript archived months ago stays machine-readable without
  * re-running the stitch.
@@ -595,6 +636,7 @@ export function stitchTranscript(
   return {
     markdown: renderMarkdown(stream, { speakers: opts.speakers ?? {}, redactions }),
     jsonl: renderJsonl(stream, { redactions }),
+    plain: renderPlain(stream, { redactions }),
     sentences,
     stats: {
       segments: lines.length,

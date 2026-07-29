@@ -16,6 +16,7 @@ import { existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import type { CopilotConfig } from "./config.js";
+import { stitchText } from "./transcript-build.js";
 
 /**
  * The transcript the last capture in this runtime dir wrote. The capture records
@@ -45,14 +46,79 @@ export function handoverTranscriptOnce(cfg: CopilotConfig): string | null {
 }
 
 /**
- * Print the transcript contents (dictation's /dd path), then hand it over. The
- * archive step is shared with the meeting path via `handoverTranscriptOnce`, so a
- * single `renameSync` stays the one source of truth for "exactly once". Returns the
- * saved archive path, or `null` when there was nothing to print/archive.
+ * Print the dictated text (dictation's /dd path), then hand it over.
+ *
+ * What reaches stdout is the **reassembled text**, not the raw JSONL (dictation-output).
+ * The skill used to be told to "concatenate the `text` fields", which asks the consumer to
+ * supply a separator it cannot know: `cont` without `midWord` means a space, `cont` with it
+ * means none, and neither fact is visible to something told only to concatenate. From a
+ * real dictation, that turned `"…a SetPromo-ból a ide, a"` + `"meetingek át lettek szedve?"`
+ * into `…a ide, ameetingek…` — the user's own question corrupted before the model read it,
+ * with no recording to go back to. The stitch already knows the answer; it just was not
+ * wired to this path.
+ *
+ * The archive step is unchanged and still delegates to `handoverTranscriptOnce`, so a
+ * single `renameSync` stays the one source of truth for "exactly once" — that invariant
+ * never depended on the output format. The print still happens BEFORE the archive, reading
+ * the live file. No derived artifacts are written here: for a dictation the text is a
+ * message, not a document, and that decision stands.
+ *
+ * **Fail open — the deliberate opposite of `wall.redaction`.** If the stitch throws, or
+ * yields nothing from a non-empty transcript, the raw contents are printed instead. The
+ * difference is the direction of harm: on a public wall a mistake *publishes* something, so
+ * withholding is safe; here a mistake would *swallow the user's instruction*, and silence is
+ * the harm. A badly joined word boundary is visible to the reader and recoverable; a
+ * dictation that vanishes is not — the user has already spoken and has no copy. The
+ * fallback writes to stderr so a persistent failure is noticeable rather than quietly
+ * degrading every dictation.
+ *
+ * Returns the saved archive path, or `null` when there was nothing to print/archive.
  */
 export function printTranscriptOnce(cfg: CopilotConfig): string | null {
   const out = lastTranscript(cfg);
   if (!existsSync(out) || statSync(out).size === 0) return null;
-  process.stdout.write(readFileSync(out, "utf-8"));
+  const raw = readFileSync(out, "utf-8");
+
+  let text: string | null = null;
+  try {
+    const result = stitchText(raw, {
+      // Optional-chained on purpose: `printTranscriptOnce` is exported from the library,
+      // and a caller passing a hand-built config should get the stitch's defaults, not the
+      // raw-transcript fallback via a thrown TypeError.
+      speakers: cfg.transcript?.speakers,
+      completeWords: cfg.transcript?.completeWords,
+      pauseGapMs: cfg.transcript?.pauseGapMs,
+    });
+    text = result?.plain.trim() || null;
+  } catch (err) {
+    console.error(`[set-copilot] dictation stitch failed (${(err as Error).message}) — printing the raw transcript`);
+  }
+
+  if (text === null) {
+    // A transcript of nothing but recognised non-speech events (a `silence` marker, a
+    // `reconnect` note) legitimately has no text, and printing its raw JSONL would hand the
+    // model machinery instead of a message. Anything else — including a line the parser
+    // could not read — falls back to raw, because "the parser did not understand it" is
+    // exactly the case where refusing to print would swallow what the user said.
+    if (!onlyNonSpeech(raw)) {
+      console.error("[set-copilot] dictation stitch produced no text — printing the raw transcript");
+      process.stdout.write(raw);
+    }
+  } else {
+    process.stdout.write(`${text}\n`);
+  }
   return handoverTranscriptOnce(cfg);
+}
+
+/** Is every line in this transcript a recognisable non-speech event object? */
+function onlyNonSpeech(raw: string): boolean {
+  const lines = raw.split("\n").map((s) => s.trim()).filter(Boolean);
+  return lines.every((line) => {
+    try {
+      const o = JSON.parse(line) as { type?: unknown };
+      return typeof o.type === "string";
+    } catch {
+      return false; // unparseable: not something we may decide is "no text"
+    }
+  });
 }
