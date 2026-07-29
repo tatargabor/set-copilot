@@ -171,6 +171,26 @@ body {
 .slot-latest:not(.slot-paced) { display: flex; align-items: center; justify-content: center; }
 .slot-latest:not(.slot-paced) .line { border: 0; font-size: 17px; width: 100%; }
 
+/* A kitűzött (pinned) régió — hivatkozás, nem folyam (wall-three-region-layout).
+   Vizuálisan el kell válnia a görgő üzenetfolyamtól: az egyik azt mutatja, ami épp
+   történik, a másik azt, ami akkor is érvényes, amikor a beszélgetés elment mellette.
+   Ezért felülre igazít (egy napirend a tetején kezdődik, nem középen) és halványan
+   kiemelt hátteret kap.
+
+   A szelektor a SZÁLLÍTOTT pozíciónévre illeszkedik. Ez tudatos: a pozíciónév config,
+   így egy projekt, amelyik átnevezi, az általános `latest` megjelenést kapja — kevésbé
+   szép, de működik. A funkciót (a tartalom marad) a `latest` viselkedés és a layout
+   adja, nem ez a szabály. */
+.slot[data-area="kitűzött"] {
+  align-items: flex-start;
+  justify-content: flex-start;
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 7%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent, #7aa2f7) 35%, var(--line));
+}
+.slot[data-area="kitűzött"] .line { font-size: 16px; align-items: flex-start; }
+/* A kitűzött tartalom ideje nem érdekes — az számít, hogy ott van. */
+.slot[data-area="kitűzött"] .line .time { display: none; }
+
 /* Chart slot: the SVG fills the width, capped in height by its own attribute. */
 .slot svg { display: block; width: 100%; }
 

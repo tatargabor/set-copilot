@@ -448,6 +448,13 @@ export const DEFAULT_CATEGORIES: Category[] = [
   // narration coexist and are zoned independently. Off by default: no `tükör` event is
   // emitted unless mirroring is turned on, so the extra subscription is inert until then.
   { id: "tükör", label: "Tükör", icon: "🪞", render: "text" },
+  // The pinned reference channel (wall-three-region-layout). Everything else on the wall
+  // flows; this one stays. Measured on a live meeting: the scrolling log buried the open
+  // questions list ("kurvára keresem az öt nyitott kérdést"), because every shipped layout
+  // gave the text stream a `scroll` box and nothing that survives it. A DEDICATED category
+  // (not `súgás`/`narráció`) so that pinning something is an explicit producer choice and a
+  // project can route it elsewhere purely in config.
+  { id: "kitűzött", label: "Kitűzött", icon: "📌", render: "text" },
 ];
 
 /**
@@ -477,6 +484,24 @@ export const DEFAULT_LAYOUTS: WallLayout[] = [
   // dedicated pinned "summary" box is deliberately deferred — see the wall backlog — rather
   // than shipped here as an empty third region.)
   { id: "chat-wide", areas: [["szöveg", "prezentáció"]], columns: ["1fr", "1fr"] },
+  // The three-region layout the operator described (wall-three-region-layout): the message
+  // stream down the left, the drawable canvas top-right, a PINNED text box under it — "és
+  // ez a hármas felosztás azt gondolom, hogy ez körülbelül mindenre elég."
+  //
+  // `szöveg` spans both rows ON PURPOSE: it is one region, not a box per row. Splitting the
+  // stream across two boxes would make "where is the newest line?" ambiguous, which is the
+  // opposite of the continuous message wall that was asked for.
+  //
+  // The tracks are explicit rather than behavior-derived (`rowSize`), because a layout that
+  // declares `rows` should own them: the canvas is the hero at `2fr`, the pinned box takes
+  // what is left. This is also the first shipped layout with a multi-cell position — the
+  // rectangularity check in `badLayout` exists because of it.
+  {
+    id: "három-régió",
+    areas: [["szöveg", "prezentáció"], ["szöveg", "kitűzött"]],
+    columns: ["1fr", "1fr"],
+    rows: ["2fr", "1fr"],
+  },
 ];
 
 /**
@@ -536,7 +561,12 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
     name: "fal",
     route: "/wall",
     zones: ["public", "both"],
-    layout: "third-two-thirds",
+    // The three-region layout lands on the PUBLIC wall (wall-three-region-layout): this is
+    // where the operator wants the tasks pinned on the shared screen, and unlike the
+    // private view there is no staging lane to give up for it. The private view keeps
+    // `private-staging` and can switch at runtime with `wall-layout / három-régió` — the
+    // layout is geometry, so the switch costs nothing but the staging lane.
+    layout: "három-régió",
     boxes: {
       szöveg: {
         behavior: "scroll",
@@ -558,6 +588,21 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
         behavior: "latest",
         cats: ["architektúra", "metrika", "előrejelzés"],
         pacing: { minDwellMs: 8000, crossFadeMs: 400 },
+      },
+      kitűzött: {
+        // `latest` and deliberately NO pacing. `rowSize` reads `latest` + pacing as "this is
+        // the paced hero canvas"; more importantly, a pacing-driven swap would be exactly the
+        // "content moves on its own" behavior this region exists to prevent. Its geometry
+        // comes from the layout's explicit `rows` anyway, so pacing would buy nothing.
+        //
+        // No new behavior kind was invented: `latest` already means replace-on-newer, which
+        // is all a pinned box needs. `pinned` would be a synonym with a migration attached.
+        behavior: "latest",
+        cats: ["kitűzött"],
+        policy: {
+          instructions:
+            "Ez a KITŰZÖTT doboz — ami ide kerül, ott is marad, a folyó üzenetek soha nem görgetik el. Ide a hivatkozási tartalom való: napirend, nyitott kérdések, rögzített döntések, feladatok. FONTOS: ez a doboz a teljes tartalmat CSERÉLI, nem fűzi hozzá — mindig a teljes blokkot küldd ki, különben a többi pont eltűnik. Ritkán frissítsd: ez nem egy második üzenetfolyam, hanem az, ami akkor is látszik, amikor a beszélgetés elment mellette.",
+        },
       },
     },
   },

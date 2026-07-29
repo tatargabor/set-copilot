@@ -224,6 +224,25 @@ SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-co
   verbosity; this file owns only the emit + the cadence. If no `## Narration` block is present (narration
   disabled), skip this lane entirely.
 
+**The pinned box — reference, not flow (mechanics).** The public wall has a `kitűzött` box that the
+scrolling stream can never displace. It is where the agenda, the open questions, the recorded decisions
+and the tasks live, so they are still on screen when the conversation has moved past them (measured: the
+scrolling log buried the open-questions list and the operator went hunting for it mid-meeting).
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"category":"kitűzött","zone":"both","text":"**Nyitott kérdések**\n- …\n- …"}'
+```
+
+- **Always emit the WHOLE block.** This is a `latest` box: a new event REPLACES the content, it does not
+  merge into it. Sending only the line that changed silently deletes every other point. This is the one
+  way the region is easy to use wrongly.
+- **Cadence: occasionally, not continuously.** It is reference content, not a second narration lane —
+  update it when the reference actually changed (a question got answered, a decision was made, a task
+  landed), not once per batch. If nothing changed, emit nothing; the box keeps what it has.
+- **Redaction applies here as everywhere.** It goes through the same server-side `ingest`, so mark an
+  internal detail `[belső]` or leave it out.
+- Formatting works: it is a `text` render, so bullet lists and **bold** read as structure on the wall.
+
 **Mirroring the chat onto the wall.** When mirroring is on (the `wall-mirror.enabled` marker exists, i.e.
 the session started with `mirror`), the **`Stop` hook does the mirroring for you** — it takes your last
 message at the end of each turn and emits it as a `tükör` event, with code-block/short-filler filtering and

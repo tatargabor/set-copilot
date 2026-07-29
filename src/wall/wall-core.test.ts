@@ -36,6 +36,28 @@ describe("gridTemplate", () => {
     expect(t.gridTemplateRows).toBe("1fr"); // from the scroll box in the row's first cell
   });
 
+  it("spans a repeated position across rows with no engine change (three-region layout)", () => {
+    // The stream column occupies the same cell in both rows. `grid-template-areas` is
+    // emitted row by row, so the repeated name spans naturally — this asserts the layered
+    // model really did make the operator's geometry reachable as config alone.
+    const layout = {
+      id: "három-régió",
+      areas: [["szöveg", "prezentáció"], ["szöveg", "kitűzött"]],
+      columns: ["1fr", "1fr"],
+      rows: ["2fr", "1fr"],
+    };
+    const t = gridTemplate(layout, [
+      { position: "szöveg", behavior: "scroll", cats: ["narráció"] },
+      { position: "prezentáció", behavior: "latest", cats: ["architektúra"], pacing: { minDwellMs: 8000 } },
+      { position: "kitűzött", behavior: "latest", cats: ["kitűzött"] },
+    ]);
+    expect(t.gridTemplateAreas).toBe(`"szöveg prezentáció" "szöveg kitűzött"`);
+    expect(t.gridTemplateColumns).toBe("1fr 1fr");
+    // Explicit tracks win: the canvas is the hero, the pinned box takes what is left. The
+    // pinned box carries no pacing, so nothing here derives 2fr from its behavior.
+    expect(t.gridTemplateRows).toBe("2fr 1fr");
+  });
+
   it("honors explicit row sizes over the behavior-derived default", () => {
     const layout = { id: "x", areas: [["a"], ["b"]], rows: ["30%", "70%"] };
     const t = gridTemplate(layout, [{ position: "a", behavior: "scroll", cats: [] }]);

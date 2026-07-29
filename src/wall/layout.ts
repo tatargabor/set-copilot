@@ -43,6 +43,42 @@ function badLayout(layout: WallLayout): string | null {
   if (layout.rows && layout.rows.length !== layout.areas.length) {
     return `rows must have ${layout.areas.length} entries to match areas`;
   }
+  return badSpan(layout);
+}
+
+/**
+ * A position occupying several cells must be a RECTANGLE.
+ *
+ * CSS Grid rejects a non-rectangular `grid-template-areas` value wholesale — it does not
+ * render an approximation, it drops the property, and the page comes up with no layout at
+ * all. An empty page and a broken page look identical to the operator, so a layout the
+ * browser will refuse must never reach the browser.
+ *
+ * Nothing hit this while every shipped layout had single-cell positions; the first
+ * row-spanning layout walks straight into it. The check is a bounding box: take each
+ * position's min/max row and column, and require every cell inside those bounds to carry
+ * the same name. That rejects both the L-shape and the diagonal with one rule.
+ */
+function badSpan(layout: WallLayout): string | null {
+  const bounds = new Map<string, { r0: number; r1: number; c0: number; c1: number }>();
+  layout.areas.forEach((row, r) => {
+    row.forEach((cell, c) => {
+      if (!cell || cell === ".") return;
+      const b = bounds.get(cell);
+      if (!b) { bounds.set(cell, { r0: r, r1: r, c0: c, c1: c }); return; }
+      b.r0 = Math.min(b.r0, r); b.r1 = Math.max(b.r1, r);
+      b.c0 = Math.min(b.c0, c); b.c1 = Math.max(b.c1, c);
+    });
+  });
+  for (const [name, b] of bounds) {
+    for (let r = b.r0; r <= b.r1; r++) {
+      for (let c = b.c0; c <= b.c1; c++) {
+        if (layout.areas[r][c] !== name) {
+          return `position "${name}" is not rectangular — its cells must form a solid block`;
+        }
+      }
+    }
+  }
   return null;
 }
 

@@ -86,6 +86,62 @@ describe("resolveWindow", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("malformed"));
   });
 
+  describe("a multi-cell position must be a rectangle", () => {
+    /**
+     * CSS Grid drops a non-rectangular `grid-template-areas` value entirely, so the page
+     * comes up with NO layout — a blank wall indistinguishable from a dead server. These
+     * layouts must be rejected server-side, where the warning can reach an operator.
+     */
+    const reject = (id: string, areas: string[][]) => {
+      const warn = vi.fn();
+      const r = resolveWindow(
+        { name: "w", route: "/", zones: ["both"], layout: id, boxes: { a: box([]) } },
+        [{ id, areas }], warn,
+      );
+      expect(r).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("not rectangular"));
+      expect(warn.mock.calls[0][0]).toContain(id); // the layout is named, per the posture
+      return warn.mock.calls[0][0] as string;
+    };
+
+    it("rejects an L-shaped position, naming it", () => {
+      const msg = reject("l-shape", [["a", "a"], ["a", "b"]]);
+      expect(msg).toContain('"a"');
+    });
+
+    it("rejects a diagonal position", () => {
+      reject("diagonal", [["a", "b"], ["b", "a"]]);
+    });
+
+    it("resolves a full-height column span alongside per-row positions", () => {
+      const warn = vi.fn();
+      const areas = [["szöveg", "prezentáció"], ["szöveg", "kitűzött"]];
+      const r = resolveWindow(
+        {
+          name: "w", route: "/", zones: ["both"], layout: "három",
+          boxes: { szöveg: box([]), prezentáció: box([]), kitűzött: box([]) },
+        },
+        [{ id: "három", areas, columns: ["1fr", "1fr"], rows: ["2fr", "1fr"] }], warn,
+      );
+      expect(r).not.toBeNull();
+      expect(r!.boxes.map((b) => b.position)).toEqual(["szöveg", "prezentáció", "kitűzött"]);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("leaves every single-cell layout resolving exactly as before", () => {
+      for (const layout of LAYOUTS) {
+        const warn = vi.fn();
+        const boxes = Object.fromEntries(layoutPositions(layout).map((p) => [p, box([])]));
+        const r = resolveWindow(
+          { name: "w", route: "/", zones: ["both"], layout: layout.id, boxes },
+          LAYOUTS, warn,
+        );
+        expect(r).not.toBeNull();
+        expect(warn).not.toHaveBeenCalled();
+      }
+    });
+  });
+
   it("resolves the legacy slots form onto a stacked layout, unchanged", () => {
     const win: WallWindow = {
       name: "régi", route: "/", zones: ["both"],
