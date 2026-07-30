@@ -114,10 +114,15 @@ At-least-once, never at-most-once: a repeated line is cosmetic, a dropped one is
 change is fixing. A crash between emit and offset write re-delivers one message, which the existing
 consecutive-identical dedup absorbs.
 
-A transcript shorter than the recorded offset means truncation, rotation, or a replaced file. The
-follower then resumes at **EOF** and logs the discontinuity — replaying a whole session's history
-onto a live wall in front of an audience is a worse outcome than losing the gap, and it is the one
-case where this path deliberately drops content.
+Two cases resume at **EOF** and log it, because replaying a session's history onto a live wall in
+front of an audience is worse than losing the gap: a transcript shorter than the recorded offset
+(truncation, rotation, a replaced file), and — found while first starting the follower against a
+real in-progress session — **no recorded offset at all**. Mirroring gets enabled mid-session as
+often as at the start, and a fresh follower reading from byte 0 would emit every earlier message of
+the session at once. Those messages were not wall material when they were written; treating them as
+wall material now because a follower appeared is the wrong reading of "never replays history".
+
+These are the only two places this path deliberately drops content, and both say so in the log.
 
 ### D5. Filter to real assistant text: `type=="assistant"`, block `type=="text"`, `isSidechain` false
 

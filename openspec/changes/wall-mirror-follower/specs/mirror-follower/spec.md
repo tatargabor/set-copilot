@@ -52,16 +52,28 @@ The follower SHALL persist its read position in the runtime dir (`mirror-offset`
 after a message has been handed to the wall, and resume from it on restart — so a restarted
 follower neither re-mirrors what already went out nor skips what arrived while it was down.
 
-Loss SHALL be preferred over replay in exactly one direction: when the transcript is shorter than
-the recorded offset (a truncated, rotated, or replaced file), the follower SHALL resume from the
-**end** of the new file and record that it did, rather than re-delivering a session's worth of
-stale messages onto a live wall.
+Loss SHALL be preferred over replay in two cases, both of which would otherwise dump history onto
+a live wall in front of an audience, and both of which the follower SHALL record:
+
+- **No offset recorded yet.** A follower that has never run for this runtime dir SHALL start from
+  the **end** of the transcript, not its beginning. Mirroring is enabled mid-session as often as
+  at the start, and the transcript may already hold an entire session's messages — none of which
+  were wall material when they were written.
+- **The transcript is shorter than the recorded offset** (truncated, rotated, or replaced): the
+  follower SHALL resume from the **end** of the new file rather than re-delivering stale messages.
 
 #### Scenario: A restart continues where it left off
 
 - **WHEN** the follower is restarted for a session it was already following
 - **THEN** it SHALL resume from its recorded offset, mirroring messages appended while it was down
   and re-mirroring none of the earlier ones
+
+#### Scenario: Enabling mirroring mid-session does not replay the session
+
+- **WHEN** a follower starts for a runtime dir it has never run for, and the transcript already
+  holds earlier messages
+- **THEN** it SHALL record the end of the transcript as its position, emit nothing retroactively,
+  and mirror only what is written from then on
 
 #### Scenario: A truncated transcript does not flood the wall
 

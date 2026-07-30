@@ -312,6 +312,17 @@ export function drainMirror(cfg: CopilotConfig, opts: DrainOptions): DrainResult
     return result;
   }
 
+  // No offset recorded yet: this follower has never run for this dir, and the transcript may
+  // already hold a whole session. Start HERE, not at the beginning of history — enabling
+  // mirroring mid-session must not dump every earlier message onto a live wall. Same rule and
+  // same reason as the truncation case below: replay in front of an audience is worse than the
+  // gap, and the gap is content that was never wall material in the first place.
+  if (!existsSync(join(dir, MIRROR_OFFSET))) {
+    logMirror(dir, { decision: "init", reason: "first run for this runtime dir", offset: size });
+    writeOffset(dir, size);
+    return result;
+  }
+
   let offset = readOffset(dir);
   if (offset > size) {
     // Truncated / rotated / replaced. Resume at EOF: replaying a whole session onto a live

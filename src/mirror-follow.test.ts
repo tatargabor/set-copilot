@@ -14,8 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULTS } from "./config.js";
 import {
-  checkMirrorPid, lastMirrorEmission, logMirror, parseMirrorables, projectSlug, resolveTranscriptPath,
+  checkMirrorPid, drainMirror, lastMirrorEmission, logMirror, parseMirrorables, projectSlug,
+  resolveTranscriptPath,
 } from "./mirror-follow.js";
 
 const assistant = (uuid: string, text: string, extra: Record<string, unknown> = {}): string =>
@@ -150,5 +152,48 @@ describe("runtime-dir ownership and the log", () => {
 
   it("has no last emission before anything was emitted", () => {
     expect(lastMirrorEmission(dir)).toBeNull();
+  });
+});
+
+describe("the first run never replays history", () => {
+  let dir: string;
+  let transcript: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "sc-mirror-first-"));
+    transcript = join(dir, "session.jsonl");
+    // A session already in progress: a wall is up and mirroring is opted in, and the
+    // transcript holds messages from before the follower existed.
+    writeFileSync(join(dir, "wall.pid"), `${process.pid}\n`);
+    writeFileSync(join(dir, "wall-mirror.enabled"), "");
+    writeFileSync(transcript, `${assistant("old-1", "előzmény egy, bőven a hossz-küszöb felett van ez a mondat")}\n`
+      + `${assistant("old-2", "előzmény kettő, szintén elég hosszú ahhoz, hogy ne legyen filler")}\n`);
+  });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const cfg = (runtimeDir: string) => ({
+    ...DEFAULTS, runtimeDir, sonioxApiKey: "", projectRoot: runtimeDir,
+  }) as unknown as Parameters<typeof drainMirror>[0];
+
+  it("records the end of the transcript and emits nothing", () => {
+    // Enabling mirroring mid-session must not dump every earlier message onto a live wall.
+    const r = drainMirror(cfg(dir), { transcript });
+    expect(r.emitted).toBe(0);
+    expect(r.considered).toBe(0);
+    expect(require("node:fs").existsSync(join(dir, "wall-events.jsonl"))).toBe(false);
+    const offset = parseInt(require("node:fs").readFileSync(join(dir, "mirror-offset"), "utf-8"), 10);
+    expect(offset).toBe(require("node:fs").statSync(transcript).size);
+  });
+
+  it("delivers what arrives AFTER it started", () => {
+    drainMirror(cfg(dir), { transcript });
+    require("node:fs").appendFileSync(
+      transcript,
+      `${assistant("new", "ez már a figyelő indulása után íródott, és ki kell kerülnie a falra")}\n`,
+    );
+    const r = drainMirror(cfg(dir), { transcript });
+    expect(r.emitted).toBe(1);
+    const events = require("node:fs").readFileSync(join(dir, "wall-events.jsonl"), "utf-8");
+    expect(events).toContain("a figyelő indulása után");
+    expect(events).not.toContain("előzmény");
   });
 });
