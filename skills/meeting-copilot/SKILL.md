@@ -35,10 +35,12 @@ It replaced a `Stop` hook on 2026-07-29, because a turn-boundary hook is late by
 
 To turn it on for the session, in Phase 2b (right after the wall is up) **start the follower, verify it is running, and only then create the opt-in marker**. Also export `COPILOT_MIRROR=1` on the Phase-1 `prompt` line so the policy shows a `## Mirroring` block:
 ```bash
-# background — it runs for the whole session and stops with `set-copilot stop`
-SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot mirror-follow &
-set-copilot doctor --mirror && : > "$SET_COPILOT_DIR/wall-mirror.enabled"
-# the marker is what the follower gates on — write it ONLY when the check passes
+# the follower goes in a Bash call with `run_in_background: true` — never a trailing `&`,
+# which dies with the tool call's shell. It runs all session and stops with `set-copilot stop`.
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot mirror-follow
+# then, in a SECOND call: the marker is what the follower gates on — write it ONLY if the check passes
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" \
+  npx set-copilot doctor --mirror && : > "$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}/wall-mirror.enabled"
 ```
 **Never write the marker without the check passing.** The follower is self-gating: an absent follower and a working-but-idle one look identical from the wall (both: empty wall, no error). A marker with no follower is an opt-in that can never fire — measured on 2026-07-28 with the hook-era equivalent, that produced a wall that stayed blank for a whole meeting with nothing reporting it anywhere.
 
@@ -137,15 +139,22 @@ sleep 1; cat "$(SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-sha
 Tell the user: "🖥 Wall: <url>" (both the private `/` view and the public `/wall` view
 are served there).
 
-**If `mirror` was also in the args**, enable it here — gated, in one call:
+**If `mirror` was also in the args**, enable it here — start the follower, gate on it, then
+write the marker. The order matters: the follower records its start position on first run, so
+starting it BEFORE the marker is what keeps the session's earlier messages off the wall.
 
+Two Bash calls. The first with `run_in_background: true` (it runs for the whole session):
+
+```bash
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot mirror-follow
+```
 ```bash
 SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" \
   npx set-copilot doctor --mirror && : > "$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}/wall-mirror.enabled"
 ```
 
 On success tell the user mirroring is on. On a non-zero exit, **do not write the marker**:
-report the command's own message (it names `set-copilot init` as the fix) and state that
+report the command's own message (it names the command that starts the follower) and state that
 mirroring is off for this session — then continue. See the `mirror` option above for why an
 ungated marker is worse than no marker.
 
@@ -252,12 +261,13 @@ SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-co
 - Formatting works: it is a `text` render, so bullet lists and **bold** read as structure on the wall.
 
 **Mirroring the chat onto the wall.** When mirroring is on (the `wall-mirror.enabled` marker exists, i.e.
-the session started with `mirror`), the **`Stop` hook does the mirroring for you** — it takes your last
-message at the end of each turn and emits it as a `tükör` event, with code-block/short-filler filtering and
-dedup. **Do NOT `wall-emit` the mirror yourself** — that would double it. Your only job is to keep your chat
-substantive (the hook mirrors whatever you actually say), and to remember redaction still applies to the
-public variant: keep an internal detail off the public wall by marking it `[belső]`. If mirroring is off
-(no marker), there is nothing to do here.
+the session started with `mirror`), the **transcript follower does the mirroring for you** — it emits every
+text block you write as a `tükör` event, as you write it, mid-turn included. **Do NOT `wall-emit` the mirror
+yourself** — that would double it. Your only job is to keep your chat substantive (the follower mirrors
+whatever you actually say, subject to the project's filler policy), to use structure — headings and markdown
+tables render as structure, and a long message is split across consecutive wall events rather than
+truncated — and to remember redaction still applies to the public variant: keep an internal detail off the
+public wall by marking it `[belső]`. If mirroring is off (no marker), there is nothing to do here.
 
 **Switching the wall layout at runtime.** The active layout of a live window can be changed mid-session,
 no restart — e.g. into the wide `chat-wide` layout (big chat box on the left half, visuals on the right)
