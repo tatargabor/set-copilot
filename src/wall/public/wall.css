@@ -284,6 +284,23 @@ body.dragging-row, body.dragging-row * { cursor: row-resize !important; user-sel
 .line .txt li { margin: 0; }
 .line .txt li + li { margin-top: 2px; }
 
+/* Címsor: egy tükrözött Claude Code üzenet szakaszokra van tagolva, és távolról épp ez teszi
+   átfutthatóvá. Erősebb, mint a félkövér bekezdés, de nem nyomja el a dobozt — a méret alig
+   nő, a súly és a felső elválasztás visz mindent (1920×1080 a referencia, nem a nagy monitor). */
+.line .txt .hd {
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
+.line .txt .hd1 { font-size: 1.14em; }
+.line .txt .hd2 { font-size: 1.08em; }
+.line .txt .hd3,
+.line .txt .hd4,
+.line .txt .hd5,
+.line .txt .hd6 { font-size: 1em; color: var(--muted); }
+.line .txt * + .hd { margin-top: 8px; }
+
 .line .txt strong { font-weight: 700; }
 .line .txt em { font-style: italic; }
 .line .txt code.ic {

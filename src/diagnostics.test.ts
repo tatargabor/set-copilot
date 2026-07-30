@@ -178,82 +178,69 @@ describe("stopHookRegistered", () => {
 });
 
 describe("diagnoseMirror", () => {
-  const sources = (registered: HookSource["registered"]): HookSource[] => [
-    { path: "/proj/.claude/settings.json", registered },
-    { path: "/home/u/.claude/settings.json", registered: false },
-  ];
+  const base = {
+    followerPid: null as number | null,
+    markerExists: false,
+    wallRunning: false,
+    lastEmission: null as string | null,
+    runtimeDir: "/d",
+  };
 
-  it("blames the missing hook when the marker is set and a wall runs (the 2026-07-28 field case)", () => {
+  it("blames the missing follower when the marker is set and a wall runs (the 2026-07-28 field case)", () => {
+    // A marker with no delivery mechanism and a mechanism with no marker look identical from
+    // the wall — both an empty wall, no error. So each is answered separately, by name.
     const r = diagnoseMirror({
-      hookCommands: sources(false),
-      scriptExists: false,
-      markerExists: true,
-      wallRunning: true,
-      runtimeDir: "/proj/.set/copilot/abc",
+      ...base, markerExists: true, wallRunning: true, runtimeDir: "/proj/.set/copilot/abc",
     });
-    expect(r.hook.ok).toBe(false);
+    expect(r.follower.ok).toBe(false);
     expect(r.marker.ok).toBe(true);
     expect(r.wall.ok).toBe(true);
     expect(r.ready).toBe(false);
-    expect(r.hookRegistered).toBe(false);
-    expect(r.hook.fix).toContain("set-copilot init");
-    // The report names where it looked, so "not registered" is not an unqualified assertion.
-    expect(r.hook.message).toContain("/proj/.claude/settings.json");
-    expect(r.hook.message).toContain("/home/u/.claude/settings.json");
+    expect(r.followerRunning).toBe(false);
+    expect(r.follower.fix).toContain("mirror-follow");
     expect(r.runtimeDir).toBe("/proj/.set/copilot/abc");
   });
 
   it("is ready only when all three hold", () => {
-    const r = diagnoseMirror({
-      hookCommands: sources(true),
-      scriptExists: true,
-      markerExists: true,
-      wallRunning: true,
-      runtimeDir: "/d",
-    });
-    expect([r.hook.ok, r.marker.ok, r.wall.ok]).toEqual([true, true, true]);
+    const r = diagnoseMirror({ ...base, followerPid: 4242, markerExists: true, wallRunning: true });
+    expect([r.follower.ok, r.marker.ok, r.wall.ok]).toEqual([true, true, true]);
     expect(r.ready).toBe(true);
-    expect(r.hook.fix).toBeUndefined();
+    expect(r.follower.fix).toBeUndefined();
+    expect(r.follower.message).toContain("4242");
   });
 
   it("answers each state separately when none hold", () => {
-    const r = diagnoseMirror({
-      hookCommands: [],
-      scriptExists: false,
-      markerExists: false,
-      wallRunning: false,
-      runtimeDir: "/d",
-    });
-    expect(r.hook.ok).toBe(false);
-    expect(r.marker.ok).toBe(false);
-    expect(r.wall.ok).toBe(false);
+    const r = diagnoseMirror(base);
+    expect([r.follower.ok, r.marker.ok, r.wall.ok, r.activity.ok]).toEqual([false, false, false, false]);
     expect(r.ready).toBe(false);
-    for (const s of [r.hook, r.marker, r.wall]) expect(s.fix).toBeTruthy();
+    for (const st of [r.follower, r.marker, r.wall, r.activity]) expect(st.fix).toBeTruthy();
   });
 
-  it("does not claim the hook is missing when a settings file is unreadable", () => {
-    const r = diagnoseMirror({
-      hookCommands: [{ path: "/proj/.claude/settings.json", registered: "unknown" }],
-      scriptExists: true,
-      markerExists: false,
-      wallRunning: false,
-      runtimeDir: "/d",
-    });
-    expect(r.hook.ok).toBe("unknown");
-    expect(r.hookRegistered).toBe("unknown");
+  it("reports when the mirror last emitted — the state whose absence caused a misdiagnosis", () => {
+    // 2026-07-29: a wall believed to have stopped mirroring at 20:52 had in fact delivered
+    // its last message at 20:57:40. A reported last-emission time makes that unmistakable.
+    const r = diagnoseMirror({ ...base, followerPid: 7, lastEmission: "2026-07-29T18:57:40.000Z" });
+    expect(r.activity.ok).toBe(true);
+    expect(r.activity.message).toContain("18:57:40");
   });
 
-  it("flags a registered hook whose script is gone", () => {
+  it("warns about a retired mirror Stop hook that is still registered", () => {
+    // Not a precondition — the opposite: with the follower running it would double every line.
     const r = diagnoseMirror({
-      hookCommands: sources(true),
-      scriptExists: false,
-      markerExists: true,
-      wallRunning: true,
-      runtimeDir: "/d",
+      ...base,
+      followerPid: 9,
+      staleHook: [{ path: "/proj/.claude/settings.json", registered: true }],
     });
-    expect(r.hook.ok).toBe(false);
-    expect(r.hookRegistered).toBe(true);
-    expect(r.hook.fix).toContain("set-copilot init");
+    expect(r.staleHook?.ok).toBe(false);
+    expect(r.staleHook?.message).toContain("/proj/.claude/settings.json");
+    expect(r.staleHook?.fix).toContain("set-copilot init");
+  });
+
+  it("says nothing about a stale hook when none is registered", () => {
+    const r = diagnoseMirror({
+      ...base, staleHook: [{ path: "/proj/.claude/settings.json", registered: false }],
+    });
+    expect(r.staleHook).toBeUndefined();
   });
 });
 

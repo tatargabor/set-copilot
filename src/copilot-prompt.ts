@@ -128,13 +128,27 @@ function renderNarration(narration: CopilotConfig["copilot"]["narration"]): stri
  * wall, through the same redaction funnel as any event.
  */
 function renderMirror(mirror: CopilotConfig["copilot"]["mirror"]): string[] {
+  // Everything factual here is derived from the RESOLVED policy, never restated. A restated
+  // policy rots: on 2026-07-29 the skill still taught that the mirror strips code blocks,
+  // long after the default became `keep`, so the copilot sent an ASCII table UNFENCED to
+  // survive a stripping that no longer happened — and lost monospace rendering, unreadable on
+  // the wall. Same seam and same reason as `copilot.alerts` and `copilot.drawing`.
+  const codeBlocks: Record<typeof mirror.codeBlocks, string> = {
+    keep: "**Fenced code blocks are kept** and render as monospace blocks on the wall — so fence anything whose readability depends on alignment (an ASCII/box-drawing table, aligned columns). If you forget, the delivery path fences it for you; fencing it yourself is just more predictable.",
+    strip: "**Fenced code blocks are removed** before the line reaches the wall — this project asked for a code-free wall, so do not put meaning only inside a fence.",
+    collapse: "**Fenced code blocks are collapsed** to a one-line marker (language + line count), so do not put meaning only inside a fence.",
+  };
   return [
     "## Mirroring — chat onto the wall (opt-in)",
     "",
     `Mirroring is **on** this session. Chat is still your primary voice; each substantive chat line is *additionally* shown on the wall as a \`${mirror.category}\` event, so a wall audience can also read it.`,
     "",
-    "- **A `Stop` hook does the mirroring — not you.** At the end of every turn the hook takes your last message and emits it, with code-block stripping, short-filler skipping, and dedup. **Do NOT `wall-emit` the mirror yourself** — that would double it.",
-    "- **Your job is to keep the chat substantive.** The hook mirrors whatever you actually say, so a filler line becomes wall noise. Say something worth showing, or end the turn silently.",
+    "- **A transcript follower does the mirroring — not you.** `set-copilot mirror-follow` watches this session's transcript and emits **every** text block you write, as you write it — mid-turn included, not just the turn's last message. **Do NOT `wall-emit` the mirror yourself** — that would double it.",
+    `- **Length is a chunk size, not a ceiling.** A message longer than ${mirror.maxLength} characters is delivered as several consecutive wall events, split on block boundaries — nothing is truncated away, so write the whole thing.`,
+    `- **Below ${mirror.minLength} characters is treated as filler** and never reaches the wall, as are the project's configured progress phrases. Say something worth showing, or end the turn silently.`,
+    `- ${codeBlocks[mirror.codeBlocks]}`,
+    "- **Headings render as headings**, and a markdown table renders as a table. Structure your wall-bound messages with them — the wall is read from across a room.",
+    "- **Delivery is per completed message, not per token.** The wall gets a block when you finish writing it, while the chat has been rendering it progressively. That difference is expected, not a fault.",
     "- **Redaction still applies.** The mirrored line goes through the SAME public-zone redaction as any event. Keep an internal detail off the public wall by marking the span `[belső]`; the server scrubs it before any public client sees it.",
     "",
   ];

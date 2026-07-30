@@ -18,6 +18,7 @@ import { join } from "node:path";
 
 import { CONFIG_FILENAME, userConfigDir, type CopilotConfig } from "./config.js";
 import { listSources, parecBin, soxBin } from "./audio.js";
+import { lastMirrorEmission, mirrorPid } from "./mirror-follow.js";
 import {
   diagnoseConfig, diagnoseMirror, stopHookRegistered,
   type Finding, type HookSource, type MirrorReport, type RawConfigFile,
@@ -86,7 +87,11 @@ function verdict(label: string, r: ProbeResult, expectedBytesPerSec: number, sil
 
 // ---- collectors (file access only — no diagnosis, see diagnostics.ts D1) ----
 
-/** The hook script the chat→wall mirror runs; matched by basename, never by full command. */
+/**
+ * The RETIRED mirror hook script (wall-mirror-follower). It no longer does the mirroring —
+ * `mirror-follow` does — but its registration is still looked for, by basename, because a
+ * leftover one would double-emit every line next to the follower, invisibly from the wall.
+ */
 const HOOK_SCRIPT = "wall-mirror.sh";
 
 /** One config file with the metadata the report prints alongside its findings. */
@@ -182,11 +187,13 @@ export function collectMirrorState(cfg: CopilotConfig): MirrorReport {
   const projClaude = join(cfg.projectRoot, ".claude");
   const userClaude = join(homedir(), ".claude");
   return diagnoseMirror({
-    hookCommands: [hookSource(join(projClaude, "settings.json")), hookSource(join(userClaude, "settings.json"))],
-    scriptExists:
-      existsSync(join(projClaude, "hooks", HOOK_SCRIPT)) || existsSync(join(userClaude, "hooks", HOOK_SCRIPT)),
+    followerPid: mirrorPid(cfg.runtimeDir),
     markerExists: existsSync(join(cfg.runtimeDir, "wall-mirror.enabled")),
     wallRunning: pidAlive(join(cfg.runtimeDir, "wall.pid")),
+    lastEmission: lastMirrorEmission(cfg.runtimeDir),
+    // The retired hook is still WORTH looking for: with the follower running, a surviving
+    // registration double-emits every line, and that is invisible from the wall.
+    staleHook: [hookSource(join(projClaude, "settings.json")), hookSource(join(userClaude, "settings.json"))],
     runtimeDir: cfg.runtimeDir,
   });
 }
@@ -220,10 +227,12 @@ export function printConfigSection(state: ConfigState): Finding[] {
   return findings;
 }
 
-/** Render mirror readiness as the three independent states the operator acts on separately. */
+/** Render mirror readiness as the independent states the operator acts on separately. */
 export function printMirrorSection(report: MirrorReport): void {
   console.log(`  • chat→fal tükrözés (runtime dir: ${report.runtimeDir}):`);
-  for (const s of [report.hook, report.marker, report.wall]) {
+  const states = [report.follower, report.marker, report.wall, report.activity];
+  if (report.staleHook) states.push(report.staleHook);
+  for (const s of states) {
     console.log(`      ${s.ok === true ? "✓" : s.ok === "unknown" ? "?" : "✗"} ${s.message}`);
     if (s.fix) console.log(`        → ${s.fix}`);
   }
@@ -242,17 +251,18 @@ export async function runDoctor(cfg: CopilotConfig, opts: DoctorOptions = {}): P
   if (opts.mirrorOnly) {
     const report = collectMirrorState(cfg);
     printMirrorSection(report);
-    // The gate is hook registration ONLY: at enable time the wall legitimately may not be
-    // running yet and the marker is what we are about to write. "unknown" is not a pass —
-    // an unreadable settings.json cannot vouch for the hook.
-    if (report.hookRegistered !== true) {
+    // The gate is the FOLLOWER being alive: at enable time the wall legitimately may not be
+    // running yet and the marker is what we are about to write. This is a strictly more
+    // direct check than the hook era's, which could only confirm a hook was *registered* —
+    // never that it fired, which is precisely how the mirror went one message behind.
+    if (!report.followerRunning) {
       // The fix belongs on THIS line too: the skill reports the CLI's message, and a
-      // caller that quotes only the summary must still carry the installing command.
-      const fix = report.hook.fix ? ` — javítás: ${report.hook.fix}` : "";
-      console.log(`\n[set-copilot] doctor --mirror: a tükrözés nem kapcsolható be — ${report.hook.message}${fix}`);
+      // caller that quotes only the summary must still carry the starting command.
+      const fix = report.follower.fix ? ` — javítás: ${report.follower.fix}` : "";
+      console.log(`\n[set-copilot] doctor --mirror: a tükrözés nem kapcsolható be — ${report.follower.message}${fix}`);
       process.exit(1);
     }
-    console.log("\n[set-copilot] doctor --mirror: a Stop hook regisztrálva — a tükrözés bekapcsolható");
+    console.log("\n[set-copilot] doctor --mirror: a leirat-figyelő fut — a tükrözés bekapcsolható");
     return;
   }
 

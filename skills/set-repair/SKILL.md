@@ -36,9 +36,10 @@ ls -d /tmp/set-copilot 2>/dev/null           # the unscoped global dir, if it wa
 
 For each dir, look at: `capture.pid`, `capture.output`, `transcript.jsonl` /
 `dictation.jsonl` (live names), the `*-<timestamp>.jsonl` archives, `wall.pid`,
-`wall-events.jsonl`, and whether each archive has a `.md` + `-stitched.jsonl` beside it.
+`wall-events.jsonl`, `mirror.pid`, and whether each archive has a `.md` + `-stitched.jsonl`
+beside it.
 
-## Phase 2 — the four faults
+## Phase 2 — the five faults
 
 **1. Orphaned `capture.pid`.** The file exists and the process does not.
 
@@ -67,7 +68,20 @@ For each dir, look at: `capture.pid`, `capture.output`, `transcript.jsonl` /
 - Report: `rm <dir>/wall.pid`. If the wall IS alive, say so and stop — do not touch the dir,
   and never rotate `wall-events.jsonl` under a running wall.
 
-**4. An archived transcript with no stitched artifacts.** A `*-<timestamp>.jsonl` with no
+**4. Orphaned `mirror.pid`.** The file exists and the process does not — or it exists and the
+process IS alive in a dir whose session ended.
+
+- Consequence of a stale file: `set-copilot mirror-follow` refuses to start for that dir, so
+  the next session in it mirrors nothing, silently. Consequence of a live orphan: it keeps
+  emitting into a wall log after the session that owned it is gone.
+- Report: `rm <dir>/mirror.pid` when the process is dead; when it is alive, name the pid and
+  `kill` it only if the operator confirms the session is over — `set-copilot stop` is the
+  path that stops it properly, and it drains what is pending first.
+- Also worth reading here: `wall-mirror.log`. It says, per message, what the mirror decided
+  (`emit` / `filler` / `short` / `dup` / `error` / `reset`). "The wall went quiet" and "the
+  mirror suppressed everything" are different faults and this is what tells them apart.
+
+**5. An archived transcript with no stitched artifacts.** A `*-<timestamp>.jsonl` with no
 `.md` and no `-stitched.jsonl` beside it.
 
 - Fix: `set-copilot transcript --input <dir> --stats`. Already-stitched inputs are skipped

@@ -45,6 +45,17 @@ export function appendBlocks(parent, blocks) {
       parent.appendChild(p);
       continue;
     }
+    if (b.type === "heading") {
+      // A real heading element, capped at h6, with the level as a class so the CSS can size
+      // it: a mirrored Claude Code message is heading-structured, and those sections are what
+      // make it scannable at wall distance.
+      const level = Math.min(6, Math.max(1, b.level | 0));
+      const h = document.createElement(`h${level}`);
+      h.className = `hd hd${level}`;
+      appendInline(h, b.children);
+      parent.appendChild(h);
+      continue;
+    }
     if (b.type === "codeblock") {
       const pre = document.createElement("pre");
       pre.className = "cb";

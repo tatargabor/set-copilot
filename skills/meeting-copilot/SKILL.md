@@ -29,18 +29,26 @@ Both halves are config, not code:
 
 **Mirror option (`start wall mirror`).** Add the word `mirror` (only meaningful alongside `wall`) to **mirror your substantive chat onto the wall**. It is an opt-in on top of your primary voice: you keep talking in chat and each substantive line is *additionally* echoed to the wall.
 
-Enforcement is a **`Stop` hook** (`wall-mirror.sh`, installed by `set-copilot init`), NOT your own discipline — a field meeting proved that a prompt-only mandate falls behind (the chat carried far more than the wall). The hook fires at the end of every turn, takes your last message, strips code blocks, skips short filler (<40 chars), dedups, and emits it as a `tükör` event. You do not emit the mirror yourself.
+Delivery is a **transcript follower** (`set-copilot mirror-follow`), NOT your own discipline — a field meeting proved a prompt-only mandate falls behind (the chat carried far more than the wall). It watches this session's transcript and emits **every** text block you write, as you write it: mid-turn blocks included, not just the turn's last message. You do not emit the mirror yourself.
 
-To turn it on for the session, in Phase 2b (right after the wall is up) **check the hook is registered, and only then create the opt-in marker** the hook gates on. Also export `COPILOT_MIRROR=1` on the Phase-1 `prompt` line so the policy shows a `## Mirroring` block:
+It replaced a `Stop` hook on 2026-07-29, because a turn-boundary hook is late by construction *and* was measured one message behind: it read the transcript at turn end and delivered the message written 37 s earlier, while the one written 0.2 s before it never arrived at all.
+
+To turn it on for the session, in Phase 2b (right after the wall is up) **start the follower, verify it is running, and only then create the opt-in marker**. Also export `COPILOT_MIRROR=1` on the Phase-1 `prompt` line so the policy shows a `## Mirroring` block:
 ```bash
+# background — it runs for the whole session and stops with `set-copilot stop`
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot mirror-follow &
 set-copilot doctor --mirror && : > "$SET_COPILOT_DIR/wall-mirror.enabled"
-# the marker is what the Stop hook gates on — write it ONLY when the check passes
+# the marker is what the follower gates on — write it ONLY when the check passes
 ```
-**Never write the marker without the check passing.** The hook is self-gating: an unregistered hook and a working-but-idle one look identical from the wall (both: empty wall, no error). A marker with no hook is an opt-in that can never fire — measured on 2026-07-28, that produced a wall that stayed blank for a whole meeting with nothing reporting it anywhere.
+**Never write the marker without the check passing.** The follower is self-gating: an absent follower and a working-but-idle one look identical from the wall (both: empty wall, no error). A marker with no follower is an opt-in that can never fire — measured on 2026-07-28 with the hook-era equivalent, that produced a wall that stayed blank for a whole meeting with nothing reporting it anywhere.
 
-If the check fails, **report the CLI's own message verbatim** (it names the missing piece and the command that installs it — `set-copilot init`) and say plainly that mirroring is **not** enabled for this session. Do not claim it is on, and do not create the marker anyway; the rest of the session (wall, capture, narration) proceeds normally without mirroring.
+If the check fails, **report the CLI's own message verbatim** (it names the missing piece and the command that starts it) and say plainly that mirroring is **not** enabled for this session. Do not claim it is on, and do not create the marker anyway; the rest of the session (wall, capture, narration) proceeds normally without mirroring.
 
-Note what the gate does and does not cover: it checks **hook registration only**. The other two states `doctor --mirror` prints — the marker and a running wall — are reported, not required, because at enable time the marker is what you are about to write and the wall may legitimately still be coming up.
+Note what the gate does and does not cover: it checks **the follower being alive** — a strictly more direct check than the hook era's, which could only confirm a hook was *registered*, never that it fired. The other states `doctor --mirror` prints (the marker, a running wall, the last emission time) are reported, not required, because at enable time the marker is what you are about to write and the wall may legitimately still be coming up.
+
+**What reaches the wall is decided by policy, not by you** (`copilot.mirror`, rendered into your `prompt` output): a length floor, the project's filler phrases, code-block handling, and a chunk budget that *divides* a long message across consecutive wall events rather than truncating it. Write the whole thing; use headings and markdown tables (both render as structure); fence anything whose readability depends on alignment. And note the floor of the mechanism: delivery is per **completed message**, not per token — the wall gets a block when you finish writing it.
+
+**If the mirror looks dead, read `wall-mirror.log`** in the runtime dir before concluding anything. It records, per message, what the mirror decided (`emit` / `filler` / `short` / `dup` / `error` / `reset`). On 2026-07-29 a session concluded "the mirror silently stopped at 20:52" from a wall that had in fact delivered its last message at 20:57:40; the log exists so that mistake is not repeatable.
 
 Off by default: without `mirror`, no marker exists, the hook is a no-op, and the chat-primary / wall-secondary separation stays.
 
@@ -362,13 +370,21 @@ ambiguity) still apply.
 
 ### `/meeting-copilot stop`
 
+**With mirroring on, write your closing summary FIRST, in its own turn, and stop only after it.**
+This is the one ordering no mechanism can fix for you: `stop` and `wall-stop` each drain the
+mirror before tearing anything down, so whatever you have already written gets out — but a
+summary written *after* the wall is gone has nothing left to reach. That is exactly how the
+most valuable message of the 2026-07-29 session never appeared on the wall.
+
 ```bash
 SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot stop
 SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-stop
 ```
 Stop both: the capture, and the wall this session started (`wall-stop` is a no-op if none was
 started, and only ever stops the wall in THIS runtime dir — never another project's). The
-Monitor exits on its own (the in-flight poll returns `{"type":"capture-dead"}`).
+Monitor exits on its own (the in-flight poll returns `{"type":"capture-dead"}`). Both commands
+first drain and then stop the mirror follower, reporting anything they could **not** deliver —
+if you see that line, say so rather than reporting a clean stop.
 
 `stop` archives the live meeting transcript exactly once (no `--print` — that would replay the
 whole transcript into the session as if freshly spoken) and prints **three** paths:

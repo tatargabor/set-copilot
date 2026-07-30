@@ -19,6 +19,8 @@
  *   wall-layout <route> <id> switch a live window's layout at runtime (geometry only)
  *   mirror-policy [--apply]  print the resolved chat→wall mirror policy as JSON;
  *                            --apply filters a message on stdin by it (exit 3 = drop)
+ *   mirror-follow            follow the session transcript and mirror each new message to
+ *                            the wall (--once drains and exits; replaces the Stop hook)
  *   sources                  list audio input devices
  *   doctor [--mirror]        audio + env + setup health check (probes real signal);
  *                            --mirror checks only chat→wall readiness and exits non-zero
@@ -33,7 +35,7 @@ import {
   cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync,
 } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 
 import {
   loadConfig, userConfigDir, CONFIG_FILENAME, keywordIndexPath, enrichedContextPath,
@@ -140,7 +142,8 @@ async function main(): Promise<void> {
       console.log(`[wall-layout] switched ${route} → ${layout}`);
       return;
     }
-    case "mirror-policy": return cmdMirrorPolicy(args.includes("--apply"));
+    case "mirror-policy": return cmdMirrorPolicy(args.includes("--apply"), args.includes("--json"));
+    case "mirror-follow": return cmdMirrorFollow(args);
     case "sources": {
       const { listSources } = await import("./audio.js");
       for (const s of await listSources()) console.log(`  ${s}`);
@@ -199,6 +202,43 @@ export function registerStopHook(settingsPath: string, command: string): boolean
 }
 
 /**
+ * Idempotently REMOVE every `Stop` hook entry whose command invokes `scriptBasename`,
+ * preserving every other setting and hook. Returns true if it removed anything.
+ *
+ * The inverse of `registerStopHook`, and deliberately as conservative: it matches by
+ * basename (as `stopHookRegistered` does, because init writes a different command string for
+ * a project than for `--global`, and a user may have wrapped it), it drops a hook group only
+ * when removal empties it, and a malformed settings.json is left untouched with a warning
+ * rather than rewritten. A stale registration is not cosmetic here: with the follower running,
+ * a surviving mirror hook would double-emit every line.
+ */
+export function unregisterStopHook(settingsPath: string, scriptBasename: string): boolean {
+  if (!existsSync(settingsPath)) return false;
+  let settings: Record<string, unknown>;
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  } catch {
+    console.warn(`[set-copilot] init: ${settingsPath} is not valid JSON — skipping hook removal`);
+    return false;
+  }
+  const hooks = settings.hooks as Record<string, unknown> | undefined;
+  const stop = hooks?.Stop as { matcher?: string; hooks?: { type: string; command: string }[] }[] | undefined;
+  if (!Array.isArray(stop)) return false;
+
+  let removed = false;
+  for (const group of stop) {
+    if (!group || !Array.isArray(group.hooks)) continue;
+    const keep = group.hooks.filter((h) => !(typeof h?.command === "string" && h.command.includes(scriptBasename)));
+    if (keep.length !== group.hooks.length) { group.hooks = keep; removed = true; }
+  }
+  if (!removed) return false;
+  // Drop groups this emptied, but never a group that held something else.
+  (hooks as Record<string, unknown>).Stop = stop.filter((g) => (g.hooks?.length ?? 0) > 0);
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  return true;
+}
+
+/**
  * Project init writes into ./.claude + ./set-copilot.config.json.
  * Global init (--global) writes into ~/.claude/skills + the user config dir, so
  * /ds works from any cwd — the secret and mic live there once, not per project.
@@ -251,27 +291,23 @@ async function cmdInit(global = false): Promise<void> {
   }
   console.log(`✓ Installed ${copied} skills into ${skillsDest} (dictate, dd, ds, meeting-copilot, transcript-recover, set-repair)`);
 
-  // Install the wall-mirror Stop hook (wall-chat-mirror). It ENFORCES chat→wall mirroring
-  // (the prompt mandate alone was measured to fall behind), and is self-gating: a no-op
-  // unless a session opted in (`wall-mirror.enabled` marker) with a wall running, so
-  // installing it is harmless for non-mirroring sessions.
+  // The chat→wall mirror is NO LONGER a Stop hook (wall-mirror-follower): a turn-boundary
+  // hook is late by construction and was measured delivering the previous message while the
+  // one written 0.2 s earlier never arrived. `mirror-follow` replaces it, so init REMOVES a
+  // registration an earlier version added — leaving it would double-emit every line.
   const claudeBase = global ? join(homedir(), ".claude") : join(process.cwd(), ".claude");
   const hooksSrc = join(PKG_ROOT, "hooks");
   if (existsSync(hooksSrc)) {
     const hooksDest = join(claudeBase, "hooks");
     mkdirSync(hooksDest, { recursive: true });
     cpSync(hooksSrc, hooksDest, { recursive: true });
-    const hookCmd = global
-      ? `bash "${join(hooksDest, "wall-mirror.sh")}"`
-      : `bash "$CLAUDE_PROJECT_DIR/.claude/hooks/wall-mirror.sh"`;
-    if (registerStopHook(join(claudeBase, "settings.json"), hookCmd)) {
-      console.log(`✓ Installed wall-mirror Stop hook into ${join(claudeBase, "settings.json")}`);
-    } else {
-      console.log(`• wall-mirror Stop hook already registered — left untouched`);
+    if (unregisterStopHook(join(claudeBase, "settings.json"), "wall-mirror.sh")) {
+      console.log(`✓ Removed the retired wall-mirror Stop hook from ${join(claudeBase, "settings.json")}`);
+      console.log(`  → mirroring now runs as \`set-copilot mirror-follow\`, started by /meeting-copilot`);
     }
-    // The recovery guard, registered the same way and for the same reason: a recovery
-    // review that is never recorded costs a re-read of a whole meeting. Also self-gating
-    // (`recovery.active`), so a session that is not recovering never sees it.
+    // The recovery guard stays a Stop hook: it gates the END of a turn, which is exactly
+    // when it has something to say. A recovery review that is never recorded costs a re-read
+    // of a whole meeting. Self-gating (`recovery.active`), so a non-recovering session never sees it.
     const guardCmd = global
       ? `bash "${join(hooksDest, "recovery-guard.sh")}"`
       : `bash "$CLAUDE_PROJECT_DIR/.claude/hooks/recovery-guard.sh"`;
@@ -319,88 +355,140 @@ Next steps:
 // ---- mirror policy ---------------------------------------------------------
 
 /**
- * Apply the code-block part of the mirror policy.
- *
- * `keep` is the default and the point of the feature — a coding copilot's message is
- * largely code, and the hook used to discard every block unconditionally. `collapse` is
- * the escape hatch for a meeting-facing project that finds code noisy: one marker line
- * with the language and the size, which reads at wall distance without pretending to be
- * code.
- */
-function applyCodeBlocks(text: string, mode: "keep" | "strip" | "collapse"): string {
-  if (mode === "keep") return text;
-  const out: string[] = [];
-  let block: string[] | null = null;
-  let lang = "";
-  for (const line of text.split("\n")) {
-    const fence = /^\s*```(.*)$/.exec(line);
-    if (fence) {
-      if (block === null) { block = []; lang = fence[1].trim(); continue; }
-      if (mode === "collapse") out.push(`[kód${lang ? `: ${lang}` : ""}, ${block.length} sor]`);
-      block = null;
-      continue;
-    }
-    if (block) block.push(line);
-    else out.push(line);
-  }
-  // An unterminated fence: its content was buffered, so put it back rather than losing it.
-  if (block) out.push(...block);
-  return out.join("\n");
-}
-
-/**
  * `mirror-policy` prints the project's resolved chat→wall mirror policy as JSON;
- * `--apply` reads a message on stdin and writes the mirror-ready text, exiting 1 when the
+ * `--apply` reads a message on stdin and writes the mirror-ready text, exiting 3 when the
  * policy says this message is not wall material.
  *
- * Why the CLI applies it and not the hook: the whole point of this seam is that
- * `hooks/wall-mirror.sh` stops being where the judgement lives. `fillerPhrases` are
- * Unicode-anchored whole-message regexes, and re-implementing that in bash would recreate
- * the failure this change exists to remove — two implementations of one policy, free to
- * disagree. The hook keeps only the sequencing and its dedup stamp.
+ * The judgement itself lives in `mirror-policy.ts` and this is a thin wrapper over it: the
+ * follower needs the same decision per message and cannot afford a process spawn on the
+ * latency path it exists to shorten, so there is one implementation with two callers rather
+ * than two implementations free to disagree. Exit 3 (not 1) survives from the hook era for
+ * the same reason it was chosen: a crashing Node exits 1, and conflating the two would make a
+ * broken lookup look like a filler verdict.
+ *
+ * `--apply` prints the chunks separated by a blank line — the WHOLE message, since length
+ * control divides rather than truncates. A caller that needs the divisions uses `--json`.
  */
-async function cmdMirrorPolicy(apply: boolean): Promise<void> {
-  const { isFillerMessage } = await import("./config.js");
+async function cmdMirrorPolicy(apply: boolean, asJson = false): Promise<void> {
   const cfg = loadConfig();
   const p = cfg.copilot.mirror;
   if (!apply) {
     console.log(JSON.stringify({
       enabled: p.enabled, category: p.category, minLength: p.minLength,
+      // `maxLength` is the CHUNK budget now, not a ceiling on the message.
       maxLength: p.maxLength, fillerPhrases: p.fillerPhrases, codeBlocks: p.codeBlocks,
     }));
     return;
   }
 
-  const chunks: Buffer[] = [];
-  for await (const c of process.stdin) chunks.push(c as Buffer);
-  const raw = Buffer.concat(chunks).toString("utf-8");
+  const stdin: Buffer[] = [];
+  for await (const c of process.stdin) stdin.push(c as Buffer);
+  const raw = Buffer.concat(stdin).toString("utf-8");
 
-  // Drop leading/trailing blank lines only. Deliberately NOT a per-line trim (which the
-  // old shell version did): now that code blocks survive, per-line trimming would flatten
-  // their indentation, and indentation is most of what makes code readable.
-  const lines = applyCodeBlocks(raw, p.codeBlocks).split("\n");
-  while (lines.length && !lines[0].trim()) lines.shift();
-  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-  let text = lines.join("\n");
+  const { applyMirrorPolicy } = await import("./mirror-policy.js");
+  const verdict = applyMirrorPolicy(raw, p);
+  if (verdict.decision !== "emit") {
+    if (asJson) console.log(JSON.stringify(verdict));
+    process.exit(3);
+  }
+  if (asJson) { console.log(JSON.stringify(verdict)); return; }
+  process.stdout.write(verdict.chunks.join("\n\n"));
+}
 
-  // Filler: the cheap length floor first, then the phrase policy — which applies
-  // INDEPENDENTLY of length, so a long-winded "dolgozom rajta" is suppressed too.
-  // Exit 3, not 1: the hook must be able to tell "the policy rejected this" apart from
-  // "the lookup broke" (a crashing Node exits 1). Conflating them would make a broken
-  // policy lookup look like a filler verdict and drop mirroring without a word.
-  if (text.length < p.minLength || isFillerMessage(text, p.fillerPhrases)) process.exit(3);
-  if (text.length > p.maxLength) text = `${text.slice(0, p.maxLength - 1)}…`;
+/**
+ * `mirror-follow` — the chat→wall mirror's delivery process (wall-mirror-follower).
+ *
+ * Follows the session transcript and emits every new assistant text block as it is written.
+ * `--once` drains and exits, which is what `stop` uses so the last thing said still reaches
+ * the wall before it goes down.
+ */
+async function cmdMirrorFollow(args: string[]): Promise<void> {
+  const cfg = loadConfig();
+  const {
+    checkMirrorPid, drainMirror, resolveTranscriptPath, startMirrorFollow,
+  } = await import("./mirror-follow.js");
 
-  process.stdout.write(text);
+  const flag = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  // The runtime dir is named for the session (the skills scope it as
+  // `.set/copilot/$CLAUDE_CODE_SESSION_ID`), so its basename is the id unless told otherwise.
+  const sessionId = flag("--session") ?? basename(cfg.runtimeDir);
+  const resolved = resolveTranscriptPath({
+    explicit: flag("--transcript"), sessionId, cwd: cfg.projectRoot ?? process.cwd(),
+  });
+  if (!resolved.ok) {
+    console.error(`[set-copilot] mirror-follow: ${resolved.reason}`);
+    process.exit(1);
+  }
+
+  const opts = { transcript: resolved.path, force: args.includes("--force") };
+  if (args.includes("--once")) {
+    const r = drainMirror(cfg, opts);
+    console.log(`[set-copilot] mirror drain: ${r.emitted} kiküldve, ${r.suppressed} elnyomva, ${r.considered} vizsgálva`);
+    if (r.failure) { console.error(`[set-copilot] mirror: ${r.failure}`); process.exit(1); }
+    return;
+  }
+
+  // A second follower would orphan the first: the same refusal as a second capture.
+  const owner = checkMirrorPid(cfg.runtimeDir);
+  if (owner.state === "live") {
+    console.error(`[set-copilot] mirror-follow: már fut egy figyelő ehhez a runtime dirhez (pid ${owner.pid})`);
+    process.exit(1);
+  }
+
+  const handle = startMirrorFollow(cfg, opts);
+  console.log(`[set-copilot] mirror-follow: ${resolved.path} (${resolved.how})`);
+  const shutdown = (): void => { handle.stop(); process.exit(0); };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
 // ---- stop / status ---------------------------------------------------------
+
+/**
+ * Deliver what the transcript already holds, then stop the follower.
+ *
+ * Called from `stop` AND `wall-stop`, because either can be the teardown that ends mirroring,
+ * and a message that was written but not yet delivered is exactly the loss this change exists
+ * to prevent. Synchronous and bounded: the drain reads a file and appends to another.
+ *
+ * It reports what it could not deliver instead of exiting as if it had — an undelivered
+ * closing summary that nobody mentions is how the mirror looked "fine" for a whole session.
+ */
+async function drainMirrorAtStop(cfg: CopilotConfig): Promise<void> {
+  const marker = join(cfg.runtimeDir, "wall-mirror.enabled");
+  if (!existsSync(marker)) return; // mirroring was never opted in for this session
+  try {
+    // Loaded lazily: `stop` runs on every SessionEnd, so a session that never mirrored must
+    // not pay for the mirror path at all.
+    const mod = await import("./mirror-follow.js");
+    const sessionId = basename(cfg.runtimeDir);
+    const resolved = mod.resolveTranscriptPath({ sessionId, cwd: cfg.projectRoot ?? process.cwd() });
+    if (resolved.ok) {
+      const r = mod.drainMirror(cfg, { transcript: resolved.path });
+      if (r.emitted) console.log(`[set-copilot] Mirrored ${r.emitted} pending message(s) before shutdown`);
+      if (r.failure) console.error(`[set-copilot] Mirror drain incomplete — NOT delivered: ${r.failure}`);
+    } else {
+      console.error(`[set-copilot] Mirror drain skipped: ${resolved.reason}`);
+    }
+    const pid = mod.mirrorPid(cfg.runtimeDir);
+    if (pid !== null) {
+      try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
+      console.log(`[set-copilot] Stopped mirror follower (pid ${pid})`);
+    }
+  } catch (e) {
+    // Mirroring is a display convenience: losing it must never break the stop path.
+    console.error(`[set-copilot] Mirror drain failed: ${(e as Error).message}`);
+  }
+}
 
 function pidFile(): string {
   return join(loadConfig().runtimeDir, "capture.pid");
 }
 
-function cmdStop(print = false): void {
+async function cmdStop(print = false): Promise<void> {
   const cfg = loadConfig();
   const pf = pidFile();
   if (!existsSync(pf)) {
@@ -409,6 +497,7 @@ function cmdStop(print = false): void {
     console.log("[set-copilot] No capture running");
     // A capture that hit its --max-minutes limit removed its own PID file, but its
     // transcript is still waiting to be handed over — so hand over even with nothing to kill.
+    await drainMirrorAtStop(cfg);
     handoverAtStop(cfg, print);
     return;
   }
@@ -429,6 +518,9 @@ function cmdStop(print = false): void {
     console.log("[set-copilot] Capture already stopped");
   }
   beep("end"); // async — does not delay the caller
+  // Mirror what is still pending before the follower goes away — same reason as `wall-stop`:
+  // the last thing said is the most valuable thing a wall can hold.
+  await drainMirrorAtStop(cfg);
   handoverAtStop(cfg, print);
 }
 
@@ -753,10 +845,14 @@ function listDirs(base: string): string[] {
  * The wall removes its own pid/url on a clean exit; we clean up too in case it
  * was already dead (a stale claim would otherwise refuse the next start).
  */
-function cmdWallStop(): void {
+async function cmdWallStop(): Promise<void> {
   const cfg = loadConfig();
   const pf = join(cfg.runtimeDir, "wall.pid");
   if (!existsSync(pf)) { console.log("[set-copilot] No wall running"); return; }
+  // Drain BEFORE the wall goes down: the closing summary is the most valuable thing a wall
+  // holds, and until now it could never appear — it is written in the same turn that stops
+  // the wall, so any turn-boundary mechanism saw it only after the wall was gone.
+  await drainMirrorAtStop(cfg);
   const pid = parseInt(readFileSync(pf, "utf-8").trim(), 10);
   try {
     process.kill(pid, "SIGTERM");
@@ -986,6 +1082,9 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot mirror-policy [--apply]
                                    resolved chat→wall mirror policy as JSON; --apply
                                    filters stdin by it (exit 3 = not wall material)
+  set-copilot mirror-follow [--once] [--transcript P] [--session ID]
+                                   follow the session transcript and mirror each new
+                                   message to the wall as it is written (--once drains)
   set-copilot sources              list audio input devices
   set-copilot doctor               audio + env + setup health check (probes real
                                    signal; also reports config drift + mirror readiness)

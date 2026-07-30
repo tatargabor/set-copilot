@@ -95,7 +95,8 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   **The record is engine-owned, not prompt-owned.** `stitchFile` appends its own entry; the
   caller cannot forget to. A skill told to "remember you already reviewed this" eventually will
   not, and this repo already paid for that lesson once — the chat→wall mirror began as a prompt
-  mandate, measurably fell behind in a live meeting, and became a `Stop` hook. A review is worse
+  mandate, measurably fell behind in a live meeting, and became a mechanism (a `Stop` hook first,
+  then `mirror-follow`; see the mirror section below for why the hook was not enough). A review is worse
   than a mirror line: forgetting means re-reading a whole meeting, or losing the knowledge twice
   if a stale status is believed. So `recovery mark` is not bookkeeping *after* the work — it is
   how findings are **delivered** (`--findings-file`), and there is deliberately no path that
@@ -118,6 +119,12 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   the artifacts on disk are the real evidence. Losing it costs redone work, never data.
 - **`src/capture.ts`** — wires the above together; also owns the runtime-dir invariants (below).
 - **`src/poll.ts`** — long-poll consumed by the meeting-copilot Monitor loop. Tracks a byte-independent line offset in `poll-offset`, dedups mic/system echo, returns early on an urgent/question/silence event, and emits `{"type":"capture-dead"}` when the capture PID is gone.
+- **`src/mirror-follow.ts` / `mirror-policy.ts` / `mirror-format.ts`** — the chat→wall mirror.
+  `mirror-follow` is the process (transcript resolution, offset, PID ownership, the log);
+  `mirror-policy` is the one implementation of the content judgement, called in-process by the
+  follower and wrapped by the `mirror-policy` CLI subcommand; `mirror-format` is the pure
+  block/fence/chunk layer. See "The chat→wall mirror is a follower, not a hook" below —
+  including why the original field diagnosis of it was wrong.
 - **`src/config.ts`** — resolution order (later wins): defaults → `~/.config/set-copilot/set-copilot.config.json` → project `set-copilot.config.json` → env (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, …). Nested sections merge key by key. `SONIOX_API_KEY` comes only from env / project `.env` / user `.env` — never the committed config.
 - **`src/copilot-prompt.ts`** — renders `copilot.alerts` + `copilot.instructions` into the policy markdown that `set-copilot prompt` prints and the skill loads at session start.
 - **`src/knowledge/`** — the knowledge-adapter layer. `run-digest.ts` resolves `knowledge.adapter` ("markdown" built-in, or a path to a module default-exporting a `(ctx) => KnowledgeAdapter` factory) and writes three artifacts into the runtime dir: `keyword-index.json`, `knowledge-context.json`, `knowledge-digest.md`. Capture reads the keyword index; the skills read the other two. `sources.ts` resolves `knowledge.sources` (dirs, files, globs) with a small dependency-free glob.
@@ -179,12 +186,63 @@ This package was extracted from one ERP project, and the recurring failure mode 
 
 Word boundaries are Unicode (`\p{L}\p{N}`), never `\b` or an enumerated Latin+Hungarian character class — `\b` treats `á` as a boundary and silently breaks every accented language.
 
+### The chat→wall mirror is a follower, not a hook
+
+`set-copilot mirror-follow` watches the Claude Code session transcript and emits every new
+assistant text block to the wall as it is written. It replaced a `Stop` hook on 2026-07-29, and
+the reason matters more than the mechanism, because the *first* diagnosis was wrong:
+
+The field report said "the mirror silently stopped at 20:52:39". Re-measuring the artifacts
+refuted it — `wall-events.jsonl`'s last write was **20:57:40**, the mirror was alive to the end,
+and the message it never delivered passed the policy cleanly (`mirror-policy --apply` exits 0 on
+it). What the timestamps show is worse than a stop: the hook was permanently **one message
+behind**. It fired at turn end and read the transcript *then*, racing the final block's flush
+(0.2 s decided it), and `jq … | last` kept one block per turn, so everything said mid-turn was
+discarded. A session's closing summary could never be mirrored at all — it is written in the same
+turn that stops the wall.
+
+So: don't reason about this path from the old report, and don't reintroduce a turn-boundary
+trigger. Four invariants carry the replacement, each from a defect in what it replaced:
+
+- **Delivery is confirmed before it is forgotten.** The hook wrote its dedup stamp *before*
+  emitting and emitted with `|| true` — a failed emit was invisible **and** permanently
+  de-duplicated, so it could never be retried. `mirror-offset` and `wall-mirror.last` advance
+  only after `emitWallEvents` reports success; a failed pass leaves both untouched and the next
+  pass retries. At-least-once, absorbed by the dedup — a repeat is cosmetic, a loss is the bug.
+- **Length control divides a message; it never deletes the end of it.** Measured: a
+  2143-character nine-item report reached the wall as 641 characters, item one of nine. So
+  `copilot.mirror.maxLength` is a **chunk budget** — a long message goes out as consecutive
+  events on block boundaries (`mirror-format.ts`), and the scrolling box accumulates them. A
+  boundary never lands inside a table or a fence, because half a table renders as debris and an
+  unterminated fence swallows the rest of the box.
+- **Formatting is applied by the delivery path, not asked of the model.** An ASCII table reached
+  the wall unfenced and rendered proportional, because the copilot was avoiding a code-block
+  stripping the config no longer performed. `fenceAlignedBlocks` fences box-drawing and
+  column-aligned blocks mechanically. Same reasoning added `heading` to the wall's closed text
+  vocabulary: a mirrored Claude Code message is heading-structured, and normalizing headings to
+  bold in the producer would have left the wall not knowing what a heading is.
+- **Every decision is recorded.** `wall-mirror.log` says, per message, `emit`/`filler`/`short`/
+  `dup`/`error`/`reset`; `doctor --mirror` answers follower-alive, marker, wall, and last
+  emission. The field failure was undiagnosable for want of exactly those answers — which is
+  also why `doctor --mirror` still looks for a leftover `wall-mirror.sh` registration: next to
+  the follower it would double every line, invisibly from the wall.
+
+One thing no mechanism can fix, so the skill owns it: **write the closing summary before stopping.**
+`stop` and `wall-stop` each drain the follower first, so anything already written gets out — but a
+summary written after the wall is down has nothing to reach.
+
 ### Runtime-dir invariants
 
 A capture **owns** its runtime dir (transcript + `capture.pid` + `capture.output` + `poll-offset`). The `/ds` and `/dd` skills scope it per Claude session via `SET_COPILOT_DIR="$PWD/.set/copilot/$CLAUDE_CODE_SESSION_ID"`, and `stop` finds the capture *through that directory* — so any change that touches the path must keep `capture` and `stop` byte-identical.
 
 Two rules are load-bearing and were each fixed after a real failure; don't regress them:
 
+0. **The mirror follower owns `mirror.pid` + `mirror-offset`** in the same dir, under the same
+   rules: a second follower is refused while one is live, a stale PID file is reclaimed, `stop`
+   stops it, and `set-repair` reports an orphan. A transcript shorter than `mirror-offset`
+   (truncated, rotated, replaced) resumes at **EOF** and logs the discontinuity — the one place
+   this path deliberately drops content, because replaying a session's history onto a live wall
+   in front of an audience is worse than losing the gap.
 1. **A transcript is handed over exactly once.** `stop --print` prints, then renames the file to `<name>-<timestamp>.jsonl`. Without the archive step a double `/dd` replays the previous dictation as if freshly spoken and Claude acts on it twice. `capture` likewise archives (never truncates) an unconsumed transcript it finds.
 2. **A second capture in the same runtime dir is refused** while one is live. Overwriting the PID file would orphan the first process — still recording, nothing able to stop it.
 3. **The wall event log is rotated, never truncated.** `wall-events.jsonl` is the canonical rebuild source for the accumulated state (graphs, pinned latest, and the scroll rings replayed to a reloading window). `wall --reset` archives it to `wall-events-<timestamp>.jsonl` — mirroring the transcript hand-over — and only *after* the live-wall check, so a running wall's log is never rotated out from under it. During a live session don't truncate the log or restart mid-session; a fresh run either uses a new scoped runtime dir or this deliberate `--reset`.

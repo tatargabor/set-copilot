@@ -27,6 +27,13 @@
  * Deliberate omission: `_underscore_` is NOT italic. Only `*asterisk*` is. A coding
  * copilot's message is full of `snake_case` identifiers and file names, and turning half of
  * one into italics is a worse failure than not italicizing an underscore someone meant.
+ *
+ * `heading` was added later (wall-mirror-follower) and is the one construct that arrived from
+ * measurement rather than design: the wall's largest producer of text is a mirrored Claude
+ * Code message, and such a message is heading-structured — its sections are what make it
+ * scannable at wall distance. `## Fejlesztési igények` was rendering WITH its hashes. The
+ * alternative was to normalize a heading to bold in the producer path, which would have left
+ * the wall not knowing what a heading is and two paths free to disagree about `##`.
  */
 
 // ---- the closed node union --------------------------------------------------
@@ -40,6 +47,7 @@
  * @typedef {"left"|"center"|"right"} CellAlign
  *
  * @typedef {{type:"paragraph",children:Inline[]}
+ *   | {type:"heading",level:number,children:Inline[]}
  *   | {type:"codeblock",lang:string,value:string}
  *   | {type:"bullets",items:Inline[][]}
  *   | {type:"numbers",items:Inline[][]}
@@ -52,7 +60,7 @@
  */
 export const NODE_TYPES = [
   "text", "bold", "italic", "code",
-  "paragraph", "codeblock", "bullets", "numbers", "table",
+  "paragraph", "heading", "codeblock", "bullets", "numbers", "table",
 ];
 
 // ---- inline scanner ---------------------------------------------------------
@@ -116,6 +124,9 @@ export function parseInline(s) {
 const FENCE = /^\s*```(.*)$/;
 const BULLET = /^\s*[-*]\s+(.*)$/;
 const NUMBER = /^\s*\d+[.)]\s+(.*)$/;
+// A heading needs a space AND content after the hashes: `#hashtag` is not a heading, and
+// neither is a bare `###`. Up to three leading spaces, as in markdown; more means code.
+const HEADING = /^ {0,3}(#{1,6})\s+(\S.*)$/;
 
 /** A table separator row: `| --- | :--: |` — the line that makes a pipe row a table. */
 const SEPARATOR_CELL = /^:?-{1,}:?$/;
@@ -207,6 +218,17 @@ export function parseWallText(s) {
         i = j;
         continue;
       }
+    }
+
+    // Heading. Only at a block start, and never inside a fence — the fence branch above
+    // consumes those lines before this is reached, so a `# comment` in a shell snippet stays
+    // a comment.
+    const heading = HEADING.exec(line);
+    if (heading) {
+      flushParagraph(para, out);
+      out.push({ type: "heading", level: heading[1].length, children: parseInline(heading[2]) });
+      i++;
+      continue;
     }
 
     // Bullet / numbered list: a run of consecutive matching lines is ONE list block, so a

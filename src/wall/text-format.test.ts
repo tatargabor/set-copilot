@@ -12,7 +12,7 @@ function textOf(nodes: unknown): string {
   if (!n || typeof n !== "object") return "";
   switch (n.type) {
     case "text": case "code": case "codeblock": return String(n.value);
-    case "bold": case "italic": case "paragraph": return textOf(n.children);
+    case "bold": case "italic": case "paragraph": case "heading": return textOf(n.children);
     case "bullets": case "numbers": return textOf(n.items);
     case "table": return textOf(n.header) + textOf(n.rows);
     default: return "";
@@ -112,7 +112,6 @@ describe("unsupported markup stays literal", () => {
     ["a link", "see [the docs](https://example.com) now"],
     ["an image", "![alt](img.png)"],
     ["a raw HTML tag", "<b>bold?</b> and <script>x()</script>"],
-    ["a heading", "# not a heading"],
     ["a blockquote", "> not a quote"],
     ["an underscore emphasis", "_not italic_"],
   ])("%s appears verbatim", (_label, input) => {
@@ -120,6 +119,46 @@ describe("unsupported markup stays literal", () => {
     expect(out).toHaveLength(1);
     expect(out[0].type).toBe("paragraph");
     expect(textOf(out[0])).toBe(input);
+  });
+});
+
+describe("headings render as headings (wall-mirror-follower)", () => {
+  // A mirrored Claude Code message is heading-structured; `## Fejlesztési igények` used to
+  // reach the wall WITH its hashes, which is what made the addition an engine change rather
+  // than a producer-side normalization.
+  it("takes the level and drops the hashes", () => {
+    const out = parseWallText("## Fejlesztési igények");
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ type: "heading", level: 2 });
+    expect(textOf(out[0])).toBe("Fejlesztési igények");
+  });
+
+  it("parses inline markup inside a heading", () => {
+    const out = parseWallText("### A `mirror-follow` **fut**");
+    expect(out[0].type).toBe("heading");
+    expect(textOf(out[0])).toBe("A mirror-follow fut");
+  });
+
+  it("is not a heading without a space and content after the hashes", () => {
+    for (const input of ["#hashtag nem címsor", "###", "#"]) {
+      const out = parseWallText(input);
+      expect(out[0].type).toBe("paragraph");
+      expect(textOf(out[0])).toBe(input);
+    }
+  });
+
+  it("leaves a `#` comment inside a fenced block alone", () => {
+    // The fence branch consumes these lines first — a shell comment must not become a heading.
+    const out = parseWallText("```bash\n# ez egy komment\nls -la\n```");
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe("codeblock");
+    expect(out[0].value).toContain("# ez egy komment");
+  });
+
+  it("does not turn a mid-paragraph hash line into a heading", () => {
+    const out = parseWallText("egy sor\nmásik sor # nem címsor");
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe("paragraph");
   });
 });
 
@@ -179,7 +218,7 @@ describe("the union carries no markup path (D3)", () => {
 
   it("declares exactly the closed vocabulary", () => {
     expect([...NODE_TYPES].sort()).toEqual([
-      "bold", "bullets", "code", "codeblock", "italic", "numbers", "paragraph", "table", "text",
+      "bold", "bullets", "code", "codeblock", "heading", "italic", "numbers", "paragraph", "table", "text",
     ]);
   });
 

@@ -241,15 +241,20 @@ export interface HookSource {
 }
 
 export interface MirrorInputs {
-  /** One entry per settings file consulted (project + user), each already resolved by `stopHookRegistered`. */
-  hookCommands: HookSource[];
-  /** Is the hook script itself present on disk? */
-  scriptExists: boolean;
+  /** The live follower's pid for `runtimeDir`, or null when none is running. */
+  followerPid: number | null;
   /** Is the `wall-mirror.enabled` opt-in marker set for `runtimeDir`? */
   markerExists: boolean;
   /** Is a wall running for `runtimeDir`? */
   wallRunning: boolean;
-  /** The runtime dir all three were evaluated against — named in the report, because a scope mismatch is itself a common cause of "the mirror does nothing". */
+  /** When the mirror last actually emitted, from its own log. Null when it never has. */
+  lastEmission: string | null;
+  /**
+   * A RETIRED `wall-mirror.sh` Stop hook still registered somewhere. Not a precondition —
+   * the opposite: with the follower running it would double-emit every line.
+   */
+  staleHook?: HookSource[];
+  /** The runtime dir all of these were evaluated against — named in the report, because a scope mismatch is itself a common cause of "the mirror does nothing". */
   runtimeDir: string;
 }
 
@@ -261,51 +266,40 @@ export interface MirrorState {
 
 export interface MirrorReport {
   runtimeDir: string;
-  hook: MirrorState;
+  follower: MirrorState;
   marker: MirrorState;
   wall: MirrorState;
-  /** All three met — mirroring is actually live. Never a substitute for the three states. */
+  /** What the mirror last did, so a stopped mirror is visible without reading the wall's log. */
+  activity: MirrorState;
+  /** All three preconditions met — mirroring is actually live. Never a substitute for the states. */
   ready: boolean;
   /** The gate `doctor --mirror` exits on: the marker and the wall may legitimately come later. */
-  hookRegistered: HookState;
+  followerRunning: boolean;
+  /** Present only when a retired mirror hook is still registered — a double-emit warning. */
+  staleHook?: MirrorState;
 }
 
-/** The command that installs the hook — named in every finding that reports it missing. */
-export const INSTALL_HOOK_COMMAND = "set-copilot init";
+/** The command that starts the follower — named in every finding that reports it missing. */
+export const START_FOLLOWER_COMMAND = "set-copilot mirror-follow";
 
 /**
- * Report mirror readiness as three INDEPENDENT states, never one verdict: the operator's
- * next action differs per state, and collapsing them is what made the 2026-07-28 failure
- * unattributable (a marker with no hook and a hook with no marker look the same from the
- * wall — both produce an empty wall and no error).
+ * Report mirror readiness as INDEPENDENT states, never one verdict: the operator's next
+ * action differs per state, and collapsing them is what made the 2026-07-28 failure
+ * unattributable (a marker with no mechanism and a mechanism with no marker look the same
+ * from the wall — both produce an empty wall and no error).
+ *
+ * `activity` is the state added after 2026-07-29, when a first report concluded "the mirror
+ * silently stopped" from a wall that had in fact delivered its last message 5 minutes later
+ * than believed. A mirror that reports when it last emitted cannot be misdiagnosed that way.
  */
 export function diagnoseMirror(inp: MirrorInputs): MirrorReport {
-  const found = inp.hookCommands.find((h) => h.registered === true);
-  const anyUnknown = inp.hookCommands.some((h) => h.registered === "unknown");
-  const where = inp.hookCommands.map((h) => h.path).join(", ") || "(nincs settings.json)";
-
-  let hook: MirrorState;
-  if (found) {
-    hook = inp.scriptExists
-      ? { ok: true, message: `Stop hook regisztrálva (${found.path})` }
-      : {
-          ok: false,
-          message: `Stop hook regisztrálva (${found.path}), de a wall-mirror.sh szkript nincs a lemezen`,
-          fix: `${INSTALL_HOOK_COMMAND} — újratelepíti a hook szkriptet`,
-        };
-  } else if (anyUnknown) {
-    hook = {
-      ok: "unknown",
-      message: `Stop hook: nem eldönthető — hibás settings.json (${where})`,
-      fix: "javítsd a settings.json szintaxisát, majd futtasd újra",
-    };
-  } else {
-    hook = {
-      ok: false,
-      message: `Stop hook nincs regisztrálva — nem található wall-mirror.sh a Stop hookok között (megnézve: ${where})`,
-      fix: `${INSTALL_HOOK_COMMAND} — enélkül a tükrözés soha nem fut le, hibaüzenet nélkül`,
-    };
-  }
+  const follower: MirrorState = inp.followerPid !== null
+    ? { ok: true, message: `figyelő fut (pid ${inp.followerPid})` }
+    : {
+        ok: false,
+        message: "nem fut leirat-figyelő ehhez a runtime dirhez",
+        fix: `${START_FOLLOWER_COMMAND} — enélkül semmi nem kerül ki a falra, hibaüzenet nélkül`,
+      };
 
   const marker: MirrorState = inp.markerExists
     ? { ok: true, message: "opt-in jelölő megvan (wall-mirror.enabled)" }
@@ -323,12 +317,31 @@ export function diagnoseMirror(inp: MirrorInputs): MirrorReport {
         fix: "set-copilot wall — indításkor ez még nem hiba, tükrözéskor viszont kell",
       };
 
+  const activity: MirrorState = inp.lastEmission
+    ? { ok: true, message: `utolsó tükrözés: ${inp.lastEmission}` }
+    : {
+        ok: false,
+        message: "még semmit nem tükrözött ebben a runtime dirben",
+        fix: "wall-mirror.log — ott áll, mit döntött üzenetenként (elnyomás is)",
+      };
+
+  const staleFound = inp.staleHook?.find((h) => h.registered === true);
+  const staleHook: MirrorState | undefined = staleFound
+    ? {
+        ok: false,
+        message: `a visszavont wall-mirror.sh Stop hook még regisztrálva van (${staleFound.path}) — kétszer küldene ki mindent`,
+        fix: "set-copilot init — leveszi a hookot",
+      }
+    : undefined;
+
   return {
     runtimeDir: inp.runtimeDir,
-    hook,
+    follower,
     marker,
     wall,
-    ready: hook.ok === true && marker.ok === true && wall.ok === true,
-    hookRegistered: found ? true : anyUnknown ? "unknown" : false,
+    activity,
+    ready: follower.ok === true && marker.ok === true && wall.ok === true,
+    followerRunning: inp.followerPid !== null,
+    ...(staleHook ? { staleHook } : {}),
   };
 }
