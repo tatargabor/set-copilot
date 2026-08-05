@@ -35,7 +35,7 @@ And dictation is really the on-ramp. **The meeting copilot has no built-in equiv
   - **local whisper** (free, offline, no key): `brew install whisper-cpp` + a ggml model in `~/.config/set-copilot/models/` — set `"sttBackend": "whisper"`
 - Audio capture tooling:
   - **Linux**: `parec` (PipeWire/PulseAudio) — usually preinstalled. `notify-send` for desktop alerts.
-  - **macOS**: `sox` (`brew install sox`). System-audio capture for meetings needs [BlackHole](https://github.com/ExistentialAudio/BlackHole); dictation needs only the mic. Cloning the repo? `brew bundle` installs both from the [`Brewfile`](Brewfile).
+  - **macOS**: `sox` (`brew install sox`) **plus a Microphone grant** — see [macOS setup](#macos-setup). System-audio capture for meetings needs [BlackHole](https://github.com/ExistentialAudio/BlackHole); dictation needs only the mic. Cloning the repo? `brew bundle` installs both from the [`Brewfile`](Brewfile).
 
 ## Install
 
@@ -43,6 +43,14 @@ And dictation is really the on-ramp. **The meeting copilot has no built-in equiv
 npm install --save-dev set-copilot   # or: npm i -g set-copilot
 npx set-copilot init                  # scaffolds skills + config into this project
 ```
+
+**Not on the npm registry yet** — until it is published, install from git:
+
+```bash
+npm i -g github:tatargabor/set-copilot
+```
+
+The package builds itself on install (`prepare` → `tsc`), because `bin` points at `dist/`. Without that step a git install completes "successfully" and leaves no `set-copilot` command at all — the symptom is `npx set-copilot` reaching out to the registry and 404ing on a package you just installed.
 
 `init` writes:
 - `.claude/skills/{dictate,dd,ds,meeting-copilot}/` — the Claude Code skills
@@ -68,6 +76,21 @@ set-copilot init --global      # ~/.claude/skills + ~/.config/set-copilot/
 ```
 
 That writes the skills into `~/.claude/skills/` and the config plus a `0600` `.env` into `~/.config/set-copilot/` (or `$XDG_CONFIG_HOME`). Put your key in that `.env` once and `/ds` works from any directory. A project's own `set-copilot.config.json` / `.env` still wins over the user-level one, so a repo can override the language, mic, knowledge, or copilot policy without a second key.
+
+### macOS setup
+
+```bash
+brew install sox
+npx set-copilot sources    # → your input devices, default input first
+npx set-copilot doctor     # → must report "él a jel" / live signal, not 0 bytes
+```
+
+Two things bite on macOS, and both look identical from the outside — **the capture runs, reports no error, and produces silence**:
+
+- **The Microphone permission belongs to the enclosing app, not to `sox`.** macOS grants it to the app bundle at the top of the process tree — Terminal, iTerm, Zed, VS Code — so a shell inside an unticked app records nothing. Grant it under *System Settings → Privacy & Security → Microphone* and **restart that app**; a running process does not pick up a new grant. `doctor` names the app for you when it sees 0 bytes.
+- **A device name from another machine silently resolves to nothing.** `micSource` is not portable: a Linux `alsa_input.usb-…` name means nothing to CoreAudio, and sox opens *something*, prints no error, and streams 0 bytes. Leave `micSource` empty (system default) unless you have a reason not to, and take the exact name from `set-copilot sources`.
+
+Only dictation works out of the box. Meetings additionally need [BlackHole](https://github.com/ExistentialAudio/BlackHole) for the other party's audio: install it, route system output through a Multi-Output Device, and set `audio.monitorSource` to `"BlackHole 2ch"` (the default guess). Without it the capture continues **mic-only** and says so, rather than failing.
 
 ## Quickstart
 
@@ -136,7 +159,18 @@ Secrets never go in this file — `SONIOX_API_KEY` comes from `.env` / the envir
 
 Resolution order, later wins: built-in defaults → `~/.config/set-copilot/set-copilot.config.json` → the project's `set-copilot.config.json` → environment variables (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, `SET_COPILOT_LANGUAGE`). Sections merge key by key, so a project can override `knowledge.sources` without restating your user-level `keywords`. The API key is read from the environment, then the project `.env`, then the user-level one.
 
-`micSource` / `monitorSource` are device names. List them with `npx set-copilot sources`.
+`micSource` / `monitorSource` are device names. List them with `npx set-copilot sources`; **empty means the system default**, which is the right answer more often than a pinned name.
+
+#### One repo, two machines
+
+A device name is machine-specific, so a `set-copilot.config.json` shared through git eventually names a device the other machine does not have — and the failure is silent (see [macOS setup](#macos-setup)). The project config outranks the user-level one, so the escape hatch is the environment, and **setting the variable to an empty string is meaningful**:
+
+```bash
+MIC_SOURCE= set-copilot doctor          # ignore the committed device, use the system default
+MIC_SOURCE="HD Pro Webcam C920" …       # or name this machine's device
+```
+
+Presence of the variable decides, not its truthiness — `MIC_SOURCE=` is an explicit "no device", not an unset value. Put it in the project `.env` (gitignored) to make it stick per machine. `MONITOR_SOURCE` behaves the same way.
 
 ### Nothing here is English- or ERP-shaped
 

@@ -69,9 +69,56 @@ function probeSource(device: string | undefined, sampleRate: number): Promise<Pr
   });
 }
 
+/**
+ * The macOS app whose Microphone permission governs this process.
+ *
+ * TCC grants the permission to the **app bundle at the top of the process
+ * tree**, not to `sox` and not to node — so a shell inside Zed/iTerm/Terminal
+ * records silence until *that* app is ticked. Pure and exported: the ancestry
+ * walk needs a real process tree, the decision does not.
+ *
+ * Takes commands leaf-first and returns the nearest enclosing `.app` name.
+ */
+export function hostAppFromAncestry(commands: string[]): string | undefined {
+  for (const cmd of commands) {
+    const m = /\/([^/]+)\.app\//.exec(cmd);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+/** Walk this process's ancestry (leaf → init) and name the enclosing macOS app. */
+function macHostApp(): string | undefined {
+  const commands: string[] = [];
+  let pid = process.pid;
+  // Bounded: a wedged/looping ancestry must not hang the doctor.
+  for (let depth = 0; depth < 12; depth++) {
+    const r = spawnSync("ps", ["-o", "ppid=,command=", "-p", String(pid)], { encoding: "utf-8" });
+    const line = (r.stdout || "").trim();
+    if (r.status !== 0 || !line) break;
+    const split = line.indexOf(" ");
+    if (split < 0) break;
+    const ppid = Number(line.slice(0, split));
+    commands.push(line.slice(split + 1).trim());
+    if (!Number.isFinite(ppid) || ppid <= 1) break;
+    pid = ppid;
+  }
+  return hostAppFromAncestry(commands);
+}
+
 function verdict(label: string, r: ProbeResult, expectedBytesPerSec: number, silenceIsNormal = false): boolean {
   if (r.bytes === 0) {
     console.log(`  ✗ ${label}: 0 byte — nem folyik hang (rossz eszköz vagy törött parec/sox)`);
+    // On macOS the device opens cleanly and sox prints nothing at all when the
+    // permission is missing, so "wrong device" is the wrong first guess — a
+    // denied mic and a mistyped device name are indistinguishable from the
+    // bytes alone. Name the app that actually holds the grant.
+    if (platform() === "darwin") {
+      const app = macHostApp() ?? "a terminál/IDE alkalmazásod";
+      console.log(`    → macOS: ha az eszköz megnyílt, de 0 bájt jön, szinte mindig a mikrofon-engedély hiányzik.`);
+      console.log(`      Rendszerbeállítások → Adatvédelem és biztonság → Mikrofon → kapcsold be: ${app}`);
+      console.log(`      majd INDÍTSD ÚJRA — a már futó folyamatok nem kapják meg az engedélyt.`);
+    }
     return false;
   }
   const secs = r.bytes / expectedBytesPerSec;

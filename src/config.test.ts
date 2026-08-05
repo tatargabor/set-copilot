@@ -24,6 +24,8 @@ beforeEach(() => {
   delete process.env.WHISPER_MODEL;
   delete process.env.WHISPER_BIN;
   delete process.env.COPILOT_MIRROR;
+  delete process.env.MIC_SOURCE;
+  delete process.env.MONITOR_SOURCE;
 });
 
 afterEach(() => {
@@ -31,6 +33,8 @@ afterEach(() => {
   rmSync(project, { recursive: true, force: true });
   delete process.env.SET_COPILOT_HOME;
   delete process.env.COPILOT_MIRROR;
+  delete process.env.MIC_SOURCE;
+  delete process.env.MONITOR_SOURCE;
 });
 
 const writeCfg = (dir: string, cfg: unknown): void =>
@@ -82,6 +86,28 @@ describe("loadConfig", () => {
     const cfg = loadConfig(project);
     expect(cfg.language).toBe("hu"); // inherited from the user config
     expect(cfg.audio.monitorSource).toBe("proj-monitor");
+  });
+
+  it("lets an EMPTY device env var mean 'system default', overriding a pinned project device", () => {
+    // A committed micSource is machine-specific: a Linux `alsa_input.usb-…` name
+    // resolves to nothing on macOS and captures 0 bytes without erroring. The
+    // project config outranks the user-level one, so the env var is the only
+    // per-machine escape — and it has to be able to say "no device", not just
+    // "a different device". Presence of the variable is what decides.
+    writeCfg(project, { audio: { micSource: "alsa_input.usb-046d_C920-02.analog-stereo" } });
+    expect(loadConfig(project).audio.micSource).toBe("alsa_input.usb-046d_C920-02.analog-stereo");
+
+    process.env.MIC_SOURCE = "";
+    expect(loadConfig(project).audio.micSource).toBe("");
+
+    process.env.MIC_SOURCE = "HD Pro Webcam C920";
+    expect(loadConfig(project).audio.micSource).toBe("HD Pro Webcam C920");
+  });
+
+  it("applies the same rule to the monitor source", () => {
+    writeCfg(project, { audio: { monitorSource: "alsa_output.pci-0000_00.monitor" } });
+    process.env.MONITOR_SOURCE = "";
+    expect(loadConfig(project).audio.monitorSource).toBe("");
   });
 
   it("merges nested sections rather than replacing them wholesale", () => {

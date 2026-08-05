@@ -249,6 +249,53 @@ export function parseInputGain(pactlOutput: string, source?: string): InputGain 
 }
 
 /**
+ * Parse `system_profiler SPAudioDataType -json` into CoreAudio **input** device
+ * names, default input first.
+ *
+ * Kept pure and exported so the macOS device list is unit-testable — the shape
+ * is Apple's, undocumented, and has moved before; a parser that only ever runs
+ * against one machine's hardware is a parser nobody can verify.
+ *
+ * An entry is an input iff it declares `coreaudio_device_input` (channel count).
+ * Output-only devices carry `coreaudio_device_output` instead and must not be
+ * offered as a `micSource`.
+ */
+export function parseMacInputDevices(json: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const groups = (parsed as { SPAudioDataType?: unknown })?.SPAudioDataType;
+  if (!Array.isArray(groups)) return [];
+
+  const inputs: { name: string; isDefault: boolean }[] = [];
+  // The tree is one level deeper on some macOS versions (a "Devices" group that
+  // holds the real entries), so walk `_items` recursively rather than indexing.
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+    const item = node as Record<string, unknown>;
+    const name = typeof item._name === "string" ? item._name : undefined;
+    if (name && item.coreaudio_device_input !== undefined) {
+      inputs.push({ name, isDefault: item.coreaudio_default_audio_input_device !== undefined });
+    }
+    if (item._items !== undefined) walk(item._items);
+  };
+  walk(groups);
+
+  // Default first: it is the name `micSource: ""` already resolves to, so seeing
+  // it at the top is what tells the reader their config is already correct.
+  inputs.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+  // The bare name comes first on the line so it stays copy-pasteable into micSource.
+  return inputs.map((d) => (d.isDefault ? `${d.name}  (default input)` : d.name));
+}
+
+/**
  * List available audio sources (for config discovery)
  */
 export async function listSources(): Promise<string[]> {
@@ -266,16 +313,19 @@ export async function listSources(): Promise<string[]> {
       });
     });
   } else if (os === "darwin") {
+    // NOT `sox --help-device coreaudio`: current Homebrew sox builds reject the
+    // flag outright ("getopt: parameter not recognized from `--help-device'"),
+    // so the old implementation returned sox's own usage error as if it were a
+    // device list — two bogus "sources" and the real mic nowhere in sight.
+    // system_profiler is the OS's own answer and needs no third-party binary.
     return new Promise((resolve) => {
-      const proc = spawn(soxBin(), ["--help-device", "coreaudio"], { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = spawn("system_profiler", ["SPAudioDataType", "-json"], { stdio: ["ignore", "pipe", "ignore"] });
       let output = "";
-      proc.stderr!.on("data", (d: Buffer) => { output += d.toString(); });
-      // Missing sox emits an unhandled 'error' event that would crash the
+      proc.stdout!.on("data", (d: Buffer) => { output += d.toString(); });
+      // Missing binary emits an unhandled 'error' event that would crash the
       // process — swallow it and report no sources instead.
       proc.on("error", () => resolve([]));
-      proc.on("close", () => {
-        resolve(output.split("\n").filter(Boolean));
-      });
+      proc.on("close", () => resolve(parseMacInputDevices(output)));
     });
   }
   return [];
