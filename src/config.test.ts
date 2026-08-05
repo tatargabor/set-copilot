@@ -110,6 +110,18 @@ describe("loadConfig", () => {
     expect(loadConfig(project).audio.monitorSource).toBe("");
   });
 
+  it("keeps the machine's device when the project config declares other audio settings", () => {
+    // A device name belongs to the machine, so it lives in the user config; the
+    // project may still have opinions about `sampleRate`. `audio` was the one
+    // nested section not merged per key, so declaring sampleRate in the repo
+    // dropped the machine's mic and captured from the system default instead.
+    writeCfg(userHome, { audio: { micSource: "HD Pro Webcam C920" } });
+    writeCfg(project, { audio: { sampleRate: 8000 } });
+    const cfg = loadConfig(project);
+    expect(cfg.audio.micSource).toBe("HD Pro Webcam C920");
+    expect(cfg.audio.sampleRate).toBe(8000);
+  });
+
   it("merges nested sections rather than replacing them wholesale", () => {
     writeCfg(userHome, { knowledge: { keywords: [{ topic: "shared", stems: ["shared"] }] } });
     writeCfg(project, { knowledge: { sources: ["docs"] } });

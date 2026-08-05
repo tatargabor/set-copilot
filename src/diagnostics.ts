@@ -17,7 +17,7 @@
  * config or settings as a side effect of being asked what is wrong.
  */
 
-import { DEFAULTS, normalizeKeywords } from "./config.js";
+import { CONFIG_FILENAME, DEFAULTS, normalizeKeywords, userConfigDir } from "./config.js";
 
 // ---- finding ----------------------------------------------------------------
 
@@ -185,6 +185,29 @@ export function diagnoseConfig(files: RawConfigFile[], ctx: ConfigDiagnosisConte
         level: "info",
         message: `${winner.path}${also}: runtimeDir="${winner.data!.runtimeDir as string}" hatástalan — a SET_COPILOT_DIR="${ctx.envRuntimeDir}" felülírja (a /ds, /dd és /meeting-copilot skillek mindig beállítják)`,
         fix: "a config-beli érték elhagyható; a futásidejű könyvtárat a session-scope adja",
+      });
+    }
+  }
+
+  // 5. A device name pinned in the PROJECT config. `micSource`/`monitorSource` name
+  //    hardware, so they are a property of the machine, not of the repo — and the
+  //    project config is the one that gets committed and cloned onto a second machine,
+  //    where the name resolves to nothing. That failure is silent by nature: the
+  //    capture starts, reports no error, and streams zero bytes.
+  //
+  //    Ordering, not paths: `files` arrives in resolution order (user, then project),
+  //    the same convention finding 4 relies on. A user-only install has one file and
+  //    is never flagged — that is exactly where the device belongs.
+  if (files.length > 1) {
+    const projectFile = files[files.length - 1];
+    const projectAudio = projectFile.data?.audio as Record<string, unknown> | undefined;
+    const pinned = (["micSource", "monitorSource"] as const)
+      .filter((k) => typeof projectAudio?.[k] === "string" && (projectAudio[k] as string).length > 0);
+    if (pinned.length) {
+      findings.push({
+        level: "warn",
+        message: `${projectFile.path}: ${pinned.map((k) => `audio.${k}="${projectAudio![k] as string}"`).join(", ")} — eszköznév a projekt configban, ami gépenként más`,
+        fix: `tedd át a gép saját configjába (${userConfigDir()}/${CONFIG_FILENAME}) és töröld innen — a projekt config felülírja a gépit, és egy másik gépen ez a név némán 0 bájtot ad`,
       });
     }
   }

@@ -123,7 +123,7 @@ Every field is optional. Dictation works with an empty config; the copilot needs
     "bin": "whisper-cli",           // whisper.cpp binary (brew install whisper-cpp)
     "model": ""                     // path to a ggml model; empty → ~/.config/set-copilot/models/ggml-small.en.bin
   },
-  "audio": { "micSource": "", "monitorSource": "", "sampleRate": 16000 },
+  "audio": { "sampleRate": 16000 },  // micSource/monitorSource belong in the USER config — see below
 
   "knowledge": {
     "adapter": "markdown",          // built-in, or a path to your own adapter module
@@ -161,16 +161,32 @@ Resolution order, later wins: built-in defaults → `~/.config/set-copilot/set-c
 
 `micSource` / `monitorSource` are device names. List them with `npx set-copilot sources`; **empty means the system default**, which is the right answer more often than a pinned name.
 
-#### One repo, two machines
+#### A device name belongs to the machine, not to the repo
 
-A device name is machine-specific, so a `set-copilot.config.json` shared through git eventually names a device the other machine does not have — and the failure is silent (see [macOS setup](#macos-setup)). The project config outranks the user-level one, so the escape hatch is the environment, and **setting the variable to an empty string is meaningful**:
+`micSource` / `monitorSource` name **hardware**. Put them in the user-level config — one per machine — and keep them out of the committed project config:
 
-```bash
-MIC_SOURCE= set-copilot doctor          # ignore the committed device, use the system default
-MIC_SOURCE="HD Pro Webcam C920" …       # or name this machine's device
+```jsonc
+// ~/.config/set-copilot/set-copilot.config.json   ← this machine, not the repo
+{ "audio": { "micSource": "HD Pro Webcam C920" } }
 ```
 
-Presence of the variable decides, not its truthiness — `MIC_SOURCE=` is an explicit "no device", not an unset value. Put it in the project `.env` (gitignored) to make it stick per machine. `MONITOR_SOURCE` behaves the same way.
+```jsonc
+// <repo>/set-copilot.config.json                   ← shared, no device names
+{ "language": "hu", "audio": { "sampleRate": 16000 } }
+```
+
+The project config outranks the user-level one, so a committed device name wins on **every** clone — and on a machine that has no such device, the capture starts, reports no error, and streams zero bytes. `doctor` warns when it finds one, because nothing else will.
+
+Per-machine `audio` keys survive alongside project-level ones (the section merges key by key), so declaring `sampleRate` in the repo does not discard the machine's microphone.
+
+If you cannot edit either file — CI, a one-off run, a device you're testing — the environment still wins, and **an empty value is meaningful**:
+
+```bash
+MIC_SOURCE= set-copilot doctor          # ignore any configured device, use the system default
+MIC_SOURCE="HD Pro Webcam C920" …       # or name one for this run
+```
+
+Presence of the variable decides, not its truthiness: `MIC_SOURCE=` is an explicit "no device", not an unset value. `MONITOR_SOURCE` behaves the same way.
 
 ### Nothing here is English- or ERP-shaped
 
