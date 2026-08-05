@@ -157,6 +157,15 @@ Every field is optional. Dictation works with an empty config; the copilot needs
 
 Secrets never go in this file — `SONIOX_API_KEY` comes from `.env` / the environment.
 
+### The config migrates itself
+
+Every command except `init` and `help` starts with a config preflight:
+
+- **Invalid JSON stops the run**, naming the file and the syntax error. It does not fall back to defaults — a trailing comma would otherwise silently switch the capture's language and microphone, and a dictation that records the wrong thing cannot be recovered.
+- **An outdated config is migrated in place**, and the previous state is kept as `<name>.config.json.bak` next to it. Each file carries a `configVersion`; a version bump moves keys that changed meaning. The v1 migration lifts `audio.micSource` / `audio.monitorSource` out of a project config and into the machine's, without overwriting a device the machine already declares.
+
+An up-to-date install writes nothing and leaves no backup. Add `set-copilot.config.json.bak` to your `.gitignore`.
+
 Resolution order, later wins: built-in defaults → `~/.config/set-copilot/set-copilot.config.json` → the project's `set-copilot.config.json` → environment variables (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, `SET_COPILOT_LANGUAGE`). Sections merge key by key, so a project can override `knowledge.sources` without restating your user-level `keywords`. The API key is read from the environment, then the project `.env`, then the user-level one.
 
 `micSource` / `monitorSource` are device names. List them with `npx set-copilot sources`; **empty means the system default**, which is the right answer more often than a pinned name.

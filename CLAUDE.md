@@ -164,7 +164,17 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   follower and wrapped by the `mirror-policy` CLI subcommand; `mirror-format` is the pure
   block/fence/chunk layer. See "The chat→wall mirror is a follower, not a hook" below —
   including why the original field diagnosis of it was wrong.
-- **`src/config.ts`** — resolution order (later wins): defaults → `~/.config/set-copilot/set-copilot.config.json` → project `set-copilot.config.json` → env (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, …). Nested sections merge key by key. `SONIOX_API_KEY` comes only from env / project `.env` / user `.env` — never the committed config.
+- **`src/config.ts`** — resolution order (later wins): defaults → `~/.config/set-copilot/set-copilot.config.json` → project `set-copilot.config.json` → env (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, …). Nested sections merge key by key — **all** of them, `audio` included; it was the one omission, and it silently discarded a machine's microphone whenever a project declared `sampleRate`. `SONIOX_API_KEY` comes only from env / project `.env` / user `.env` — never the committed config.
+- **`src/config-migrate.ts` / `config-preflight.ts`** — config schema versioning, run by `cli.ts` before every command except `init` (which creates the files) and `help`. Same split as `transcript-build` / `transcript-stitch-run`: the migrations are pure and unit-tested, only the preflight touches disk.
+
+  It exists because an upgrade can change what a key MEANS, and the resulting failure is silent — nobody edits a config they believe is correct, so the engine has to come and get it. Two behaviours were chosen deliberately, and both cut against the repo's usual posture:
+
+  - **Migrations apply themselves**, backing the original up as `<name>.bak` first (`.gitignore` it). Warn-and-wait leaves the broken state in place for as long as the user does not read the warning.
+  - **Unparseable JSON is fatal**, not fail-open. Everywhere else a bad config degrades to defaults; here that means capturing in the wrong language from the wrong device, which looks like success. A dictation that refuses to start costs seconds; one that records the wrong thing is gone.
+
+  The unit of migration is the **whole document set**, not one file — the v1 migration is a cross-file *move* (device names out of the project config, into the machine's), which a per-file step cannot express. It never overwrites a device the machine already declares: that one matches the hardware by construction.
+
+  ⚠ **Any test that spawns the real CLI must set `SET_COPILOT_HOME`.** The preflight rewrites the user-level config, so without it the suite migrates the developer's own `~/.config/set-copilot` — which is exactly what `recovery-ledger.test.ts` did the first time this existed, discovered only by the `.bak` it left behind.
 - **`src/copilot-prompt.ts`** — renders `copilot.alerts` + `copilot.instructions` into the policy markdown that `set-copilot prompt` prints and the skill loads at session start.
 - **`src/knowledge/`** — the knowledge-adapter layer. `run-digest.ts` resolves `knowledge.adapter` ("markdown" built-in, or a path to a module default-exporting a `(ctx) => KnowledgeAdapter` factory) and writes three artifacts into the runtime dir: `keyword-index.json`, `knowledge-context.json`, `knowledge-digest.md`. Capture reads the keyword index; the skills read the other two. `sources.ts` resolves `knowledge.sources` (dirs, files, globs) with a small dependency-free glob.
 

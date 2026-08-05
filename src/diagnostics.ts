@@ -51,6 +51,9 @@ export const EXTRA_KNOWN_KEYS: readonly string[] = [
   "copilot.handoverCommand",
   "copilot.dictationHandoverCommand",
   "wall.categoriesModule",
+  // Written by the migration preflight, not read by loadConfig — without it the
+  // unknown-key check would flag the very stamp the engine just applied.
+  "configVersion",
 ];
 
 /**
