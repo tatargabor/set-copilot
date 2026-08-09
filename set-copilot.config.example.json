@@ -16,6 +16,7 @@
     "keywords": []
   },
   "copilot": {
-    "instructions": ""
+    "instructions": "",
+    "handoverCommand": ""
   }
 }

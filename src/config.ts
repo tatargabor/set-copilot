@@ -88,6 +88,24 @@ export interface CopilotPromptConfig {
    */
   mirror: MirrorConfig;
   /**
+   * A project command `stop` runs AFTER the transcript is archived and the derived
+   * artifacts are written — the seam that lets a project hand its transcript on
+   * (out of the gitignored runtime dir, into its own inputs) without forking the
+   * meeting-copilot skill. Absent by default; absent means today's handover exactly.
+   *
+   * It cannot fail the handover: a non-zero exit, a missing executable or a timeout is
+   * reported and the archived path still returned, on the same reasoning `stitchOnStop`
+   * follows — the `renameSync` is the invariant, everything after it is convenience.
+   *
+   * The paths arrive as environment variables (`SET_COPILOT_TRANSCRIPT`,
+   * `…_TRANSCRIPT_MD`, `…_TRANSCRIPT_JSONL`, `SET_COPILOT_DIR`) rather than as
+   * placeholders: the values are file paths, and substituting them into a shell string
+   * is a quoting bug waiting for the first space. `COPILOT_HANDOVER_SLUG` is passed
+   * through when set, because the meeting's topic is the session's knowledge, not the
+   * capture's — the skill runs `COPILOT_HANDOVER_SLUG=<topic> set-copilot stop`.
+   */
+  handoverCommand?: string;
+  /**
    * What the copilot answers to. Plain words, not regexes — naming one of these
    * marks the line `command: true`, and `poll` returns at once instead of waiting
    * for the silence gate. Default `["copilot"]`; add nicknames or slang freely
@@ -819,6 +837,21 @@ export function normalizeKeywords(raw: unknown): KeywordPattern[] {
  * flag matches how the phrases are used at match time, so a pattern that only fails under
  * Unicode mode is caught here rather than at the first turn of a live meeting.
  */
+/**
+ * `copilot.handoverCommand`, or undefined. A present-but-unusable value is a warning, not
+ * a throw: this command runs after the archive, and nothing it can be must be able to stop
+ * a transcript from being handed over.
+ */
+function validHandoverCommand(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  // An empty string is "not configured", silently — the same idiom the shipped example
+  // config already uses for `copilot.instructions`, so the key can sit in the example as
+  // its own documentation without warning on every load.
+  if (typeof raw === "string") return raw.trim() || undefined;
+  console.warn(`[set-copilot] Ignoring malformed copilot.handoverCommand: ${JSON.stringify(raw)}`);
+  return undefined;
+}
+
 function validFillerPhrases(raw: unknown[]): string[] {
   const good: string[] = [];
   for (const p of raw) {
@@ -1014,6 +1047,10 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
             ? copilot.mirror.codeBlocks
             : DEFAULTS.copilot.mirror.codeBlocks,
       },
+      // A non-string (or a blank) is DROPPED with a warning rather than thrown, like a bad
+      // `detect.*` regex: a malformed hand-off must not be able to take the stop down with
+      // it — losing the hand-off costs a manual copy, losing the stop costs the transcript.
+      handoverCommand: validHandoverCommand(copilot.handoverCommand),
       names: resolvedNames,
     },
     detect: {

@@ -12,6 +12,7 @@
  * which stays the one source of truth for "handed over exactly once".
  */
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -44,6 +45,72 @@ export function handoverTranscriptOnce(cfg: CopilotConfig): string | null {
   renameSync(out, archived);
   return archived;
 }
+
+/** Where the handover's artifacts landed — what the project command is told about. */
+export interface HandoverPaths {
+  /** The archived raw transcript. Always present: it is the invariant. */
+  archived: string;
+  /** The readable transcript, when the stitch produced one. */
+  markdown?: string;
+  /** The sentence-level JSONL, when the stitch produced one. */
+  structured?: string;
+}
+
+/**
+ * Run the project's own hand-off, after the archive and the derived artifacts.
+ *
+ * This is the seam that lets a project stop forking the meeting-copilot skill: its
+ * transcript hand-off (lifting the file out of the gitignored runtime dir into the
+ * project's inputs) is project knowledge, and had nowhere else to live. Measured
+ * 2026-07-30, without it: six transcripts stayed unhanded under `.set/copilot/`, the
+ * largest 18 500 words, with nothing anywhere pointing at them.
+ *
+ * **It cannot fail the handover.** Non-zero exit, missing executable, or exceeding the
+ * limit is reported and the caller carries on — the same posture `stitchAtStop` takes, for
+ * the reason stated there: the `renameSync` is the invariant, everything after it is
+ * convenience. A project script that throws must not be able to make a meeting look
+ * unhanded.
+ *
+ * Context arrives through the ENVIRONMENT, not through placeholder substitution: the values
+ * are file paths, and substituting them into a shell string is a quoting bug waiting for the
+ * first space in a path. `COPILOT_HANDOVER_SLUG` is passed through when the caller's
+ * environment carries it — the meeting's topic is the session's knowledge, not the
+ * capture's, so the skill supplies it on the stop line.
+ *
+ * stdio is inherited rather than captured, so the project's own report of where the
+ * transcript landed reaches the operator instead of vanishing into a buffer.
+ */
+export function runHandoverCommand(cfg: CopilotConfig, paths: HandoverPaths): void {
+  const command = cfg.copilot.handoverCommand;
+  if (!command) return;
+  const result = spawnSync(command, {
+    shell: true,
+    stdio: "inherit",
+    timeout: HANDOVER_COMMAND_TIMEOUT_MS,
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      SET_COPILOT_DIR: cfg.runtimeDir,
+      SET_COPILOT_TRANSCRIPT: paths.archived,
+      ...(paths.markdown ? { SET_COPILOT_TRANSCRIPT_MD: paths.markdown } : {}),
+      ...(paths.structured ? { SET_COPILOT_TRANSCRIPT_JSONL: paths.structured } : {}),
+    },
+  });
+  const failure =
+    result.error ? result.error.message
+    : result.signal === "SIGTERM" ? `timed out after ${HANDOVER_COMMAND_TIMEOUT_MS / 1000}s`
+    : result.status !== 0 ? `exited with ${result.status}`
+    : null;
+  if (failure) {
+    console.error(
+      `[set-copilot] copilot.handoverCommand failed (${failure}): ${command}\n` +
+      `              The transcript is handed over and intact at ${paths.archived}`,
+    );
+  }
+}
+
+/** Long enough for a file move plus a small index write; short enough not to hang a stop. */
+const HANDOVER_COMMAND_TIMEOUT_MS = 60_000;
 
 /**
  * Print the dictated text (dictation's /dd path), then hand it over.

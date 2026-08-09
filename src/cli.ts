@@ -41,7 +41,10 @@ import {
   loadConfig, userConfigDir, CONFIG_FILENAME, keywordIndexPath, enrichedContextPath,
   digestMarkdownPath, type CopilotConfig,
 } from "./config.js";
-import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce } from "./handover.js";
+import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runHandoverCommand } from "./handover.js";
+import {
+  applySkillInstall, destLinkTarget, inspectDest, planSkillInstall, resolveInstallMode, skillNames,
+} from "./skill-install.js";
 import {
   appendEntry, doneEntry, fingerprintFile, isDone, isRecoveryStep, ledgerPath, makeEntry,
   readLedger, stepStatus, RECOVERY_STEPS, STITCH_VERSION,
@@ -57,7 +60,7 @@ const PKG_ROOT = resolve(__dirname, "..");
 async function main(): Promise<void> {
   const [cmd, ...args] = process.argv.slice(2);
   switch (cmd) {
-    case "init": return cmdInit(args.includes("--global"));
+    case "init": return cmdInit(args.includes("--global"), args.includes("--copy"));
     case "capture": {
       const { runCapture } = await import("./capture.js");
       const maxMinutesRaw = flag(args, "--max-minutes");
@@ -272,7 +275,44 @@ async function reportConfigDrift(): Promise<void> {
   }
 }
 
-async function cmdInit(global = false): Promise<void> {
+/**
+ * Install the shipped skills, and SAY which way it did it.
+ *
+ * The declaration is unconditional, not a verbose flag, because the failure it prevents is
+ * symmetric and neither half announces itself: under copy an edit to the source never
+ * reaches a session (measured: ~15 KB of `meeting-copilot` that never did), and under link
+ * an edit to the "installed copy" silently edits the repo. One line of output is the whole
+ * defence. And the names come from the actions that RAN — the message this replaced named
+ * all six skills from a string literal while two of them were absent from the destination.
+ */
+function installSkills(skillsSrc: string, skillsDest: string, forceCopy: boolean): void {
+  const mode = resolveInstallMode(PKG_ROOT, { forceCopy });
+  const actions = planSkillInstall({
+    skillsSrc,
+    skillsDest,
+    names: skillNames(skillsSrc),
+    mode,
+    inspect: inspectDest,
+    linkTarget: destLinkTarget,
+  });
+  const { done, failed } = applySkillInstall(actions);
+
+  const installed = done.filter(a => a.kind !== "skip-missing");
+  console.log(`✓ Installed ${installed.length} skills into ${skillsDest}: ${installed.map(a => a.name).join(", ") || "none"}`);
+  if (mode === "link") {
+    console.log(`  → linked at ${skillsSrc} — this checkout IS the installed skill; editing it there takes effect in the next session`);
+  } else {
+    console.log(`  → copied (no tracking source${forceCopy ? ", --copy" : ""}) — an edit to ${skillsSrc} needs another \`init\` to take effect`);
+  }
+  for (const a of done) {
+    if (a.kind === "archive-then-link") console.log(`  • kept the previous ${a.name} at ${a.backup}`);
+    if (a.kind === "replace-dangling") console.log(`  • repaired ${a.name} — its link had no target, so the skill was invisible`);
+    if (a.kind === "skip-missing") console.log(`  ⚠ ${a.name} NOT installed — its source ${a.src} is missing`);
+  }
+  for (const f of failed) console.log(`  ⚠ ${f.action.name} NOT installed: ${f.error}`);
+}
+
+async function cmdInit(global = false, forceCopy = false): Promise<void> {
   const cfgHome = userConfigDir();
   const skillsDest = global
     ? join(homedir(), ".claude", "skills")
@@ -281,15 +321,7 @@ async function cmdInit(global = false): Promise<void> {
 
   const skillsSrc = join(PKG_ROOT, "skills");
   mkdirSync(skillsDest, { recursive: true });
-
-  let copied = 0;
-  for (const name of readdirSync(skillsSrc)) {
-    const src = join(skillsSrc, name);
-    if (!statSync(src).isDirectory()) continue;
-    cpSync(src, join(skillsDest, name), { recursive: true });
-    copied++;
-  }
-  console.log(`✓ Installed ${copied} skills into ${skillsDest} (dictate, dd, ds, meeting-copilot, transcript-recover, set-repair)`);
+  installSkills(skillsSrc, skillsDest, forceCopy);
 
   // The chat→wall mirror is NO LONGER a Stop hook (wall-mirror-follower): a turn-boundary
   // hook is late by construction and was measured delivering the previous message while the
@@ -538,7 +570,10 @@ function handoverAtStop(cfg: CopilotConfig, print: boolean): void {
   const saved = handoverTranscriptOnce(cfg);
   if (!saved) { console.log("[set-copilot] Nothing to hand over"); return; }
   console.log(`[set-copilot] Transcript saved: ${saved}`);
-  if (cfg.transcript.stitchOnStop) stitchAtStop(cfg, saved);
+  const derived = cfg.transcript.stitchOnStop ? stitchAtStop(cfg, saved) : undefined;
+  // Last, and only on this path: for a dictation the text is the user's message, not a
+  // document, so there is nothing for a project to hand on.
+  runHandoverCommand(cfg, { archived: saved, markdown: derived?.markdown, structured: derived?.structured });
 }
 
 /**
@@ -550,18 +585,20 @@ function handoverAtStop(cfg: CopilotConfig, print: boolean): void {
  * source of truth for "handed over exactly once" — and a failure here is reported, never
  * fatal, because the archive is the invariant and these files are the convenience.
  */
-function stitchAtStop(cfg: CopilotConfig, archived: string): void {
+function stitchAtStop(cfg: CopilotConfig, archived: string): { markdown: string; structured: string } | undefined {
   try {
     const out = stitchFile(archived, cfg);
-    if (!out) return; // nothing said — no zero-byte artifacts
+    if (!out) return undefined; // nothing said — no zero-byte artifacts
     // Aligned with "Transcript saved: " so the three paths read as one block.
     console.log(`[set-copilot] Readable:         ${out.markdown}`);
     console.log(`[set-copilot] Structured:       ${out.structured}`);
+    return { markdown: out.markdown, structured: out.structured };
   } catch (err) {
     console.error(
       `[set-copilot] Could not build the readable transcript: ${(err as Error).message}\n` +
       `              The archived transcript is intact — retry with: set-copilot transcript --input ${archived}`,
     );
+    return undefined;
   }
 }
 
@@ -1033,6 +1070,8 @@ function printHelp(): void {
 set-copilot — voice dictation + meeting copilot for Claude Code
 
   set-copilot init [--global]      scaffold skills + config into this project
+             [--copy]              install the skills as copies even from a checkout
+                                   (default from a checkout: symlink, so the repo IS the skill)
                                    (--global: ~/.claude/skills + user config dir,
                                    so /ds works from any directory)
   set-copilot capture [--mic-only] [--max-minutes N]

@@ -414,6 +414,22 @@ lost exactly here, by a note-taking step reading the raw file because it was the
 to the raw `.jsonl` only as the archive. (Only the two older lines appear if `transcript.stitchOnStop`
 is off, or if nothing was said.)
 
+**If the project configured `copilot.handoverCommand`**, `stop` runs it after the archive and the
+derived artifacts — that is where a project lifts the transcript out of the gitignored runtime dir
+into its own inputs. It cannot fail the handover: a failure is printed and the archive stays intact,
+so if you see that line, report it rather than claiming a clean hand-off. The paths reach it as
+`SET_COPILOT_TRANSCRIPT` / `_MD` / `_JSONL`; the one thing it cannot know is what the meeting was
+*about*, so name the topic on the stop line when the project's command wants one:
+
+```bash
+COPILOT_HANDOVER_SLUG="<short-topic-slug>" \
+  SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot stop
+```
+
+Without this seam a project has to fork this skill to hand its own transcript on — and a forked
+skill drifts silently from the one the package ships (measured 2026-08-09: ~15 KB of this file that
+never reached a session).
+
 Then report a summary: meeting duration, alert counts by type (⚠/📋/✏/❓), any new decisions
 detected, and the **readable transcript path** (naming the raw archive alongside it), so a
 post-meeting step can find the full transcript.

@@ -542,3 +542,28 @@ describe("transcript config (the stitch seam)", () => {
     expect(t.speakers).toEqual({ system: "Robi" });
   });
 });
+
+describe("copilot.handoverCommand (the project hand-off seam)", () => {
+  it("is absent by default — the handover behaves exactly as before", () => {
+    expect(loadConfig(project).copilot.handoverCommand).toBeUndefined();
+  });
+
+  it("resolves from the project config, trimmed", () => {
+    writeCfg(project, { copilot: { handoverCommand: "  node scripts/copilot-handover.mjs  " } });
+    expect(loadConfig(project).copilot.handoverCommand).toBe("node scripts/copilot-handover.mjs");
+  });
+
+  it("reads an empty string as 'not configured' — the example config ships the key that way", () => {
+    for (const blank of ["", "   "]) {
+      writeCfg(project, { copilot: { handoverCommand: blank } });
+      expect(loadConfig(project).copilot.handoverCommand).toBeUndefined();
+    }
+  });
+
+  it("drops a non-string rather than throwing — a bad hand-off must not take the stop down", () => {
+    for (const bad of [42, [], {}]) {
+      writeCfg(project, { copilot: { handoverCommand: bad } });
+      expect(loadConfig(project).copilot.handoverCommand).toBeUndefined();
+    }
+  });
+});
