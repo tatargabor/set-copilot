@@ -20,6 +20,14 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SET_AGENT_NAME=set-copilot SET_AGENT_ROOM=set-copilot ~/.nvm/versions/node/v22.22.0/bin/node ~/code2/set-agent-comm/hooks/session-start.mjs"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -47,6 +55,16 @@
             "type": "command",
             "command": "set-hook-activity",
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set-hook-leakscan",
+            "timeout": 30
           }
         ]
       }
@@ -122,6 +140,14 @@
             "type": "command",
             "command": "set-hook-memory Stop",
             "timeout": 30
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SET_AGENT_NAME=set-copilot SET_AGENT_ROOM=set-copilot ~/.nvm/versions/node/v22.22.0/bin/node ~/code2/set-agent-comm/hooks/stop.mjs"
           }
         ]
       }
