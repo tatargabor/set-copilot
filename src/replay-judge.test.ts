@@ -74,6 +74,12 @@ describe("judgePrompt", () => {
     expect(judgePrompt(judgeQuestions(scenario, EVENTS, record))).toMatch(/never reach for it/);
   });
 
+  it("tells the judge to take the earliest addressing candidate", () => {
+    // Latency means when the copilot FIRST addressed the moment. Re-judging one unchanged
+    // run moved its latency 36.0s → 40.3s purely by matching a later restatement.
+    expect(judgePrompt(judgeQuestions(scenario, EVENTS, record))).toMatch(/pick the EARLIEST/);
+  });
+
   it("says that being on the same topic is not enough", () => {
     expect(judgePrompt(judgeQuestions(scenario, EVENTS, record))).toMatch(/merely on the same topic/);
   });
