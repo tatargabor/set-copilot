@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -76,6 +76,50 @@ describe("emitWallEvents", () => {
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0]).category).toBe("súgás");
     expect(JSON.parse(lines[1]).category).toBe("metrika");
+  });
+
+  describe("emittedAt (wall-events-carry-a-timestamp)", () => {
+    // The log records what reached the wall and in what order; without a per-event time
+    // it could never say WHEN. That is the difference between answering "the box froze at
+    // 20:52:39" from the artifacts and being unable to check a field report at all.
+
+    it("stamps an emitted event with the time it entered the log", () => {
+      const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+      const before = Date.now();
+      emitWallEvents(cfg(dir), { category: "súgás", text: "egy" });
+      const after = Date.now();
+      const ev = JSON.parse(readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim());
+      expect(ev.emittedAt).toBeGreaterThanOrEqual(before);
+      expect(ev.emittedAt).toBeLessThanOrEqual(after);
+    });
+
+    it("overwrites a producer-supplied value — the stamp is the append path's, not a producer's", () => {
+      const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+      emitWallEvents(cfg(dir), { category: "súgás", text: "egy", emittedAt: 1 } as never);
+      const ev = JSON.parse(readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim());
+      expect(ev.emittedAt).toBeGreaterThan(1_000_000_000_000);
+    });
+
+    it("stamps every line of a batch, in non-decreasing order", () => {
+      const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+      emitWallEvents(cfg(dir), [
+        { category: "súgás", text: "egy" },
+        { category: "súgás", text: "kettő" },
+        { category: "súgás", text: "három" },
+      ]);
+      const stamps = readFileSync(join(dir, "wall-events.jsonl"), "utf-8")
+        .split("\n").filter(Boolean).map((l) => JSON.parse(l).emittedAt as number);
+      expect(stamps).toHaveLength(3);
+      for (const s of stamps) expect(typeof s).toBe("number");
+      for (let i = 1; i < stamps.length; i++) expect(stamps[i]).toBeGreaterThanOrEqual(stamps[i - 1]);
+    });
+
+    it("appends nothing for a rejected event, so no stamp implies acceptance", () => {
+      const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+      const res = emitWallEvents(cfg(dir), { category: "", text: "rossz" });
+      expect(res.emitted).toBe(0);
+      expect(existsSync(join(dir, "wall-events.jsonl"))).toBe(false);
+    });
   });
 
   it("accepts a single event object (not just an array)", () => {

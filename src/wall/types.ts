@@ -118,6 +118,18 @@ export interface WebpageSpec {
 export interface DisplayEvent {
   category: string;
   zone: Zone;
+  /**
+   * When this event ENTERED THE LOG, in wall-clock ms — set by the append path, never
+   * by a producer. Deliberately not named `ts`: a transcript line's `ts` is *speech*
+   * time, and treating the two as one unit produces a figure that looks like a latency
+   * and is not one.
+   *
+   * Absent on every event written before the field existed. A reader treats that as
+   * UNKNOWN — never zero, never now, never the neighbouring event's time — because an
+   * invented stamp is indistinguishable from a real one and would corrupt the very
+   * measurements this enables.
+   */
+  emittedAt?: number;
   /** Text payload. */
   text?: string;
   /** mic = "én", system = "mindenki más". Preserved, never re-invented. */
