@@ -6,10 +6,10 @@
 
 ## 2. Scenario format and loader
 
-- [ ] 2.1 Define the scenario's three files (lines JSONL, expectations, timeline) and their on-disk layout, including the content fingerprint that versions a scenario. [REQ: A scenario is a transcript, a ground truth, and a timeline] [REQ: A scenario is authored from any source material]
-- [ ] 2.2 Implement the single scenario loader used by player, timeline renderer, and scorer — one parse, three views. Reject a scenario with a missing part, naming it; report a malformed line with its position. [REQ: A scenario is a transcript, a ground truth, and a timeline]
-- [ ] 2.3 Implement the scenario validator: line shape, monotonic timestamps, both channels present, and the planted minimums (contradiction, open question, decision, audience speech, direct address). Reject a scenario with no planted moments. [REQ: A scenario plants ground truth deliberately]
-- [ ] 2.4 Unit-test the loader and validator, including each rejection path. [REQ: A scenario plants ground truth deliberately] [REQ: A scenario is a transcript, a ground truth, and a timeline]
+- [x] 2.1 Define the scenario's three files (lines JSONL, expectations, timeline) and their on-disk layout, including the content fingerprint that versions a scenario. [REQ: A scenario is a transcript, a ground truth, and a timeline] [REQ: A scenario is authored from any source material]
+- [x] 2.2 Implement the single scenario loader used by player, timeline renderer, and scorer — one parse, three views. Reject a scenario with a missing part, naming it; report a malformed line with its position. [REQ: A scenario is a transcript, a ground truth, and a timeline]
+- [x] 2.3 Implement the scenario validator: line shape, monotonic timestamps, both channels present, and the planted minimums (contradiction, open question, decision, audience speech, direct address). Reject a scenario with no planted moments. [REQ: A scenario plants ground truth deliberately]
+- [x] 2.4 Unit-test the loader and validator, including each rejection path. [REQ: A scenario plants ground truth deliberately] [REQ: A scenario is a transcript, a ground truth, and a timeline]
 
 ## 3. The player — `set-copilot replay`
 
