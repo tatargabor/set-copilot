@@ -89,6 +89,36 @@ async function main(): Promise<void> {
       const { runPoll } = await import("./poll.js");
       return runPoll(loadConfig(), args[0] ? parseInt(args[0], 10) : 60);
     }
+    case "scenario": {
+      const { loadScenario, validateScenario } = await import("./replay-scenario.js");
+      const { readTimeline, timelineIsStale, writeTimeline } = await import("./replay-timeline.js");
+      const sub = args[0];
+      const dir = args.slice(1).find((a) => !a.startsWith("--"));
+      if (!dir || (sub !== "timeline" && sub !== "check")) {
+        console.error("Usage: set-copilot scenario timeline <dir> [--check] | set-copilot scenario check <dir>");
+        process.exit(1);
+      }
+      try {
+        const scenario = loadScenario(dir);
+        const problems = validateScenario(scenario);
+        const stale = timelineIsStale(scenario, readTimeline(dir));
+        if (sub === "timeline" && !args.includes("--check")) {
+          console.log(`[set-copilot] Timeline written: ${writeTimeline(scenario)}`);
+          for (const p of problems) console.error(`[set-copilot] scenario: ${p.message}`);
+          return;
+        }
+        // --check / `check`: report, change nothing, and fail loudly. A stale timeline is
+        // worse than a missing one, because a reviewer trusts it.
+        if (stale) console.error(`[set-copilot] scenario "${scenario.meta.name}": timeline is stale — regenerate it`);
+        for (const p of problems) console.error(`[set-copilot] scenario: ${p.message}`);
+        if (stale || problems.length) process.exit(1);
+        console.log(`[set-copilot] scenario "${scenario.meta.name}" is runnable · timeline current · fingerprint ${scenario.fingerprint}`);
+      } catch (err) {
+        console.error(`[set-copilot] ${(err as Error).message}`);
+        process.exit(1);
+      }
+      return;
+    }
     case "replay": {
       const { runReplay, parseSpeed } = await import("./replay.js");
       const dir = args.find((a) => !a.startsWith("--"));
@@ -1120,6 +1150,12 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot prompt               print the copilot policy the skill loads
                                    (alert categories + copilot.instructions)
   set-copilot poll [seconds]       long-poll the transcript (copilot monitor)
+  set-copilot scenario timeline <dir> [--check]
+                                   render a scenario as a readable timeline (who says
+                                   what, when, with the planted moments marked);
+                                   --check reports staleness instead of writing
+  set-copilot scenario check <dir> validate a scenario and its timeline (exit 1 on any
+                                   problem) — a stale timeline is worse than none
   set-copilot replay <scenario-dir> [--speed N] [--output PATH]
                                    play a scenario into the transcript as if it were
                                    a live capture — the copilot cannot tell. Speed 1

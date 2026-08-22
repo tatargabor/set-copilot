@@ -24,9 +24,9 @@
 
 ## 4. The readable timeline
 
-- [ ] 4.1 Implement the timeline renderer over the loaded scenario: time, section, speaker, text, in order, with planted moments marked at their positions. [REQ: The timeline is readable and matches the lines]
-- [ ] 4.2 Implement `--check` staleness detection — a timeline that disagrees with the lines is reported, not silently trusted. [REQ: The timeline is regenerated from the lines]
-- [ ] 4.3 Unit-test the renderer, including a marked planted moment and a stale-timeline detection. [REQ: The timeline is readable and matches the lines]
+- [x] 4.1 Implement the timeline renderer over the loaded scenario: time, section, speaker, text, in order, with planted moments marked at their positions. [REQ: The timeline is readable and matches the lines]
+- [x] 4.2 Implement `--check` staleness detection — a timeline that disagrees with the lines is reported, not silently trusted. [REQ: The timeline is regenerated from the lines]
+- [x] 4.3 Unit-test the renderer, including a marked planted moment and a stale-timeline detection. [REQ: The timeline is readable and matches the lines]
 
 ## 5. Verify the seam end to end (before authoring a real scenario)
 
