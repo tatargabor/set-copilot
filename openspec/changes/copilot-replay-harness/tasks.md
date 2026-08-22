@@ -55,7 +55,7 @@
 
 ## 8. Baseline and documentation
 
-- [ ] 8.1 Record the first baseline scorecard at real time, before any demo-driven copilot change lands. A baseline taken afterwards measures nothing. [REQ: Two runs of one scenario are comparable]
+- [x] 8.1 Record the first baseline scorecard at real time, before any demo-driven copilot change lands. A baseline taken afterwards measures nothing. [REQ: Two runs of one scenario are comparable]
 - [ ] 8.2 Record a second baseline under the headless runner so the interactive-vs-headless difference is a measured number rather than an assumption. [REQ: Two runs of one scenario are comparable]
 - [x] 8.3 Write the runbook: authoring a scenario, running a scored session, reading a scorecard, and comparing two. State explicitly that a replay does NOT exercise `transcript-writer` (design D1), so a passing scorecard is never read as "the transcript path is fine". [REQ: A score is computed from the run's own artifacts]
 - [x] 8.4 Update `CLAUDE.md` with the harness and the one property everything rests on: the consumer side is untouched, and any change to it invalidates the measurement.

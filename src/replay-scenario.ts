@@ -259,7 +259,14 @@ export function loadScenario(dir: string): Scenario {
     ids.add(m.id);
   }
 
+  // The fingerprint covers the meta too, not just the script and the expectations.
+  // The meta CHANGES THE SCORE — `reactionCategories` decides what counts as a reaction,
+  // `defaultWithinMs` decides how long a reaction may lag — so leaving it out would let
+  // two runs be declared comparable while having been measured with different rulers.
+  // Caught while setting the first baseline, editing `reactionCategories` and watching
+  // precision move with the fingerprint unchanged.
   const fingerprint = createHash("sha256")
+    .update(readFileSync(join(dir, SCENARIO_FILES.meta), "utf-8"))
     .update(scriptRaw)
     .update(readFileSync(join(dir, SCENARIO_FILES.expectations), "utf-8"))
     .digest("hex")
