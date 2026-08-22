@@ -378,7 +378,12 @@ export function emitWallEvents(cfg: CopilotConfig, raw: unknown): EmitResult {
       result.dropped.push({ reason: norm.reason });
       continue;
     }
-    batch += JSON.stringify(norm.event) + "\n";
+    // Stamped HERE — one append path, after normalization — so the field cannot be
+    // forgotten by a producer, forged by one, or skewed by a producer's own clock. It
+    // is when the event entered the log, never when anything was said: the transcript's
+    // `ts` is speech time, and subtracting one from the other without noticing they are
+    // different clocks is how a number that is not a latency ends up in a report.
+    batch += JSON.stringify({ ...norm.event, emittedAt: Date.now() }) + "\n";
     result.emitted++;
   }
   if (!batch) return result;
