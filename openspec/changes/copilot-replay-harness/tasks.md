@@ -31,7 +31,7 @@
 ## 5. Verify the seam end to end (before authoring a real scenario)
 
 - [x] 5.1 Author a deliberately tiny throwaway scenario (a couple of minutes, both channels, one planted moment) and confirm `poll` consumes it with no configuration difference from a live capture. [REQ: A replay is indistinguishable from a live capture to its consumers]
-- [ ] 5.2 Run a real copilot session against that replay and confirm the wall receives events; record whether any consumer-side change proved necessary — a hidden coupling is a finding to report, not to paper over. [REQ: A replay is indistinguishable from a live capture to its consumers]
+- [x] 5.2 Run a real copilot session against that replay and confirm the wall receives events; record whether any consumer-side change proved necessary — a hidden coupling is a finding to report, not to paper over. [REQ: A replay is indistinguishable from a live capture to its consumers]
 - [ ] 5.3 Run the same replay under the headless runner (`claude -p --allowedTools Bash`, Bash poll loop) and record the differences observed against the interactive run. [REQ: A replay is indistinguishable from a live capture to its consumers]
 
 ## 6. The first real scenario
