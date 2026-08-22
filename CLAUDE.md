@@ -259,6 +259,55 @@ A project that needs something the shared skill does not do should reach for a c
 
 `transcript-recover` and `set-repair` are two halves of recovery, split because their **costs** differ. `set-repair` is mechanical, cheap, safe to run often: orphaned `capture.pid`, a transcript nothing ever handed over (a real project held a 539-line one — an entire meeting — found by accident), a stale `wall.pid`, an archive with no stitched artifacts. It never repairs by a new mechanism — an unconsumed transcript is handed over by `stop`, reusing the one `renameSync` — and reports anything destructive rather than running it. `transcript-recover` is a *content* pass costing a model read per transcript, and it ends by handing off in the other direction. `doctor` probes the audio chain; `set-repair` inspects runtime state; they do not overlap.
 
+### The replay harness — how a copilot change is shown to be an improvement
+
+`set-copilot replay` plays a recorded scenario into a runtime dir's transcript, paced by
+the scenario's own timestamps, while holding the runtime dir the way a capture does. A
+polling consumer cannot tell the difference — and that is the whole point: the measurement
+covers the production path, not a mock. `docs/replay-harness.md` is the runbook.
+
+The property everything rests on: **the consumer side is untouched.** `poll`, the wall, the
+mirror and the skills need no flag, no config, no code path for a replay. If a change to
+any of them ever turns out to be necessary to make replay work, that is a finding about a
+hidden coupling, to be reported rather than papered over — and the measurement is invalid
+until it is understood.
+
+Four rules carry it, each of which a run has already justified:
+
+- **A fixture's metadata never reaches the transcript.** A script entry wraps its
+  transcript line and carries the section of the source material for the timeline only.
+  On the played line it would hand the copilot a structured outline of a talk it is
+  supposed to be following by ear, and every score taken afterwards would describe a
+  copilot nobody ships.
+- **Speed is a validity fact, not a label.** Real time is the default and the only speed
+  whose latency figures mean anything: a model's thinking time does not scale with
+  playback, so a sped-up run flatters the copilot. The speed travels into the run record,
+  and a scorecard built on a non-real-time run reports its latency dimensions as
+  *invalid*, never as a smaller number. The same applies when the player itself fell
+  behind — that would measure the player.
+- **A dimension refuses rather than guesses.** No judged matching → coverage is *unknown*,
+  never zero. An unstamped wall event → coverage and precision are unmeasurable, because
+  an event with no `emittedAt` can never fall inside a moment's window. That distinction —
+  "the copilot did not react" versus "the log cannot say when" — was found by scoring a
+  real run as a total failure when in fact every planted moment had been answered.
+- **Mechanical and judged stay apart.** Counting and timing are pure functions, identical
+  on every run of the same artifacts; whether a reaction actually *addressed* a planted
+  moment arrives from outside as a matching, with its reasoning recorded. A
+  non-deterministic verdict leaking into a counted dimension would destroy the one
+  property a regression measure needs.
+
+Two things the harness deliberately does **not** cover, stated because a green scorecard
+would otherwise be read as covering them. It does not exercise `transcript-writer`: a
+scenario carries finished lines, not a token stream, so the flush rules never run — putting
+the fixture through them would make the measuring stick change whenever the flusher did.
+And a scenario is a *fixture*, not a prediction of what a real presenter would say; its
+value is that it is identical every time.
+
+The runner must load the real policy (`set-copilot prompt`) before polling. A hand-written
+runner prompt once made a session look like it had hit two gaps in the drawing contract;
+re-reading the rendered prompt refuted both. A run without the policy scores a copilot
+nobody ships, and its findings are noise.
+
 ## Positioning — why this exists next to `/voice`
 
 Claude Code has built-in dictation (`/voice`, hold/tap `Space`). Don't let a change erode the reasons set-copilot is still worth using, and don't claim advantages it doesn't have. The real ones, as of 2026-07:

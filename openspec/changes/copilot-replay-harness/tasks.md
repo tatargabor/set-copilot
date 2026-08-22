@@ -32,7 +32,7 @@
 
 - [x] 5.1 Author a deliberately tiny throwaway scenario (a couple of minutes, both channels, one planted moment) and confirm `poll` consumes it with no configuration difference from a live capture. [REQ: A replay is indistinguishable from a live capture to its consumers]
 - [x] 5.2 Run a real copilot session against that replay and confirm the wall receives events; record whether any consumer-side change proved necessary — a hidden coupling is a finding to report, not to paper over. [REQ: A replay is indistinguishable from a live capture to its consumers]
-- [ ] 5.4 The runner MUST load the real policy (`set-copilot prompt`) before polling. Proven necessary on 2026-08-23: a hand-written runner prompt made the session look like it had hit two gaps in the drawing contract, and re-reading the rendered prompt refuted both — the contract states "exactly one payload" and shows `graph.op` in its example. A run without the policy scores a copilot nobody ships, and its findings are noise. [REQ: A replay is indistinguishable from a live capture to its consumers]
+- [x] 5.4 The runner MUST load the real policy (`set-copilot prompt`) before polling. Proven necessary on 2026-08-23: a hand-written runner prompt made the session look like it had hit two gaps in the drawing contract, and re-reading the rendered prompt refuted both — the contract states "exactly one payload" and shows `graph.op` in its example. A run without the policy scores a copilot nobody ships, and its findings are noise. [REQ: A replay is indistinguishable from a live capture to its consumers]
 - [ ] 5.3 Run the same replay under the headless runner (`claude -p --allowedTools Bash`, Bash poll loop) and record the differences observed against the interactive run. [REQ: A replay is indistinguishable from a live capture to its consumers]
 
 ## 6. The first real scenario
@@ -58,7 +58,7 @@
 - [ ] 8.1 Record the first baseline scorecard at real time, before any demo-driven copilot change lands. A baseline taken afterwards measures nothing. [REQ: Two runs of one scenario are comparable]
 - [ ] 8.2 Record a second baseline under the headless runner so the interactive-vs-headless difference is a measured number rather than an assumption. [REQ: Two runs of one scenario are comparable]
 - [x] 8.3 Write the runbook: authoring a scenario, running a scored session, reading a scorecard, and comparing two. State explicitly that a replay does NOT exercise `transcript-writer` (design D1), so a passing scorecard is never read as "the transcript path is fine". [REQ: A score is computed from the run's own artifacts]
-- [ ] 8.4 Update `CLAUDE.md` with the harness and the one property everything rests on: the consumer side is untouched, and any change to it invalidates the measurement.
+- [x] 8.4 Update `CLAUDE.md` with the harness and the one property everything rests on: the consumer side is untouched, and any change to it invalidates the measurement.
 
 ## Acceptance Criteria (from spec scenarios)
 
