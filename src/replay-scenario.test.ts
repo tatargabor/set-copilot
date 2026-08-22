@@ -108,6 +108,15 @@ describe("loadScenario", () => {
     expect(after).not.toBe(before);
   });
 
+  it("changes when the meta changes — the meta decides how the score is computed", () => {
+    // `reactionCategories` decides what counts as a reaction and `defaultWithinMs` how
+    // long one may lag. A fingerprint blind to them would call two runs comparable that
+    // were measured with different rulers.
+    const before = loadScenario(write()).fingerprint;
+    const after = loadScenario(write(FULL_SCRIPT, FULL_MOMENTS, { reactionCategories: ["súgás"] })).fingerprint;
+    expect(after).not.toBe(before);
+  });
+
   it("gives an identical fingerprint to identical content", () => {
     const a = loadScenario(write()).fingerprint;
     const b = loadScenario(write()).fingerprint;
