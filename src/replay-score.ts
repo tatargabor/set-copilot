@@ -82,6 +82,25 @@ export interface Scorecard {
   /** Which planted moments drew a reaction, and which passed unnoticed. */
   covered: string[];
   missed: { id: string; kind: string; expect: string }[];
+  /**
+   * The judged matching, per moment, with the delay it produced and the judge's own
+   * reasoning.
+   *
+   * Persisted because a judged verdict is not reproducible: re-running a
+   * non-deterministic step to check it turns a disagreement into a coin flip. It also
+   * removes the temptation that produced a wrong report on 2026-08-23 — with no
+   * per-moment record in the card, "the first event inside the window" gets used as a
+   * stand-in for the judged match, and it is not one. Those two numbers disagreed by a
+   * factor of two.
+   */
+  judgement: {
+    momentId: string;
+    kind: string;
+    eventIndex: number | null;
+    /** ms from the moment becoming true to the matched event; null when not measurable. */
+    delayMs: number | null;
+    reasoning?: string;
+  }[];
   /** Reactions matching no planted moment — a copilot that reacts to everything is not good. */
   unmatchedReactions: number;
   dimensions: Record<string, Dimension>;
@@ -319,6 +338,18 @@ export function scoreRun(
 
   if (refusal) notes.push(refusal);
 
+  // The per-moment record. Built from the same matching every dimension used, so the
+  // card cannot disagree with itself.
+  const judgement = scenario.moments.map((m) => {
+    const match = byId.get(m.id);
+    const idx = match?.eventIndex ?? null;
+    const ev = idx !== null ? events[idx] : undefined;
+    const delayMs = !refusal && record && ev && typeof ev.emittedAt === "number"
+      ? ev.emittedAt - momentTime(m, record)
+      : null;
+    return { momentId: m.id, kind: m.kind, eventIndex: idx, delayMs, reasoning: match?.reasoning };
+  });
+
   return {
     scenario: scenario.meta.name,
     fingerprint: scenario.fingerprint,
@@ -326,6 +357,7 @@ export function scoreRun(
     realTime: record?.realTime ?? false,
     covered,
     missed,
+    judgement,
     unmatchedReactions: unmatched,
     dimensions,
     notes,

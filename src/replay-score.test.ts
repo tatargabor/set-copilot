@@ -156,6 +156,28 @@ describe("scoreRun — dimensions", () => {
     expect((card.dimensions.precision as { detail: string }).detail).toMatch(/every category counted/);
   });
 
+  it("records the judged matching per moment, with its delay and the judge's reasoning", () => {
+    // A judged verdict is not reproducible, so it has to be kept. Without it a reader
+    // reconstructs the matching from the window — which is a DIFFERENT number, and on a
+    // real run the two disagreed by a factor of two.
+    const withReasons: Match[] = [
+      { momentId: "m-q", eventIndex: 0, reasoning: "kimondja, hogy az évszám nyitva maradt" },
+      { momentId: "m-c", eventIndex: null, reasoning: "semmi nem hozza szóba a hat hetet" },
+    ];
+    const card = scoreRun(scenario(), artifacts([ev({ emittedAt: START + 13_500 })]), withReasons);
+    expect(card.judgement).toEqual([
+      { momentId: "m-q", kind: "question", eventIndex: 0, delayMs: 3_500, reasoning: "kimondja, hogy az évszám nyitva maradt" },
+      { momentId: "m-c", kind: "contradiction", eventIndex: null, delayMs: null, reasoning: "semmi nem hozza szóba a hat hetet" },
+    ]);
+  });
+
+  it("reports no delay for a moment whose run may not claim latency", () => {
+    const withReasons: Match[] = [{ momentId: "m-q", eventIndex: 0 }, { momentId: "m-c", eventIndex: null }];
+    const card = scoreRun(scenario(), artifacts([ev()], record({ speed: 8, realTime: false })), withReasons);
+    expect(card.judgement[0].delayMs).toBeNull();
+    expect(card.judgement[0].eventIndex).toBe(0);
+  });
+
   it("counts drawn payloads separately from text", () => {
     const card = scoreRun(scenario(), artifacts([ev(), ev({ text: undefined, graph: { op: "add", nodes: [] } })]), matches);
     expect(card.dimensions.draws).toMatchObject({ measured: true, value: 1 });
