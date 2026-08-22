@@ -44,14 +44,14 @@
 
 ## 7. Scoring
 
-- [ ] 7.1 Implement artifact parsing for scoring: wall event log, played transcript, session output. An absent or unreadable artifact yields "unmeasured, with reason" for the dimensions that depend on it. [REQ: A score is computed from the run's own artifacts]
-- [ ] 7.2 Implement the mechanical dimensions as pure functions: reaction latency, draw latency, prediction staged-vs-promoted, coverage of planted moments, unmatched reactions, filler share. [REQ: The scorecard measures reaction, drawing, judgement, and noise]
-- [ ] 7.3 Unit-test every mechanical dimension, including a miss, an unmatched reaction, and an expired prediction. [REQ: The scorecard measures reaction, drawing, judgement, and noise]
-- [ ] 7.4 Implement the judged dimensions via a judging agent; record verdict and reasoning, and mark each dimension computed-or-judged on the scorecard. [REQ: Mechanical and judged dimensions are separated]
-- [ ] 7.5 Implement the speed validity rule: a non-real-time run reports latency dimensions as invalid rather than as numbers. [REQ: A run may only report figures its playback speed supports]
-- [ ] 7.6 Implement scorecard comparison: improved / regressed / unchanged per dimension; refuse a latency comparison across mismatched speeds; refuse any verdict across mismatched scenario fingerprints. [REQ: Two runs of one scenario are comparable] [REQ: A run may only report figures its playback speed supports]
-- [ ] 7.7 Unit-test the comparison, including both refusal paths. [REQ: Two runs of one scenario are comparable]
-- [ ] 7.8 Register `replay score` (and the comparison) in the CLI with `--help`. [REQ: A score is computed from the run's own artifacts]
+- [x] 7.1 Implement artifact parsing for scoring: wall event log, played transcript, session output. An absent or unreadable artifact yields "unmeasured, with reason" for the dimensions that depend on it. [REQ: A score is computed from the run's own artifacts]
+- [x] 7.2 Implement the mechanical dimensions as pure functions: reaction latency, draw latency, prediction staged-vs-promoted, coverage of planted moments, unmatched reactions, filler share. [REQ: The scorecard measures reaction, drawing, judgement, and noise]
+- [x] 7.3 Unit-test every mechanical dimension, including a miss, an unmatched reaction, and an expired prediction. [REQ: The scorecard measures reaction, drawing, judgement, and noise]
+- [x] 7.4 Implement the judged dimensions via a judging agent; record verdict and reasoning, and mark each dimension computed-or-judged on the scorecard. [REQ: Mechanical and judged dimensions are separated]
+- [x] 7.5 Implement the speed validity rule: a non-real-time run reports latency dimensions as invalid rather than as numbers. [REQ: A run may only report figures its playback speed supports]
+- [x] 7.6 Implement scorecard comparison: improved / regressed / unchanged per dimension; refuse a latency comparison across mismatched speeds; refuse any verdict across mismatched scenario fingerprints. [REQ: Two runs of one scenario are comparable] [REQ: A run may only report figures its playback speed supports]
+- [x] 7.7 Unit-test the comparison, including both refusal paths. [REQ: Two runs of one scenario are comparable]
+- [x] 7.8 Register `replay score` (and the comparison) in the CLI with `--help`. [REQ: A score is computed from the run's own artifacts]
 
 ## 8. Baseline and documentation
 

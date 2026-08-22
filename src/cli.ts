@@ -119,6 +119,72 @@ async function main(): Promise<void> {
       }
       return;
     }
+    case "replay-score": {
+      const { loadValidScenario } = await import("./replay-scenario.js");
+      const { loadRunArtifacts, scoreRun, compareScorecards } = await import("./replay-score.js");
+      const { askJudge, judgeQuestions, judgePrompt } = await import("./replay-judge.js");
+      const cfg = loadConfig();
+
+      // `compare` reads two finished scorecards; it never re-runs anything.
+      if (args[0] === "compare") {
+        const [a, b] = args.slice(1).filter((x) => !x.startsWith("--"));
+        if (!a || !b) {
+          console.error("Usage: set-copilot replay-score compare <before.json> <after.json>");
+          process.exit(1);
+        }
+        const out = compareScorecards(
+          JSON.parse(readFileSync(a, "utf-8")),
+          JSON.parse(readFileSync(b, "utf-8")),
+        );
+        console.log(JSON.stringify(out, null, 2));
+        if (!out.comparable) process.exit(1);
+        return;
+      }
+
+      const dir = args.find((x) => !x.startsWith("--"));
+      if (!dir) {
+        console.error("Usage: set-copilot replay-score <scenario-dir> [--judge] [--judge-file P] [--questions] [--out P]");
+        process.exit(1);
+      }
+      try {
+        const scenario = loadValidScenario(dir);
+        const artifacts = loadRunArtifacts(cfg.runtimeDir);
+        if (!artifacts.record) {
+          console.error(`[set-copilot] ${artifacts.missing.join("; ")}`);
+          process.exit(1);
+        }
+        const questions = judgeQuestions(scenario, artifacts.events, artifacts.record);
+
+        // `--questions` prints the judge's prompt and stops: the judgement can then be made
+        // by any session, not only by a spawned one, and the prompt is inspectable.
+        if (args.includes("--questions")) {
+          console.log(judgePrompt(questions));
+          return;
+        }
+
+        let matches: import("./replay-score.js").Match[] = [];
+        const judgeFile = flag(args, "--judge-file");
+        if (judgeFile) {
+          const { parseJudgeReply } = await import("./replay-judge.js");
+          matches = parseJudgeReply(readFileSync(judgeFile, "utf-8"), questions);
+        } else if (args.includes("--judge")) {
+          matches = await askJudge(questions);
+        }
+
+        const card = scoreRun(scenario, artifacts, matches, cfg);
+        const json = JSON.stringify(card, null, 2);
+        const out = flag(args, "--out");
+        if (out) {
+          writeFileSync(out, json);
+          console.log(`[set-copilot] Scorecard written: ${out}`);
+        }
+        console.log(json);
+      } catch (err) {
+        console.error(`[set-copilot] ${(err as Error).message}`);
+        process.exit(1);
+      }
+      return;
+    }
     case "replay": {
       const { runReplay, parseSpeed } = await import("./replay.js");
       const dir = args.find((a) => !a.startsWith("--"));
@@ -1156,6 +1222,13 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    --check reports staleness instead of writing
   set-copilot scenario check <dir> validate a scenario and its timeline (exit 1 on any
                                    problem) — a stale timeline is worse than none
+  set-copilot replay-score <scenario-dir> [--judge | --judge-file P | --questions] [--out P]
+                                   score the last run in this runtime dir against the
+                                   scenario's planted moments. Without a judgement,
+                                   coverage is reported UNMEASURED, never zero
+  set-copilot replay-score compare <before.json> <after.json>
+                                   improved / regressed / unchanged per dimension;
+                                   refuses across a changed scenario or mismatched speeds
   set-copilot replay <scenario-dir> [--speed N] [--output PATH]
                                    play a scenario into the transcript as if it were
                                    a live capture — the copilot cannot tell. Speed 1

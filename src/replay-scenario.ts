@@ -102,6 +102,19 @@ export interface ScenarioMeta {
   requiredKinds?: string[];
   /** Default reaction window for a planted moment that does not set its own. */
   defaultWithinMs?: number;
+  /**
+   * Which wall categories count as a *reaction* for precision.
+   *
+   * Absent means all of them. It exists because a copilot is also configured to do
+   * continuous things — running narration, a pinned summary — that legitimately match no
+   * planted moment. Counting those against precision punishes the copilot for obeying its
+   * own policy, and measured on a real run it dragged precision from 1.0 to 0.375.
+   *
+   * The category names live HERE and not in `src/`: the taxonomy is a project's own
+   * (`wall.categories`), and hardcoding the shipped Hungarian ids in the engine is exactly
+   * the failure mode this repo keeps having.
+   */
+  reactionCategories?: string[];
 }
 
 export interface Scenario {

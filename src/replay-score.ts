@@ -1,0 +1,390 @@
+/**
+ * Scoring one replay run against its scenario.
+ *
+ * The point of this module is to answer one question honestly: **better or worse than
+ * last time?** Everything in it serves that, which is why so much of it is about
+ * refusing to produce a number rather than producing one.
+ *
+ * Three rules shape it.
+ *
+ * **Evidence only.** A score is computed from what the run left behind — the wall event
+ * log, the played transcript, the run record. Nothing is added to the copilot to make it
+ * observable, because an instrumented copilot is not the copilot that ships. Where a
+ * dimension's evidence is missing, it is reported unmeasured *with the reason*, never
+ * filled in.
+ *
+ * **Mechanical and judged are kept apart.** Counting, timing, and ratios are pure
+ * functions here, identical on every run. Whether a given reaction actually *addressed*
+ * a planted moment is a judgement, supplied from outside as a matching. Letting a
+ * non-deterministic verdict leak into a counted dimension would destroy the one property
+ * a regression measure needs.
+ *
+ * **A run may only claim what its playback speed supports.** Latency from a sped-up run
+ * is not a smaller number, it is not a number: the model's thinking time does not scale
+ * with playback. The same applies when the player itself fell behind, or when an event
+ * carries no emission time.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { DEFAULT_FILLER_PHRASES, isFillerMessage, type CopilotConfig } from "./config.js";
+import type { ReplayRunRecord } from "./replay.js";
+import type { PlantedMoment, Scenario } from "./replay-scenario.js";
+
+/** Beyond this much player lateness, the run's own timing is not trustworthy either. */
+export const LATENESS_INVALIDATES_MS = 2000;
+
+/** One event as it sits in the canonical wall log. */
+export interface WallEventRecord {
+  category?: string;
+  zone?: string;
+  text?: string;
+  emittedAt?: number;
+  staged?: boolean;
+  visual?: string;
+  promote?: { visual?: string; category?: string };
+  [k: string]: unknown;
+}
+
+/** The artifacts a run leaves behind. */
+export interface RunArtifacts {
+  events: WallEventRecord[];
+  record: ReplayRunRecord | null;
+  /** Why a piece of evidence is absent, if it is. */
+  missing: string[];
+}
+
+/**
+ * A judged correspondence between a planted moment and a reaction.
+ *
+ * `eventIndex` null means the judge found nothing that addressed the moment. Supplied
+ * from outside precisely so that this module stays deterministic.
+ */
+export interface Match {
+  momentId: string;
+  eventIndex: number | null;
+  /** The judge's reasoning — recorded so a disputed score can be inspected, not re-run. */
+  reasoning?: string;
+}
+
+/** A measured dimension, or a stated refusal to measure it. */
+export type Dimension =
+  | { measured: true; source: "computed" | "judged"; value: number; unit: string; detail?: string }
+  | { measured: false; reason: string };
+
+export interface Scorecard {
+  scenario: string;
+  /** Content fingerprint — a comparison across two different ones is refused. */
+  fingerprint: string;
+  speed: number;
+  realTime: boolean;
+  /** Which planted moments drew a reaction, and which passed unnoticed. */
+  covered: string[];
+  missed: { id: string; kind: string; expect: string }[];
+  /** Reactions matching no planted moment — a copilot that reacts to everything is not good. */
+  unmatchedReactions: number;
+  dimensions: Record<string, Dimension>;
+  notes: string[];
+}
+
+/** Load a run's evidence. Absent pieces are reported, never guessed at. */
+export function loadRunArtifacts(runtimeDir: string): RunArtifacts {
+  const missing: string[] = [];
+
+  const eventsPath = join(runtimeDir, "wall-events.jsonl");
+  let events: WallEventRecord[] = [];
+  if (!existsSync(eventsPath)) {
+    missing.push(`no wall event log at ${eventsPath} — nothing reached the wall, or the wall never ran`);
+  } else {
+    for (const raw of readFileSync(eventsPath, "utf-8").split("\n")) {
+      const line = raw.trim();
+      if (!line) continue;
+      try {
+        events.push(JSON.parse(line) as WallEventRecord);
+      } catch {
+        // A corrupt line is skipped, not fatal: the artifacts are advisory evidence and
+        // one unreadable event must not cost the whole measurement.
+        missing.push("a wall event line was unreadable and was skipped");
+      }
+    }
+  }
+
+  const recordPath = join(runtimeDir, "replay-run.json");
+  let record: ReplayRunRecord | null = null;
+  if (!existsSync(recordPath)) {
+    missing.push(`no run record at ${recordPath} — the run's speed and start time are unknown`);
+  } else {
+    try {
+      record = JSON.parse(readFileSync(recordPath, "utf-8")) as ReplayRunRecord;
+    } catch (err) {
+      missing.push(`run record unreadable: ${(err as Error).message}`);
+    }
+  }
+
+  return { events, record, missing };
+}
+
+/** Events that are actual wall content — a `promote` command names a visual, it is not one. */
+export function contentEvents(events: WallEventRecord[]): WallEventRecord[] {
+  return events.filter((e) => !e.promote && typeof e.category === "string");
+}
+
+/** Does this event carry a drawn payload rather than text? */
+export function isDrawn(e: WallEventRecord): boolean {
+  return e.graph !== undefined || e.chart !== undefined || e.image !== undefined || e.webpage !== undefined;
+}
+
+/**
+ * Why a latency figure may not be reported for this run, or null if it may.
+ *
+ * Collected in one place because every latency dimension has to answer the same question,
+ * and three separate copies of "is this run timeable" is how one of them ends up lenient.
+ */
+export function latencyRefusal(record: ReplayRunRecord | null): string | null {
+  if (!record) return "no run record — the run's speed and start time are unknown";
+  if (!record.realTime) {
+    return `run played at speed ${record.speed}, not real time — a model's thinking time does not scale with playback, so elapsed-time figures from it are not latencies`;
+  }
+  if ((record.maxLatenessMs ?? 0) > LATENESS_INVALIDATES_MS) {
+    return `the player itself fell ${Math.round(record.maxLatenessMs as number)}ms behind schedule — these figures would describe the player, not the copilot`;
+  }
+  return null;
+}
+
+/** Absolute wall-clock time a planted moment becomes true, given when the run started. */
+export function momentTime(m: PlantedMoment, record: ReplayRunRecord): number {
+  return record.startedAt + m.at;
+}
+
+function mean(xs: number[]): number {
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+/**
+ * Candidate reactions for a planted moment: content events emitted inside its window.
+ *
+ * This is what a judge is asked about. Mechanical narrowing, judged selection — a judge
+ * given the whole log would be re-deriving the timeline on every question.
+ */
+export function candidatesFor(
+  m: PlantedMoment,
+  events: WallEventRecord[],
+  record: ReplayRunRecord,
+  defaultWithinMs: number,
+): { index: number; event: WallEventRecord }[] {
+  const from = momentTime(m, record);
+  const to = from + (m.withinMs ?? defaultWithinMs);
+  return events
+    .map((event, index) => ({ index, event }))
+    .filter(({ event }) => typeof event.emittedAt === "number" && event.emittedAt >= from && event.emittedAt <= to);
+}
+
+/**
+ * Score a run.
+ *
+ * `matches` is the judged correspondence. With none supplied, coverage is reported as
+ * unmeasured rather than assumed to be zero — "nobody judged this run" and "the copilot
+ * noticed nothing" are very different facts and must never look alike.
+ */
+export function scoreRun(
+  scenario: Scenario,
+  artifacts: RunArtifacts,
+  matches: Match[],
+  cfg?: Pick<CopilotConfig, "copilot">,
+): Scorecard {
+  const { events, record } = artifacts;
+  const notes = [...artifacts.missing];
+  const dimensions: Record<string, Dimension> = {};
+
+  const content = contentEvents(events);
+  const refusal = latencyRefusal(record);
+
+  /**
+   * An event with no emission time can never fall inside a moment's window, so it can
+   * never be judged a reaction. If ANY content event is unstamped, a real reaction may
+   * have been invisible to the windowing — and reporting that as "0 covered, 3 missed"
+   * would blame the copilot for a gap in the evidence. Caught by scoring a run recorded
+   * before `emittedAt` existed, which read as a total copilot failure.
+   */
+  const unstampedContent = content.filter((e) => typeof e.emittedAt !== "number").length;
+  const evidenceGap = unstampedContent > 0
+    ? `${unstampedContent} of ${content.length} wall event(s) carry no emittedAt — they cannot fall inside any moment's window, so coverage and precision are unmeasurable for this run (a log written before emission times existed)`
+    : null;
+
+  const byId = new Map(matches.map((m) => [m.momentId, m]));
+  const judged = matches.length > 0;
+  const covered: string[] = [];
+  const missed: Scorecard["missed"] = [];
+  const matchedIndexes = new Set<number>();
+
+  for (const m of scenario.moments) {
+    const match = byId.get(m.id);
+    if (match && match.eventIndex !== null) {
+      covered.push(m.id);
+      matchedIndexes.add(match.eventIndex);
+    } else if (judged && !evidenceGap) {
+      missed.push({ id: m.id, kind: m.kind, expect: m.expect });
+    }
+  }
+
+  if (evidenceGap) {
+    notes.push(evidenceGap);
+    dimensions.coverage = { measured: false, reason: evidenceGap };
+    dimensions.reactionLatency = { measured: false, reason: evidenceGap };
+    dimensions.precision = { measured: false, reason: evidenceGap };
+  } else if (!judged) {
+    notes.push("no judged matching supplied — coverage, misses, and reaction latency are unmeasured, NOT zero");
+    dimensions.coverage = { measured: false, reason: "no judged matching supplied" };
+    dimensions.reactionLatency = { measured: false, reason: "no judged matching supplied" };
+  } else {
+    dimensions.coverage = {
+      measured: true,
+      source: "judged",
+      value: scenario.moments.length ? covered.length / scenario.moments.length : 0,
+      unit: "ratio",
+      detail: `${covered.length}/${scenario.moments.length} planted moments drew a reaction`,
+    };
+
+    if (refusal) {
+      dimensions.reactionLatency = { measured: false, reason: refusal };
+    } else {
+      const delays: number[] = [];
+      let unstamped = 0;
+      for (const m of scenario.moments) {
+        const match = byId.get(m.id);
+        if (!match || match.eventIndex === null) continue;
+        const ev = events[match.eventIndex];
+        if (typeof ev?.emittedAt !== "number") { unstamped++; continue; }
+        delays.push(ev.emittedAt - momentTime(m, record as ReplayRunRecord));
+      }
+      if (unstamped > 0) notes.push(`${unstamped} matched event(s) carry no emittedAt — excluded from latency, never substituted`);
+      dimensions.reactionLatency = delays.length
+        ? { measured: true, source: "computed", value: Math.round(mean(delays)), unit: "ms", detail: `${delays.length} matched reaction(s)` }
+        : { measured: false, reason: "no matched reaction carried an emission time" };
+    }
+  }
+
+  // Reactions with nothing planted behind them. Counted, never ignored: a copilot that
+  // reacts to everything scores perfect coverage and is unusable in a real meeting.
+  // Precision counts only what the scenario calls a reaction. A copilot is also
+  // configured to do continuous things — running narration, a pinned summary — which
+  // legitimately match no planted moment; counting those punishes it for following its
+  // own policy. Measured on a real run: precision read 0.375 while every planted moment
+  // had in fact been answered.
+  const reactionCats = scenario.meta.reactionCategories;
+  const reactions = reactionCats
+    ? content.map((e, i) => ({ e, i })).filter(({ e }) => reactionCats.includes(e.category ?? ""))
+    : content.map((e, i) => ({ e, i }));
+  const unmatched = judged && !evidenceGap ? reactions.filter(({ i }) => !matchedIndexes.has(i)).length : 0;
+  if (!evidenceGap) dimensions.precision = judged
+    ? {
+        measured: true,
+        source: "judged",
+        value: reactions.length ? (reactions.length - unmatched) / reactions.length : 0,
+        unit: "ratio",
+        detail: `${unmatched} of ${reactions.length} reaction event(s) matched no planted moment` +
+          (reactionCats ? ` (categories counted as reactions: ${reactionCats.join(", ")})` : " (every category counted — the scenario declares no reactionCategories)"),
+      }
+    : { measured: false, reason: "no judged matching supplied" };
+
+  // Drawing. Mechanical: a drawn payload is one a reader can see without judgement.
+  const drawn = content.filter(isDrawn);
+  dimensions.draws = { measured: true, source: "computed", value: drawn.length, unit: "count" };
+
+  // Prediction: staged private guesses against the ones a promote actually lifted.
+  const staged = content.filter((e) => e.staged === true);
+  const promotedVisuals = new Set(
+    events.filter((e) => e.promote?.visual).map((e) => e.promote?.visual as string),
+  );
+  const promoted = staged.filter((e) => e.visual && promotedVisuals.has(e.visual)).length;
+  dimensions.predictionsStaged = { measured: true, source: "computed", value: staged.length, unit: "count" };
+  dimensions.predictionsPromoted = staged.length
+    ? {
+        measured: true, source: "computed", value: promoted / staged.length, unit: "ratio",
+        detail: `${promoted} of ${staged.length} staged prediction(s) were promoted; the rest expired unused`,
+      }
+    : { measured: false, reason: "nothing was staged in this run" };
+
+  // Filler. The field measurement that motivated this dimension: ~31% of a live session's
+  // output was empty acknowledgement, some of it read aloud to a room.
+  const texts = content.map((e) => e.text).filter((t): t is string => typeof t === "string");
+  // Falls back to the shipped list rather than to "nothing is filler": an absent config
+  // must not silently report a filler-free run.
+  const fillerPhrases = cfg?.copilot.mirror.fillerPhrases ?? DEFAULT_FILLER_PHRASES;
+  const filler = texts.filter((t) => isFillerMessage(t, fillerPhrases)).length;
+  dimensions.fillerShare = texts.length
+    ? { measured: true, source: "computed", value: filler / texts.length, unit: "ratio", detail: `${filler} of ${texts.length} text event(s)` }
+    : { measured: false, reason: "the run produced no text events" };
+
+  if (refusal) notes.push(refusal);
+
+  return {
+    scenario: scenario.meta.name,
+    fingerprint: scenario.fingerprint,
+    speed: record?.speed ?? NaN,
+    realTime: record?.realTime ?? false,
+    covered,
+    missed,
+    unmatchedReactions: unmatched,
+    dimensions,
+    notes,
+  };
+}
+
+export type Direction = "improved" | "regressed" | "unchanged" | "unmeasurable";
+
+export interface Comparison {
+  comparable: boolean;
+  /** Present when the comparison is refused outright. */
+  refusal?: string;
+  dimensions: Record<string, { before: Dimension; after: Dimension; direction: Direction; note?: string }>;
+}
+
+/** Dimensions where a smaller number is better. */
+const LOWER_IS_BETTER = new Set(["reactionLatency", "fillerShare"]);
+/** Dimensions that are counts of activity, not quality — reported, never graded. */
+const NOT_GRADED = new Set(["draws", "predictionsStaged"]);
+
+/**
+ * Compare two scorecards of the same scenario.
+ *
+ * Refuses outright across fingerprints: comparing against a moved measuring stick looks
+ * like a result, which is worse than having no result. Refuses latency across mismatched
+ * speeds for the same reason a sped-up run may not report it at all.
+ */
+export function compareScorecards(before: Scorecard, after: Scorecard): Comparison {
+  if (before.fingerprint !== after.fingerprint) {
+    return {
+      comparable: false,
+      refusal: `the scenario itself changed (${before.fingerprint} → ${after.fingerprint}) — these runs measured different things`,
+      dimensions: {},
+    };
+  }
+
+  const speedsDiffer = before.speed !== after.speed;
+  const out: Comparison["dimensions"] = {};
+  const keys = new Set([...Object.keys(before.dimensions), ...Object.keys(after.dimensions)]);
+
+  for (const key of keys) {
+    const b = before.dimensions[key] ?? { measured: false as const, reason: "absent from the earlier scorecard" };
+    const a = after.dimensions[key] ?? { measured: false as const, reason: "absent from the later scorecard" };
+
+    if (speedsDiffer && LOWER_IS_BETTER.has(key) && key === "reactionLatency") {
+      out[key] = { before: b, after: a, direction: "unmeasurable", note: `speeds differ (${before.speed} vs ${after.speed}) — latency is not comparable across them` };
+      continue;
+    }
+    if (!b.measured || !a.measured) {
+      out[key] = { before: b, after: a, direction: "unmeasurable", note: !b.measured ? b.reason : (a as { reason: string }).reason };
+      continue;
+    }
+    if (NOT_GRADED.has(key) || a.value === b.value) {
+      out[key] = { before: b, after: a, direction: "unchanged", note: NOT_GRADED.has(key) ? "activity count — reported, not graded" : undefined };
+      continue;
+    }
+    const better = LOWER_IS_BETTER.has(key) ? a.value < b.value : a.value > b.value;
+    out[key] = { before: b, after: a, direction: better ? "improved" : "regressed" };
+  }
+
+  return { comparable: true, dimensions: out };
+}
