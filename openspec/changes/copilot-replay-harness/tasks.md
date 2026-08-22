@@ -1,8 +1,8 @@
 ## 1. Runtime-dir ownership (highest consequence — first, per design Migration Plan)
 
-- [ ] 1.1 Extract the runtime-dir ownership rules from `src/capture.ts` into a shared module: PID acquisition, stale-PID reclaim, refusal against a live owner, and archive-don't-truncate of an unconsumed transcript. Capture keeps its behaviour byte-identical. [REQ: A replay never collides with a live capture]
-- [ ] 1.2 Unit-test the extracted module against all four states: no PID, live PID, stale PID, unconsumed transcript present. [REQ: A replay never collides with a live capture]
-- [ ] 1.3 Verify by running that `capture` + `stop` still behave identically after the extraction (start, stop, double-start refusal, archive on restart). [REQ: A replay never collides with a live capture]
+- [x] 1.1 Extract the runtime-dir ownership rules from `src/capture.ts` into a shared module: PID acquisition, stale-PID reclaim, refusal against a live owner, and archive-don't-truncate of an unconsumed transcript. Capture keeps its behaviour byte-identical. [REQ: A replay never collides with a live capture]
+- [x] 1.2 Unit-test the extracted module against all four states: no PID, live PID, stale PID, unconsumed transcript present. [REQ: A replay never collides with a live capture]
+- [x] 1.3 Verify by running that `capture` + `stop` still behave identically after the extraction (start, stop, double-start refusal, archive on restart). [REQ: A replay never collides with a live capture]
 
 ## 2. Scenario format and loader
 

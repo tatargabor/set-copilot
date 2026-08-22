@@ -41,6 +41,7 @@ import {
   loadConfig, userConfigDir, CONFIG_FILENAME, keywordIndexPath, enrichedContextPath,
   digestMarkdownPath, type CopilotConfig,
 } from "./config.js";
+import { capturePidPath, captureAlive } from "./runtime-dir.js";
 import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runHandoverCommand } from "./handover.js";
 import {
   applySkillInstall, destLinkTarget, inspectDest, planSkillInstall, resolveInstallMode, skillNames,
@@ -517,7 +518,7 @@ async function drainMirrorAtStop(cfg: CopilotConfig): Promise<void> {
 }
 
 function pidFile(): string {
-  return join(loadConfig().runtimeDir, "capture.pid");
+  return capturePidPath(loadConfig().runtimeDir);
 }
 
 async function cmdStop(print = false): Promise<void> {
@@ -977,12 +978,8 @@ async function cmdWallShot(args: string[]): Promise<void> {
 
 function cmdStatus(): void {
   const cfg = loadConfig();
-  const pf = join(cfg.runtimeDir, "capture.pid");
-  let running = false;
-  if (existsSync(pf)) {
-    const pid = parseInt(readFileSync(pf, "utf-8").trim(), 10);
-    try { process.kill(pid, 0); running = true; } catch { running = false; }
-  }
+  // "running" covers a replay too — it owns the runtime dir under the same PID file.
+  const running = captureAlive(cfg.runtimeDir);
   // The capture records which file it writes — dictation and meeting mode differ.
   const out = lastTranscript(cfg);
   const lines = existsSync(out)

@@ -5,13 +5,12 @@
  * sentence-level transcript JSONL. Claude Code monitors that file.
  */
 
-import {
-  closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { EventEmitter } from "node:events";
 
 import { loadConfig, keywordIndexPath } from "./config.js";
+import { claimRuntimeDir, RuntimeDirBusyError } from "./runtime-dir.js";
 import { startDualCapture, listSources } from "./audio.js";
 import { SonioxRtClient, SonioxChunkClient } from "./soniox-rt.js";
 import { WhisperLocalClient } from "./whisper-local.js";
@@ -26,19 +25,6 @@ export interface CaptureOptions {
   output?: string;
   /** Self-stop after this many minutes (built-in timer — no external sleep needed) */
   maxMinutes?: number;
-}
-
-/** PID of the capture owning `pidFile`, or null if the file is stale/absent. */
-function livePid(pidFile: string): number | null {
-  if (!existsSync(pidFile)) return null;
-  const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
-  if (!Number.isFinite(pid)) return null;
-  try {
-    process.kill(pid, 0);
-    return pid;
-  } catch {
-    return null; // process is gone — the PID file is a leftover
-  }
 }
 
 /**
@@ -70,15 +56,6 @@ function attachReconnectLogging(
   });
 }
 
-/** Move a non-empty transcript to `<name>-<timestamp>.jsonl` so it survives the next capture. */
-function archivePrevious(output: string): void {
-  if (!existsSync(output) || statSync(output).size === 0) return;
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const archived = `${output.replace(/\.jsonl$/, "")}-${stamp}.jsonl`;
-  renameSync(output, archived);
-  console.log(`[set-copilot] Previous transcript archived: ${archived}`);
-}
-
 export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   const cfg = loadConfig();
 
@@ -95,33 +72,20 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   const micOnly = opts.micOnly ?? process.env.MIC_ONLY === "1";
   const output = opts.output ?? (micOnly ? cfg.dictationOutput : cfg.transcriptOutput);
 
-  mkdirSync(cfg.runtimeDir, { recursive: true });
-  mkdirSync(dirname(output), { recursive: true });
-
-  // PID file lets `set-copilot stop` and the poll loop find/track this process
-  // without brittle pkill pattern matching (works identically on Linux + macOS).
-  // A second capture in the same runtime dir would overwrite it, orphaning the
-  // first process (it keeps recording, nothing can stop it) — so refuse instead.
-  const pidFile = join(cfg.runtimeDir, "capture.pid");
-  const alive = livePid(pidFile);
-  if (alive !== null) {
-    console.error(
-      `[set-copilot] A capture is already running (pid ${alive}) in ${cfg.runtimeDir} — run \`set-copilot stop\` first.`,
-    );
-    process.exit(1);
+  // Ownership of the runtime dir — the PID file, the refusal against a live owner,
+  // the archive of an unconsumed transcript, and the state consumers read. Shared
+  // with `replay`, which is the other legitimate owner of a runtime dir; see
+  // `runtime-dir.ts` for why that rule lives in one place.
+  let claim;
+  try {
+    claim = claimRuntimeDir({ runtimeDir: cfg.runtimeDir, output });
+  } catch (err) {
+    if (err instanceof RuntimeDirBusyError) {
+      console.error(`[set-copilot] ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
   }
-
-  // Rotate the previous transcript aside rather than truncating it: past dictations
-  // stay readable, while the configured output path keeps naming the current one.
-  archivePrevious(output);
-  closeSync(openSync(output, "a"));
-
-  writeFileSync(pidFile, String(process.pid));
-  // Record the transcript path: `stop --print` and `status` need it, and only the
-  // capture knows whether this run is dictation or meeting mode.
-  writeFileSync(join(cfg.runtimeDir, "capture.output"), output);
-  // Reset the poll offset so the monitor reads from the top of the fresh file.
-  writeFileSync(join(cfg.runtimeDir, "poll-offset"), "0");
 
   console.log(`[set-copilot] Starting capture (${micOnly ? "dictation" : "meeting"})`);
   console.log(`[set-copilot] Output: ${output}`);
@@ -251,7 +215,7 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     ]);
 
     writer.close();
-    try { rmSync(pidFile); } catch { /* already gone */ }
+    claim.release();
     process.exit(0);
   };
   process.on("SIGINT", () => void shutdown());
