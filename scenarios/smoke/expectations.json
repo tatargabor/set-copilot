@@ -1,0 +1,22 @@
+{
+ "moments": [
+  {
+   "id": "m-ev",
+   "at": 28000,
+   "kind": "question",
+   "expect": "jelzi, hogy az évszám kérdés elhangzott, és hogy a válasz szerint tavalyi adat"
+  },
+  {
+   "id": "m-rajz",
+   "at": 46000,
+   "kind": "decision",
+   "expect": "megrajzolja a három réteget a falra (portál / ügyintézői munkatér / háttérrendszer)"
+  },
+  {
+   "id": "m-ellentmondas",
+   "at": 63000,
+   "kind": "contradiction",
+   "expect": "jelzi a három hét vs hat hét ellentmondást, mielőtt az előadó feloldja"
+  }
+ ]
+}

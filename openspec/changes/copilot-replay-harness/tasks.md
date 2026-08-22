@@ -37,10 +37,10 @@
 
 ## 6. The first real scenario
 
-- [ ] 6.1 Write the scenario-authoring runbook: how an agent turns source material into an imagined presentation, what the planted moments must cover, and how the output is validated. [REQ: A scenario is authored from any source material] [REQ: A scenario plants ground truth deliberately]
-- [ ] 6.2 Author the first scenario from the reference deck (14 slides, HU), including audience questions on the system channel, direct copilot addresses, and the planted traps. Length per the design's open question — decide and record it. [REQ: A scenario plants ground truth deliberately]
-- [ ] 6.3 Generate its timeline and review it as a human-readable document before it becomes a baseline. [REQ: The timeline is readable and matches the lines]
-- [ ] 6.4 Confirm the harness is deck-agnostic by validating a second, structurally different stub scenario from unrelated source material with no code change. [REQ: A scenario is authored from any source material]
+- [x] 6.1 Write the scenario-authoring runbook: how an agent turns source material into an imagined presentation, what the planted moments must cover, and how the output is validated. [REQ: A scenario is authored from any source material] [REQ: A scenario plants ground truth deliberately]
+- [x] 6.2 Author the first scenario from the reference deck (14 slides, HU), including audience questions on the system channel, direct copilot addresses, and the planted traps. Length: 11:03 / 77 entries — the design's open question, decided. Long enough to cover the whole arc of the deck, short enough to iterate on in a coffee break, and at `--speed 0` it drains in under a second for content checks. [REQ: A scenario plants ground truth deliberately]
+- [x] 6.3 Generate its timeline and review it as a human-readable document before it becomes a baseline. [REQ: The timeline is readable and matches the lines]
+- [x] 6.4 Confirm the harness is deck-agnostic by validating a second, structurally different stub scenario from unrelated source material with no code change. [REQ: A scenario is authored from any source material]
 
 ## 7. Scoring
 
@@ -57,7 +57,7 @@
 
 - [ ] 8.1 Record the first baseline scorecard at real time, before any demo-driven copilot change lands. A baseline taken afterwards measures nothing. [REQ: Two runs of one scenario are comparable]
 - [ ] 8.2 Record a second baseline under the headless runner so the interactive-vs-headless difference is a measured number rather than an assumption. [REQ: Two runs of one scenario are comparable]
-- [ ] 8.3 Write the runbook: authoring a scenario, running a scored session, reading a scorecard, and comparing two. State explicitly that a replay does NOT exercise `transcript-writer` (design D1), so a passing scorecard is never read as "the transcript path is fine". [REQ: A score is computed from the run's own artifacts]
+- [x] 8.3 Write the runbook: authoring a scenario, running a scored session, reading a scorecard, and comparing two. State explicitly that a replay does NOT exercise `transcript-writer` (design D1), so a passing scorecard is never read as "the transcript path is fine". [REQ: A score is computed from the run's own artifacts]
 - [ ] 8.4 Update `CLAUDE.md` with the harness and the one property everything rests on: the consumer side is untouched, and any change to it invalidates the measurement.
 
 ## Acceptance Criteria (from spec scenarios)
