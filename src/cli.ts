@@ -89,6 +89,25 @@ async function main(): Promise<void> {
       const { runPoll } = await import("./poll.js");
       return runPoll(loadConfig(), args[0] ? parseInt(args[0], 10) : 60);
     }
+    case "replay": {
+      const { runReplay, parseSpeed } = await import("./replay.js");
+      const dir = args.find((a) => !a.startsWith("--"));
+      if (!dir) {
+        console.error("Usage: set-copilot replay <scenario-dir> [--speed N] [--output PATH]");
+        process.exit(1);
+      }
+      try {
+        await runReplay(loadConfig(), {
+          scenarioDir: dir,
+          speed: parseSpeed(flag(args, "--speed")),
+          output: flag(args, "--output"),
+        });
+      } catch (err) {
+        console.error(`[set-copilot] ${(err as Error).message}`);
+        process.exit(1);
+      }
+      return;
+    }
     case "wall": {
       const { runWall } = await import("./wall/index.js");
       const portRaw = flag(args, "--port");
@@ -1101,6 +1120,11 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot prompt               print the copilot policy the skill loads
                                    (alert categories + copilot.instructions)
   set-copilot poll [seconds]       long-poll the transcript (copilot monitor)
+  set-copilot replay <scenario-dir> [--speed N] [--output PATH]
+                                   play a scenario into the transcript as if it were
+                                   a live capture — the copilot cannot tell. Speed 1
+                                   (default) is real time and the ONLY speed whose
+                                   latency figures are valid; 0 = as fast as possible
   set-copilot wall [--port N] [--no-fake-feed]
                                    start the local monitor-wall display (SSE);
                                    prints window URLs. On a taken port it walks to
