@@ -1,0 +1,13 @@
+{
+ "name": "seam-proba",
+ "description": "Kézzel írt, 86 másodperces kétcsatornás forgatókönyv — a harness működésének gyors ellenőrzésére, és annak bizonyítékaként, hogy a keretrendszer nem kötődik egyetlen deckhez sem.",
+ "language": "hu",
+ "sourceMaterial": "kézzel írt, semmilyen deckhez nem kötődik",
+ "defaultWithinMs": 45000,
+ "reactionCategories": [
+  "súgás",
+  "riasztás",
+  "architektúra",
+  "metrika"
+ ]
+}

@@ -1,0 +1,13 @@
+{"section": "01 Bevezető", "line": {"ts": 2000, "startTs": 0, "speaker": "mic", "text": "Jó napot mindenkinek, köszönöm hogy itt vannak.", "final": true}}
+{"section": "01 Bevezető", "line": {"ts": 9000, "startTs": 3000, "speaker": "mic", "text": "A mai téma az önkormányzati ügyintézés digitalizálása, három részben.", "final": true}}
+{"event": {"type": "silence", "ts": 14000, "duration_ms": 3000}}
+{"section": "02 Diagnózis", "line": {"ts": 22000, "startTs": 15000, "speaker": "mic", "text": "A jelenlegi rendszerben egy ügy átfutási ideje átlagosan tizennégy nap.", "final": true}}
+{"section": "02 Diagnózis", "line": {"ts": 28000, "startTs": 25000, "speaker": "system", "text": "Elnézést, ez melyik évre vonatkozik?", "final": true, "question": true}}
+{"section": "02 Diagnózis", "line": {"ts": 34000, "startTs": 30000, "speaker": "mic", "text": "Ez a tavalyi mérés, idén még nem zártuk le az adatgyűjtést.", "final": true}}
+{"event": {"type": "silence", "ts": 38000, "duration_ms": 3500}}
+{"section": "03 Javaslat", "line": {"ts": 46000, "startTs": 39000, "speaker": "mic", "text": "Copilot, rajzold fel a három réteget: portál, ügyintézői munkatér, háttérrendszer.", "final": true, "command": true}}
+{"section": "03 Javaslat", "line": {"ts": 56000, "startTs": 48000, "speaker": "mic", "text": "A bevezetést három hét alatt le tudjuk zárni, ez reális.", "final": true}}
+{"section": "03 Javaslat", "line": {"ts": 63000, "startTs": 60000, "speaker": "system", "text": "Három hét? A tervben hat hét szerepelt, ha jól emlékszem.", "final": true, "question": true}}
+{"section": "03 Javaslat", "line": {"ts": 70000, "startTs": 65000, "speaker": "mic", "text": "Igen, a hat hét a teljes körű bevezetés, a három hét csak a pilot.", "final": true}}
+{"section": "04 Zárás", "line": {"ts": 80000, "startTs": 73000, "speaker": "mic", "text": "Akkor rögzítsük: a pilot három hét, a teljes bevezetés hat hét marad.", "final": true}}
+{"section": "04 Zárás", "line": {"ts": 86000, "startTs": 84000, "speaker": "system", "text": "Rendben, ezt így elfogadjuk.", "final": true}}
