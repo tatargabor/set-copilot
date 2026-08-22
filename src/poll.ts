@@ -2,19 +2,17 @@ import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { CopilotConfig } from "./config.js";
+import { captureAlive as runtimeDirHasLiveOwner } from "./runtime-dir.js";
 
-/** Is the capture process (from the PID file) still alive? */
+/**
+ * Is someone recording into this runtime dir right now?
+ *
+ * Deliberately not "is a capture running": a `set-copilot replay` owns the dir under
+ * the same PID file, and the poll loop must not be able to tell the difference — that
+ * indistinguishability is the whole basis of the replay harness.
+ */
 function captureAlive(cfg: CopilotConfig): boolean {
-  const pidFile = join(cfg.runtimeDir, "capture.pid");
-  if (!existsSync(pidFile)) return false;
-  const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
-  if (!Number.isFinite(pid)) return false;
-  try {
-    process.kill(pid, 0); // signal 0 = existence check
-    return true;
-  } catch {
-    return false;
-  }
+  return runtimeDirHasLiveOwner(cfg.runtimeDir);
 }
 
 /** Strip everything but letters/digits, in any script — an accent-blind compare would
