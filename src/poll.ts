@@ -54,13 +54,62 @@ function filterLines(lines: string[]): string[] {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** What one tick of the poll decides to do. */
+export type PollAction =
+  /** Stop waiting and hand over what is pending. */
+  | { kind: "ready"; reason: "early" | "capture-gone" }
+  /** The capture is gone and there is nothing left to hand over. */
+  | { kind: "dead" }
+  /** Nothing yet — wait another tick. */
+  | { kind: "wait" };
+
+/**
+ * The poll's decision for one tick: given liveness, the file, and the offset, what now?
+ *
+ * Pure, and separate from the loop, so the one case that used to be wrong can be asserted
+ * without processes or timers. The bug it exists to prevent: reporting a dead capture
+ * BEFORE reading the transcript, which discarded every line written between the consumer's
+ * previous poll and the capture's exit — the closing minutes of a meeting, where the
+ * decisions are.
+ */
+export function pollDecision(alive: boolean, all: string[], last: number): PollAction {
+  const unread = all.length > last ? filterLines(all.slice(last)) : [];
+
+  if (!alive) {
+    // Drain first. Death is reported on the NEXT poll, once there is genuinely nothing
+    // left — a terminator that can be preceded by content in the same response would
+    // force every consumer to re-check its parsing assumption.
+    return unread.length > 0 ? { kind: "ready", reason: "capture-gone" } : { kind: "dead" };
+  }
+
+  const early =
+    unread.some(
+      (l) =>
+        l.includes('"urgency":"high"') ||
+        l.includes('"question":true') ||
+        // Addressed by name: a direct instruction must not wait behind the
+        // ambient silence gate. Safe because a transcript line is already a
+        // complete sentence — the writer flushes on `. ? !`, so the silence
+        // event is a second, redundant coherence check, worth keeping only
+        // for ambient listening where the copilot infers rather than obeys.
+        l.includes('"command":true'),
+    ) ||
+    (unread.some((l) => l.includes('"type":"silence"')) && unread.some((l) => l.includes('"speaker"')));
+
+  return early ? { kind: "ready", reason: "early" } : { kind: "wait" };
+}
+
 /**
  * Long-poll the transcript. Blocks until a reaction-worthy event appears or
  * maxWaitSec elapses, then prints the accumulated (filtered) lines to stdout.
  *
  * Early return when the fresh batch contains an urgent line, a question, or a
- * silence event that closes a spoken thought unit. Emits {"type":"capture-dead"}
- * and exits when the capture process is gone.
+ * silence event that closes a spoken thought unit.
+ *
+ * When the capture is gone, the remaining unread lines are handed over FIRST and
+ * {"type":"capture-dead"} is emitted on the following poll, once there is nothing
+ * left. The old order — notice first, read never — silently dropped everything said
+ * between a consumer's last poll and the capture's exit.
  */
 export async function runPoll(cfg: CopilotConfig, maxWaitSec = 60): Promise<void> {
   const file = cfg.transcriptOutput;
@@ -81,28 +130,12 @@ export async function runPoll(cfg: CopilotConfig, maxWaitSec = 60): Promise<void
 
   const start = Date.now();
   while (Date.now() - start < maxWaitSec * 1000) {
-    if (!captureAlive(cfg)) {
+    const decision = pollDecision(captureAlive(cfg), readAll(), last);
+    if (decision.kind === "dead") {
       process.stdout.write('{"type":"capture-dead"}\n');
       return;
     }
-    const all = readAll();
-    if (all.length > last) {
-      const pending = filterLines(all.slice(last));
-      const early =
-        pending.some(
-          (l) =>
-            l.includes('"urgency":"high"') ||
-            l.includes('"question":true') ||
-            // Addressed by name: a direct instruction must not wait behind the
-            // ambient silence gate. Safe because a transcript line is already a
-            // complete sentence — the writer flushes on `. ? !`, so the silence
-            // event is a second, redundant coherence check, worth keeping only
-            // for ambient listening where the copilot infers rather than obeys.
-            l.includes('"command":true'),
-        ) ||
-        (pending.some((l) => l.includes('"type":"silence"')) && pending.some((l) => l.includes('"speaker"')));
-      if (early) break;
-    }
+    if (decision.kind === "ready") break;
     await sleep(tick);
   }
 
