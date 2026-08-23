@@ -385,7 +385,11 @@ const NOT_GRADED = new Set(["draws", "predictionsStaged"]);
  * like a result, which is worse than having no result. Refuses latency across mismatched
  * speeds for the same reason a sped-up run may not report it at all.
  */
-export function compareScorecards(before: Scorecard, after: Scorecard): Comparison {
+export function compareScorecards(
+  before: Scorecard,
+  after: Scorecard,
+  noiseBand?: Record<string, number>,
+): Comparison {
   if (before.fingerprint !== after.fingerprint) {
     return {
       comparable: false,
@@ -414,8 +418,24 @@ export function compareScorecards(before: Scorecard, after: Scorecard): Comparis
       out[key] = { before: b, after: a, direction: "unchanged", note: NOT_GRADED.has(key) ? "activity count — reported, not graded" : undefined };
       continue;
     }
+    // Inside the scenario's measured run-to-run noise, a difference is not a verdict.
+    // Without this, two identical builds produce "regressed" — which is exactly what
+    // happened on the first two runs of this harness.
+    const band = noiseBand?.[key];
+    if (band !== undefined && Math.abs(a.value - b.value) <= band) {
+      out[key] = {
+        before: b, after: a, direction: "unchanged",
+        note: `difference ${Math.abs(a.value - b.value).toPrecision(3)} is inside this scenario's measured noise band (±${band}) — not evidence of a change`,
+      };
+      continue;
+    }
     const better = LOWER_IS_BETTER.has(key) ? a.value < b.value : a.value > b.value;
-    out[key] = { before: b, after: a, direction: better ? "improved" : "regressed" };
+    out[key] = {
+      before: b, after: a, direction: better ? "improved" : "regressed",
+      note: band === undefined
+        ? "no noise band declared for this scenario — a single-run difference is a reading, not evidence"
+        : undefined,
+    };
   }
 
   return { comparable: true, dimensions: out };
