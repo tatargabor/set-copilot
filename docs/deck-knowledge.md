@@ -44,6 +44,12 @@ használható; egy, ami a diára, az igen.
 amit hall. Ha egy dia szava elhangzik, a transcript sora megkapja azt a diát témaként, de
 ez következtetés, nem érzékelés. Ne ígérd másnak.
 
+**A dia-címkézés a címekre épül**, tehát a felismerése korlátozott: ha egy mondat a dia
+*tartalmáról* szól, de egyetlen címszót sem használ, nem kapja meg a diát témaként. Ez
+szándékos — a dia törzsszövegéből is bélyegeket csinálni visszahozná a „mindent megjelöl =
+semmit se jelöl" hibát. A címkézés tájékozódási segédlet; az ellentmondást nem ez kapja el,
+hanem az, hogy a copilot a session elején elolvassa a diák tényeit.
+
 **Nem dönti el, kinek van igaza.** A deck referencia, nem orákulum: az ellentmondás annyit
 jelent, hogy a beszélő és a dia mást mond — bármelyik tévedhet.
 
