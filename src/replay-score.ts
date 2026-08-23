@@ -70,6 +70,20 @@ export interface RunArtifacts {
 export interface Match {
   momentId: string;
   eventIndex: number | null;
+  /**
+   * Every OTHER candidate that also addresses this moment (never the credited one).
+   *
+   * `eventIndex` is the earliest addressing event, because that is what latency means.
+   * But precision asks a different question — "did the copilot react to things nobody
+   * planted?" — and a second event on an answered moment is not noise. Crediting only
+   * the earliest made every follow-up count against the copilot: measured on the
+   * 2026-08-23 promote run, precision read 0.10 while 31 narration events had absorbed
+   * the credit for moments its `súgás` lines had genuinely addressed.
+   *
+   * Absent on a card judged before this field existed; precision then falls back to the
+   * credited match alone, which is the old, harsher reading — never a silent upgrade.
+   */
+  alsoAddressing?: number[];
   /** The judge's reasoning — recorded so a disputed score can be inspected, not re-run. */
   reasoning?: string;
 }
@@ -103,6 +117,8 @@ export interface Scorecard {
     momentId: string;
     kind: string;
     eventIndex: number | null;
+    /** Other events the judge said also address this moment — precision's input, recorded. */
+    alsoAddressing?: number[];
     /** ms from the moment becoming true to the matched event; null when not measurable. */
     delayMs: number | null;
     reasoning?: string;
@@ -313,11 +329,31 @@ export function scoreRun(
   // legitimately match no planted moment; counting those punishes it for following its
   // own policy. Measured on a real run: precision read 0.375 while every planted moment
   // had in fact been answered.
+  //
+  // Two things this counted wrongly until 2026-08-23, both found by reading a precision
+  // of 0.10 that the run did not deserve:
+  //
+  // 1. INDEX SPACE. The judge's `eventIndex` points into the full event log; this filter
+  //    numbered the *content* events (commands removed). After the first `promote` the
+  //    two numberings diverge, so a matched reaction was compared against a stranger's
+  //    index. Reactions are numbered in the event log's own space now.
+  // 2. ONE CREDIT PER MOMENT. `eventIndex` is deliberately the EARLIEST addressing event
+  //    (latency), so every later event on an answered moment fell through as "matched
+  //    nothing planted". The judge now also names the others (`alsoAddressing`), and a
+  //    reaction counts as addressed if it appears in either.
   const reactionCats = scenario.meta.reactionCategories;
-  const reactions = reactionCats
-    ? content.map((e, i) => ({ e, i })).filter(({ e }) => reactionCats.includes(e.category ?? ""))
-    : content.map((e, i) => ({ e, i }));
-  const unmatched = judged && !evidenceGap ? reactions.filter(({ i }) => !matchedIndexes.has(i)).length : 0;
+  const addressed = new Set(matchedIndexes);
+  for (const m of matches) for (const i of m.alsoAddressing ?? []) addressed.add(i);
+  const liftedForPrecision = promotedVisuals(events);
+  const reactions = events
+    .map((e, i) => ({ e, i }))
+    .filter(({ e }) => e.kind === undefined && typeof e.category === "string")
+    // A staged prediction nobody promoted was never on the public wall — it is a private
+    // guess, and the contract calls letting a wrong one expire correct. Counting it as an
+    // unmatched reaction would penalise exactly the behaviour the wall asks for.
+    .filter(({ e }) => !(e.staged === true && !(e.visual && liftedForPrecision.has(e.visual))))
+    .filter(({ e }) => (reactionCats ? reactionCats.includes(e.category ?? "") : true));
+  const unmatched = judged && !evidenceGap ? reactions.filter(({ i }) => !addressed.has(i)).length : 0;
   if (!evidenceGap) dimensions.precision = judged
     ? {
         measured: true,
@@ -367,7 +403,7 @@ export function scoreRun(
     const delayMs = !refusal && record && ev && typeof ev.emittedAt === "number"
       ? ev.emittedAt - momentTime(m, record)
       : null;
-    return { momentId: m.id, kind: m.kind, eventIndex: idx, delayMs, reasoning: match?.reasoning };
+    return { momentId: m.id, kind: m.kind, eventIndex: idx, alsoAddressing: match?.alsoAddressing, delayMs, reasoning: match?.reasoning };
   });
 
   return {

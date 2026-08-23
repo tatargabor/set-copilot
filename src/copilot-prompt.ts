@@ -71,6 +71,37 @@ function renderEngagement(engagement: Engagement, maxLines: number, allowWeb: bo
  * may not visibly update looks broken when it stays mute. It never widens the
  * multi-party content policy — only direct address and echoing its own wall emissions.
  */
+/**
+ * Turn order — engine mechanics, not judgement, and the only latency lever the policy has.
+ *
+ * Measured on the 2026-08-23 real-time replay: a reaction reached the wall 39.4 s after
+ * the line that warranted it. The split was 14.5 s waiting for the next poll and 24.9 s
+ * of model turn — and the poll itself returned in 2.5 s every single time, i.e. the gate
+ * was never the thing waiting. Each cycle held exactly ONE `wall-emit`, issued after the
+ * whole turn had been composed: alert, narration, pinned summary, staging and promotion
+ * decided together, then published together. So the alert paid for the narration's
+ * deliberation, and the next line paid for all of it.
+ *
+ * This block says: get the reaction out first, then compose the rest. It changes no
+ * content and drops nothing — only the order, which is what latency is made of. It is
+ * engine text rather than config because it is about how a turn is executed, not about
+ * what this project considers worth saying.
+ */
+function renderTurnOrder(): string[] {
+  return [
+    "## Turn order — the reaction goes out first",
+    "",
+    "A meeting does not wait for you to finish thinking. When a poll returns lines that fire a category above:",
+    "",
+    "1. **First tool call: `wall-emit` with the reaction alone.** Do not compose the narration line, the pinned summary, the staging or a promotion before it goes out. One alert, out, now.",
+    "2. **Then everything else, batched.** Narration, pinned updates, drawings, staging and promotions go in ONE further `wall-emit` (it accepts a JSON array), not one call each.",
+    "3. **Then get back to listening immediately.** If you drive the poll yourself (a Bash loop, no Monitor), chain it onto the same command (`… wall-emit '…' ; … poll 30`) — a separate round trip is dead time in which the room keeps talking. With a Monitor the next batch is already on its way; just end the turn.",
+    "",
+    "If nothing fires a category, there is no step 1 — go straight to the batch. This is an ordering rule, never a licence to drop content: everything you would have said still gets said, just not ahead of the alert.",
+    "",
+  ];
+}
+
 function renderFeedback(): string[] {
   return [
     "## Feedback — liveness & wall echo",
@@ -256,6 +287,7 @@ export function renderAlerts(alerts: AlertCategory[], opts?: Partial<CopilotProm
     );
   }
 
+  lines.push(...renderTurnOrder());
   lines.push(...renderEngagement(engagement, maxLines, allowWeb));
   if (acknowledge) lines.push(...renderFeedback());
 

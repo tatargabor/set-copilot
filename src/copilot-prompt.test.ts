@@ -105,6 +105,21 @@ describe("renderCopilotPrompt", () => {
  * which made a bug-triage watcher and a design-call participant impossible to express
  * in the same package. It is config now, so these assertions guard the three levels.
  */
+describe("turn order — the latency lever", () => {
+  // Measured 2026-08-23: 39.4 s to a reaction, of which 14.5 s was waiting for the next
+  // poll and 24.9 s the model turn — one batched emit per cycle, composed all at once,
+  // so the alert paid for the narration's deliberation.
+  it("puts the reaction ahead of narration, batches the rest, and re-polls without a round trip", () => {
+    const out = renderCopilotPrompt(cfg({ alerts: DEFAULT_ALERTS }));
+    expect(out).toContain("## Turn order — the reaction goes out first");
+    expect(out).toMatch(/First tool call.*reaction alone/);
+    expect(out).toMatch(/ONE further `wall-emit`/);
+    expect(out).toMatch(/chain it onto the same command/);
+    // It reorders; it never licenses dropping anything.
+    expect(out).toMatch(/never a licence to drop content/);
+  });
+});
+
 describe("engagement", () => {
   const alerts: AlertCategory[] = [{ key: "x", emoji: "⚠", priority: "high", when: "w" }];
 
