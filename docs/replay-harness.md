@@ -103,6 +103,19 @@ lejátszással. Ezért a sebesség a run recordban van, és a scorecard a latenc
 érvénytelenként jelenti, nem kisebb számként. Ugyanez áll, ha **a lejátszó maga késett**
 2 másodpercnél többet — az a szám a lejátszót írná le, nem a copilotot.
 
+## Amit a mérce eddig a copilotról mondott
+
+**A reakció-késés nagy része nem gondolkodás, hanem várakozás.** Mérve: egy elhangzott
+sortól a következő csend-eseményig átlag **30,7 mp**, a mért reakció-késés pedig ~34 mp. A
+poll csak sürgős sorra, kérdésre, közvetlen megszólításra vagy csendre tért vissza korábban
+— így folyamatos beszéd közben egy sort fél percig **meg sem mutatott** a copilotnak. A
+modell azonnal reagál, amint látja; a kapu volt a lassú.
+
+Ezért van `copilot.pollDwell`: hány új *beszéd*-sor zárja le a pollt magától. A `0` pontosan
+a régi viselkedés. Az alapérték **kalibrált, nem tippelt** — 9,6 mp/mondat tempón a négyes
+érték ~38 mp várakozást adna, vagyis semmivel sem jobbat annál, amit lecserélni hivatott;
+kettővel mérve hat pollon átlag **14,2 mp**.
+
 ## A scorecard olvasása
 
 | Dimenzió | Forrás | Jelentés |
