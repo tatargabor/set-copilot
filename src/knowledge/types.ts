@@ -62,6 +62,21 @@ export interface EnrichedContext {
   cards: TopicCard[];
   domainFaq: DomainFaq[];
   recentIncidents: Incident[];
+  /**
+   * The deck this meeting is about, in slide order, with the numeric claims each slide
+   * makes. Contributed by the pipeline rather than by an adapter, so a project running a
+   * custom adapter gets deck awareness without implementing it.
+   */
+  deck?: DeckSlideContext[];
+}
+
+/** One slide as the copilot sees it: enough to cite, without carrying the whole deck. */
+export interface DeckSlideContext {
+  index: number;
+  title: string;
+  /** Opening text of the slide, trimmed — the digest carries the citable part, not the deck. */
+  summary: string;
+  facts: { figure: string; unit?: string; context: string }[];
 }
 
 /**
