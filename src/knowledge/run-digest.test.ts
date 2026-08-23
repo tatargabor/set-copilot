@@ -25,9 +25,36 @@ describe("slideKeywordPatterns", () => {
     expect(p.stems).toContain("állapot");
   });
 
-  it("drops short words — matching on those would tag every line with every slide", () => {
+  it("drops short lowercase words — matching on those would tag every line with every slide", () => {
     const [p] = slideKeywordPatterns([slide(1, "A mi új terv", "x")]);
     expect(p).toBeUndefined();
+  });
+
+  it("keeps a short ACRONYM — those are exactly what a presenter says out loud", () => {
+    // A flat five-character floor drops ASP, KPI, GaaP, DÁP — the domain terms that
+    // actually get spoken when a presenter arrives at a slide.
+    const [p] = slideKeywordPatterns([slide(1, "Az ASP és a GaaP réteg", "x")]);
+    expect(p.stems).toContain("asp");
+    expect(p.stems).toContain("gaap");
+  });
+
+  it("drops a stem shared by many slides — that tags every line with every slide", () => {
+    // Measured on a real deck: build-id titles put `quick`, `profile` and `deck` on half
+    // the slides, and one spoken sentence then matched six of them at once.
+    const deck = [
+      slide(1, "quick win alkalmazott profile", "x"),
+      slide(2, "quick win ASP profile", "x"),
+      slide(3, "quick win mérés profile", "x"),
+      slide(4, "nyílt forráskód", "x"),
+    ];
+    const p = slideKeywordPatterns(deck);
+    expect(p.find((x) => x.topic.startsWith("dia 2"))?.stems).toEqual(["asp"]);
+    expect(p.find((x) => x.topic.startsWith("dia 4"))?.stems).toEqual(["nyílt", "forráskód"]);
+  });
+
+  it("drops a slide entirely when every one of its words is too common", () => {
+    const deck = [slide(1, "közös közös", "x"), slide(2, "közös közös", "x"), slide(3, "egyedi téma", "x")];
+    expect(slideKeywordPatterns(deck).map((p) => p.topic)).toEqual(["dia 3: egyedi téma"]);
   });
 
   it("deduplicates stems", () => {
