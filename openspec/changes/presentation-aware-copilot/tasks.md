@@ -1,30 +1,30 @@
 ## 1. Extraction (pure, testable first)
 
-- [ ] 1.1 Define the slide and fact shapes: a slide carries deck position, title, and text; a fact carries figure, scale/unit, context words, and the slide it came from. [REQ: A deck is extracted into ordered, titled slides]
-- [ ] 1.2 Implement markdown and plain-text extraction, splitting on headings, titling each slide from its heading and falling back to the file or position. [REQ: Common presentation formats are handled, including wrapped exports]
-- [ ] 1.3 Implement HTML extraction: strip scripts, styles, markup and embedded data URIs; take the title from the document title or first heading. [REQ: Common presentation formats are handled, including wrapped exports]
-- [ ] 1.4 Unwrap a static-export bundler template before extracting, so a wrapped deck yields its real content rather than the wrapper's loading text. [REQ: Common presentation formats are handled, including wrapped exports]
-- [ ] 1.5 Order slides by configured file order plus any leading number in the filename. [REQ: A deck is extracted into ordered, titled slides]
-- [ ] 1.6 Report an unreadable or empty deck file with its reason and continue with the rest. [REQ: A deck is extracted into ordered, titled slides] [REQ: Common presentation formats are handled, including wrapped exports]
-- [ ] 1.7 Implement numeric-fact extraction: figure with locale-plural decimal separators, scale word or unit, a window of surrounding words, capped per slide. [REQ: A slide's numeric claims are extracted as facts]
-- [ ] 1.8 Unit-test extraction and facts, including the wrapped-export case, a title-less slide, an empty deck, and a slide with no numbers. [REQ: A deck is extracted into ordered, titled slides] [REQ: A slide's numeric claims are extracted as facts]
+- [x] 1.1 Define the slide and fact shapes: a slide carries deck position, title, and text; a fact carries figure, scale/unit, context words, and the slide it came from. [REQ: A deck is extracted into ordered, titled slides]
+- [x] 1.2 Implement markdown and plain-text extraction, splitting on headings, titling each slide from its heading and falling back to the file or position. [REQ: Common presentation formats are handled, including wrapped exports]
+- [x] 1.3 Implement HTML extraction: strip scripts, styles, markup and embedded data URIs; take the title from the document title or first heading. [REQ: Common presentation formats are handled, including wrapped exports]
+- [x] 1.4 Unwrap a static-export bundler template before extracting, so a wrapped deck yields its real content rather than the wrapper's loading text. [REQ: Common presentation formats are handled, including wrapped exports]
+- [x] 1.5 Order slides by configured file order plus any leading number in the filename. [REQ: A deck is extracted into ordered, titled slides]
+- [x] 1.6 Report an unreadable or empty deck file with its reason and continue with the rest. [REQ: A deck is extracted into ordered, titled slides] [REQ: Common presentation formats are handled, including wrapped exports]
+- [x] 1.7 Implement numeric-fact extraction: figure with locale-plural decimal separators, scale word or unit, a window of surrounding words, capped per slide. [REQ: A slide's numeric claims are extracted as facts]
+- [x] 1.8 Unit-test extraction and facts, including the wrapped-export case, a title-less slide, an empty deck, and a slide with no numbers. [REQ: A deck is extracted into ordered, titled slides] [REQ: A slide's numeric claims are extracted as facts]
 
 ## 2. Config seam
 
-- [ ] 2.1 Add `knowledge.deck` (files or globs, with the deck's own extensions) to config, defaulting to empty. [REQ: Slides reach the copilot through the existing knowledge pipeline]
-- [ ] 2.2 Unit-test that an absent or malformed key is dropped with a warning rather than killing the digest, following the `detect.*` posture. [REQ: Slides reach the copilot through the existing knowledge pipeline]
+- [x] 2.1 Add `knowledge.deck` (files or globs, with the deck's own extensions) to config, defaulting to empty. [REQ: Slides reach the copilot through the existing knowledge pipeline]
+- [x] 2.2 Unit-test that an absent or malformed key is dropped with a warning rather than killing the digest, following the `detect.*` posture. [REQ: Slides reach the copilot through the existing knowledge pipeline]
 
 ## 3. Pipeline wiring
 
-- [ ] 3.1 Contribute slide-derived keyword patterns so a transcript line is tagged with its slide through the existing keyword index. [REQ: Slides reach the copilot through the existing knowledge pipeline]
-- [ ] 3.2 Contribute slides and facts to the structured context. [REQ: Slides reach the copilot through the existing knowledge pipeline]
-- [ ] 3.3 Render the deck into the session digest: slides in order, each with its facts, sized so the digest stays loadable. [REQ: Slides reach the copilot through the existing knowledge pipeline]
+- [x] 3.1 Contribute slide-derived keyword patterns so a transcript line is tagged with its slide through the existing keyword index. [REQ: Slides reach the copilot through the existing knowledge pipeline]
+- [x] 3.2 Contribute slides and facts to the structured context. [REQ: Slides reach the copilot through the existing knowledge pipeline]
+- [x] 3.3 Render the deck into the session digest: slides in order, each with its facts, sized so the digest stays loadable. [REQ: Slides reach the copilot through the existing knowledge pipeline]
 - [ ] 3.4 Verify that with no deck configured every artifact is byte-identical to before. [REQ: Slides reach the copilot through the existing knowledge pipeline]
 
 ## 4. Inspection
 
-- [ ] 4.1 Implement `set-copilot deck`: slides in order with titles and facts, and a named report of anything that failed to extract. [REQ: The extraction is inspectable before it is relied on]
-- [ ] 4.2 Run it against the reference deck and read the output — the extraction has to be checked by a person before a measurement depends on it. [REQ: The extraction is inspectable before it is relied on]
+- [x] 4.1 Implement `set-copilot deck`: slides in order with titles and facts, and a named report of anything that failed to extract. [REQ: The extraction is inspectable before it is relied on]
+- [x] 4.2 Run it against the reference deck and read the output — the extraction has to be checked by a person before a measurement depends on it. [REQ: The extraction is inspectable before it is relied on]
 
 ## 5. Close the loop
 
@@ -35,7 +35,7 @@
 
 ## 6. Documentation
 
-- [ ] 6.1 Document `knowledge.deck` and `set-copilot deck`, including what the copilot does NOT know (it cannot see the screen; it infers the slide from speech). [REQ: The extraction is inspectable before it is relied on]
+- [x] 6.1 Document `knowledge.deck` and `set-copilot deck`, including what the copilot does NOT know (it cannot see the screen; it infers the slide from speech). [REQ: The extraction is inspectable before it is relied on]
 
 ## Acceptance Criteria (from spec scenarios)
 
