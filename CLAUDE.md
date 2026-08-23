@@ -296,6 +296,18 @@ Four rules carry it, each of which a run has already justified:
   non-deterministic verdict leaking into a counted dimension would destroy the one
   property a regression measure needs.
 
+**A score is not evidence until the measure's own noise is known.** Measured 2026-08-23 on
+three real-time runs of one scenario with nothing changed: coverage spanned 0.222. At seven
+planted moments the spread was worse — one moment was a seventh of the score — and a
+comparison reported a regression where nothing had changed. So a scenario carries a measured
+`noiseBand`, a difference inside it is reported as unchanged rather than as a verdict, and a
+scenario with no band declared still compares but says a single-run difference is a reading,
+not evidence. Two rules the band itself needs: round it **up** (a band rounded down excludes
+the very runs that defined it), and treat `N=3` as a **lower** bound on the noise. The band is
+deliberately NOT part of the scenario fingerprint — it changes no dimension's value, only how a
+comparison is worded, and including it made the ruler circular: measuring the noise needs runs,
+recording the result changed the fingerprint, which invalidated those very runs.
+
 Two things the harness deliberately does **not** cover, stated because a green scorecard
 would otherwise be read as covering them. It does not exercise `transcript-writer`: a
 scenario carries finished lines, not a token stream, so the flush rules never run — putting

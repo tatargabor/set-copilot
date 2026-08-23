@@ -274,14 +274,26 @@ export function loadScenario(dir: string): Scenario {
     ids.add(m.id);
   }
 
-  // The fingerprint covers the meta too, not just the script and the expectations.
-  // The meta CHANGES THE SCORE — `reactionCategories` decides what counts as a reaction,
-  // `defaultWithinMs` decides how long a reaction may lag — so leaving it out would let
-  // two runs be declared comparable while having been measured with different rulers.
-  // Caught while setting the first baseline, editing `reactionCategories` and watching
-  // precision move with the fingerprint unchanged.
+  // The fingerprint covers what CHANGES A SCORE, and nothing else.
+  //
+  // The meta is in, because it changes scores: `reactionCategories` decides what counts as
+  // a reaction, `defaultWithinMs` how long one may lag. Leaving it out let two runs be
+  // declared comparable after being measured with different rulers — caught by editing
+  // `reactionCategories` and watching precision move while the fingerprint held.
+  //
+  // `noiseBand` and any `_`-prefixed note are OUT, and the reason is structural rather
+  // than a convenience. The band changes no dimension's value; it changes only how a
+  // comparison is worded. Including it made the ruler circular: measuring the noise
+  // requires runs, recording the measurement changes the fingerprint, which invalidates
+  // the very scorecards it was measured from — a loop with no fixed point. The line is
+  // "changes the score" versus "changes the commentary", and the circularity is the proof
+  // that it sits in the right place.
+  const meta_ = JSON.parse(readFileSync(join(dir, SCENARIO_FILES.meta), "utf-8")) as Record<string, unknown>;
+  const scoring = Object.fromEntries(
+    Object.entries(meta_).filter(([k]) => k !== "noiseBand" && !k.startsWith("_")).sort(([a], [b]) => a.localeCompare(b)),
+  );
   const fingerprint = createHash("sha256")
-    .update(readFileSync(join(dir, SCENARIO_FILES.meta), "utf-8"))
+    .update(JSON.stringify(scoring))
     .update(scriptRaw)
     .update(readFileSync(join(dir, SCENARIO_FILES.expectations), "utf-8"))
     .digest("hex")

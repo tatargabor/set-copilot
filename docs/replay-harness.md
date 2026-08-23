@@ -134,10 +134,19 @@ Egy futás nem bizonyíték. Mérve 2026-08-23-án, ugyanazon a forgatókönyvö
 Hét pillanatnál egy pillanat a pontszám egyhetedét érte, tehát egyetlen ingadozás 14 pontot
 mozgatott — és az összehasonlító „regressziót" jelentett úgy, hogy semmi nem változott.
 
-A zaj két forrása szétválasztható, és érdemes is: **ugyanazt a változatlan futást háromszor
-újrabírálva a lefedettség és az elmulasztott halmaz betű szerint azonos** — a bíráló stabil,
-a copilot ingadozik. (A latencia eleinte mozgott, mert több illő esemény közül nem mindig
-ugyanazt választotta; a bírálati szabály most a legkorábbit írja elő, és azóta azonos.)
+A zaj két forrásból jön — a copilotéból és a bírálóéból —, és **a jelenlegi sáv a kettőt együtt
+fogja be**. A hét pillanatos változaton egy ugyanazt a változatlan futást háromszor újrabíráló
+mérés betű szerint azonos eredményt adott, tehát ott a bíráló stabil volt; **ez nem
+általánosítható a tizennyolcra**, ahol az újrabírálások mozogtak. Ne hivatkozz rá úgy, mintha
+a zaj tisztán a copilot ingadozása lenne — az szétválasztatlan.
+
+(A latencia korábban attól is mozgott, hogy több illő esemény közül nem mindig ugyanazt
+választotta a bíráló. A szabály most a **legkorábbit** írja elő, mert a reakció-latencia azt
+jelenti, mikor reagált *először*; egy későbbi újrafogalmazás felfelé torzítana.)
+
+A sávot **felfelé kell kerekíteni**: egy lefelé kerekített sávból éppen azok a futások esnek ki,
+amelyek meghatározták. És `N=3` mellett a sáv a zaj **alsó** becslése, nem felső — egy éppen
+csak kilógó különbség még mindig gyenge bizonyíték.
 
 Ebből következik a `noiseBand` a forgatókönyv metájában: sávon belüli különbség
 **„változatlan", nem verdikt**. A sáv a forgatókönyvön él és nem a motorban, mert a zaj *ennek*
