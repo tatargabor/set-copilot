@@ -57,6 +57,19 @@ export interface CopilotPromptConfig {
   /** Max lines per contribution. Default 3 — raise it when you want reasoning, not just flags. */
   maxLines: number;
   /**
+   * How many new SPEECH lines end a poll on their own. `0` = only the old triggers.
+   *
+   * Without a bound, a line spoken mid-stream waits for the next pause — measured at
+   * 30.7 s on average during a presentation, which is where the copilot's ~34 s reaction
+   * latency almost entirely came from. The model reacts promptly once it sees a line; it
+   * was the gate that was slow.
+   *
+   * This is a cost/latency trade the operator owns: every extra return is a model turn.
+   * The default halves the measured wait rather than minimising it — below that, each
+   * further return buys less latency than it costs.
+   */
+  pollDwell: number;
+  /**
    * Allow WebSearch/WebFetch during the meeting (background research, fact-checking a
    * claim against the outside world). Off by default: it costs seconds, and most
    * meetings only need the project's own knowledge.
@@ -773,6 +786,7 @@ export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     alerts: DEFAULT_ALERTS,
     engagement: "reactive",
     maxLines: 3,
+    pollDwell: 4,
     allowWebResearch: false,
     acknowledge: true,
     drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },
@@ -1023,6 +1037,12 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         typeof copilot.maxLines === "number" && copilot.maxLines > 0
           ? Math.floor(copilot.maxLines)
           : DEFAULTS.copilot.maxLines,
+      // `0` is a legitimate value (restore the previous gating exactly), so this checks
+      // for a valid number rather than for truthiness.
+      pollDwell:
+        typeof copilot.pollDwell === "number" && Number.isFinite(copilot.pollDwell) && copilot.pollDwell >= 0
+          ? Math.floor(copilot.pollDwell)
+          : DEFAULTS.copilot.pollDwell,
       allowWebResearch: copilot.allowWebResearch === true,
       acknowledge: copilot.acknowledge !== false,
       drawing: {
