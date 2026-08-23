@@ -127,3 +127,34 @@ describe("parseJudgeReply", () => {
     expect(() => parseJudgeReply('{"verdict":"ok"}', qs)).toThrow(/matches/);
   });
 });
+
+describe("alsoAddressing — precision's input", () => {
+  it("asks for every other addressing candidate, and says why it is not a second match", () => {
+    const p = judgePrompt(judgeQuestions(scenario, EVENTS, record));
+    expect(p).toContain("alsoAddressing");
+    expect(p).toMatch(/not a second chance at the match/);
+    expect(p).toMatch(/same topic is not addressing/);
+  });
+
+  it("keeps only offered indexes, drops the credited one, and de-duplicates", () => {
+    const qs = judgeQuestions(scenario, EVENTS, record);
+    const id = qs[0].momentId;
+    const offered = qs[0].candidates.map((c) => c.index);
+    expect(offered.length).toBeGreaterThan(1);
+    const reply = JSON.stringify({ matches: [{
+      momentId: id, eventIndex: offered[0],
+      alsoAddressing: [offered[0], offered[1], offered[1], 999],
+      reasoning: "r",
+    }] });
+    const m = parseJudgeReply(reply, qs).find((x) => x.momentId === id)!;
+    expect(m.eventIndex).toBe(offered[0]);
+    expect(m.alsoAddressing).toEqual([offered[1]]);
+  });
+
+  it("leaves alsoAddressing absent when the judge does not answer it", () => {
+    const qs = judgeQuestions(scenario, EVENTS, record);
+    const id = qs[0].momentId;
+    const reply = JSON.stringify({ matches: [{ momentId: id, eventIndex: qs[0].candidates[0].index }] });
+    expect(parseJudgeReply(reply, qs).find((x) => x.momentId === id)!.alsoAddressing).toBeUndefined();
+  });
+});

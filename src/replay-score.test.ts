@@ -163,6 +163,64 @@ describe("scoreRun — dimensions", () => {
     expect((card.dimensions.precision as { detail: string }).detail).toMatch(/every category counted/);
   });
 
+  it("does not count a follow-up on an ANSWERED moment as noise", () => {
+    // `eventIndex` is deliberately the earliest addressing event, because that is what
+    // latency means — but precision asks a different question. Measured 2026-08-23: a run
+    // read 0.10 precision because 31 narration events had absorbed the credit for moments
+    // its súgás lines genuinely addressed.
+    const s = scenario();
+    s.meta.reactionCategories = ["súgás"];
+    const events = [ev(), ev({ text: "ugyanarra még egy mondat" })];
+    const m: Match[] = [{ momentId: "m-q", eventIndex: 0, alsoAddressing: [1] }, { momentId: "m-c", eventIndex: null }];
+    const card = scoreRun(s, artifacts(events), m);
+    expect(card.unmatchedReactions).toBe(0);
+    expect(card.dimensions.precision).toMatchObject({ measured: true, value: 1 });
+    // And it is recorded, so a disputed precision can be inspected rather than re-judged.
+    expect(card.judgement.find((j) => j.momentId === "m-q")?.alsoAddressing).toEqual([1]);
+  });
+
+  it("numbers reactions in the event log's own space, so a command cannot shift them", () => {
+    // The judge's eventIndex points into the full log; this filter used to number the
+    // CONTENT events instead. After the first promote the two numberings diverge, and a
+    // matched reaction was compared against a stranger's index.
+    const s = scenario();
+    s.meta.reactionCategories = ["súgás"];
+    const events: WallEventRecord[] = [
+      { kind: "promote", category: "előrejelzés", visual: "v1" } as WallEventRecord,
+      ev(),
+    ];
+    const m: Match[] = [{ momentId: "m-q", eventIndex: 1 }, { momentId: "m-c", eventIndex: null }];
+    const card = scoreRun(s, artifacts(events), m);
+    expect(card.unmatchedReactions).toBe(0);
+    expect(card.dimensions.precision).toMatchObject({ measured: true, value: 1 });
+  });
+
+  it("does not count an unpromoted staged prediction as a reaction — it was never public", () => {
+    // A private guess left to expire is what the contract calls correct for a wrong guess.
+    const s = scenario();
+    s.meta.reactionCategories = ["súgás", "előrejelzés"];
+    const events = [
+      ev(),
+      ev({ category: "előrejelzés", staged: true, visual: "v1", text: "előre rajzolt tipp" }),
+    ];
+    const card = scoreRun(s, artifacts(events), matches);
+    expect(card.unmatchedReactions).toBe(0);
+    expect((card.dimensions.precision as { detail: string }).detail).toMatch(/1 reaction event/);
+  });
+
+  it("counts a PROMOTED prediction as a reaction — it did reach the wall", () => {
+    const s = scenario();
+    s.meta.reactionCategories = ["súgás", "előrejelzés"];
+    const events: WallEventRecord[] = [
+      ev(),
+      ev({ category: "előrejelzés", staged: true, visual: "v1", text: "előre rajzolt tipp" }),
+      { kind: "promote", category: "előrejelzés", visual: "v1" } as WallEventRecord,
+    ];
+    const card = scoreRun(s, artifacts(events), matches);
+    expect(card.unmatchedReactions).toBe(1);
+    expect(card.dimensions.precision).toMatchObject({ measured: true, value: 0.5 });
+  });
+
   it("records the judged matching per moment, with its delay and the judge's reasoning", () => {
     // A judged verdict is not reproducible, so it has to be kept. Without it a reader
     // reconstructs the matching from the window — which is a DIFFERENT number, and on a

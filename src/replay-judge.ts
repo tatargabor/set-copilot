@@ -83,13 +83,18 @@ export function judgePrompt(questions: JudgeQuestion[]): string {
     "    resolving doubt in the copilot's favour makes every borderline reaction count as credit.",
     "  - A reaction that is merely on the same topic does not address the moment. It must do what",
     '    "expect" describes.',
-    "  - If SEVERAL candidates address the moment, pick the EARLIEST (lowest index). Reaction latency",
-    "    means when the copilot FIRST addressed it; a later restatement inflates the figure. Measured:",
-    "    re-judging one unchanged run moved its latency 36.0s to 40.3s purely by matching a later event.",
+    "  - If SEVERAL candidates address the moment, pick the EARLIEST (lowest index) as eventIndex.",
+    "    Reaction latency means when the copilot FIRST addressed it; a later restatement inflates the",
+    "    figure. Measured: re-judging one unchanged run moved its latency 36.0s to 40.3s purely by",
+    "    matching a later event.",
+    "  - Then list EVERY OTHER candidate that also addresses this moment in `alsoAddressing`, and",
+    "    nothing else. This is not a second chance at the match: it is how precision tells a follow-up",
+    "    on an answered moment apart from a reaction to nothing. Empty array when there are none, and",
+    "    apply the same strictness — same topic is not addressing.",
     "  - Give one short sentence of reasoning per moment. It is recorded with the verdict.",
     "",
     "Reply with JSON only, no prose around it:",
-    '{"matches":[{"momentId":"...","eventIndex":0,"reasoning":"..."}]}',
+    '{"matches":[{"momentId":"...","eventIndex":0,"alsoAddressing":[3,7],"reasoning":"..."}]}',
     "",
     "Moments:",
     JSON.stringify(questions, null, 1),
@@ -116,7 +121,13 @@ export function parseJudgeReply(reply: string, questions: JudgeQuestion[]): Matc
     const index = typeof m.eventIndex === "number" && valid.get(m.momentId)?.has(m.eventIndex)
       ? m.eventIndex
       : null;
-    out.push({ momentId: m.momentId, eventIndex: index, reasoning: typeof m.reasoning === "string" ? m.reasoning : undefined });
+    // Same rule as the credited index: an index the judge was never offered is discarded,
+    // and the credited one is not repeated here — `alsoAddressing` means "the OTHERS".
+    const offered = valid.get(m.momentId);
+    const also = Array.isArray(m.alsoAddressing)
+      ? [...new Set(m.alsoAddressing.filter((i): i is number => typeof i === "number" && offered!.has(i) && i !== index))]
+      : undefined;
+    out.push({ momentId: m.momentId, eventIndex: index, alsoAddressing: also, reasoning: typeof m.reasoning === "string" ? m.reasoning : undefined });
   }
   // A moment the judge skipped is an unjudged moment, not a missed one — recorded as no
   // match, with the reason said out loud rather than looking like a copilot failure.
