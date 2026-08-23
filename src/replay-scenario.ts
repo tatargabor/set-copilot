@@ -115,6 +115,21 @@ export interface ScenarioMeta {
    * the failure mode this repo keeps having.
    */
   reactionCategories?: string[];
+  /**
+   * The measured run-to-run noise of this scenario, per dimension, in the dimension's own
+   * unit. A difference inside the band is reported as unchanged, not as a verdict.
+   *
+   * It lives on the scenario and not in the engine because noise is a property of THIS
+   * script against THIS copilot, not a constant. Measured 2026-08-23: two runs of the
+   * seven-moment version of this scenario moved coverage 0.857 → 0.571 with nothing
+   * changed — a single-run comparison would have reported a regression. Widening the
+   * scenario to eighteen moments cut that spread to 0.167, because one moment stopped
+   * being worth a seventh of the score.
+   *
+   * A scenario with no band declared still compares, but the comparison says so: a
+   * single-run difference is a reading, not evidence.
+   */
+  noiseBand?: Record<string, number>;
 }
 
 export interface Scenario {

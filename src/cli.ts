@@ -132,9 +132,18 @@ async function main(): Promise<void> {
           console.error("Usage: set-copilot replay-score compare <before.json> <after.json>");
           process.exit(1);
         }
+        // The noise band comes from the scenario, so a comparison cannot be run without
+        // the measuring stick that defines what counts as a difference.
+        const scenarioDir = flag(args, "--scenario");
+        let band: Record<string, number> | undefined;
+        if (scenarioDir) {
+          const { loadScenario } = await import("./replay-scenario.js");
+          band = loadScenario(scenarioDir).meta.noiseBand;
+        }
         const out = compareScorecards(
           JSON.parse(readFileSync(a, "utf-8")),
           JSON.parse(readFileSync(b, "utf-8")),
+          band,
         );
         console.log(JSON.stringify(out, null, 2));
         if (!out.comparable) process.exit(1);
@@ -1226,9 +1235,11 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    score the last run in this runtime dir against the
                                    scenario's planted moments. Without a judgement,
                                    coverage is reported UNMEASURED, never zero
-  set-copilot replay-score compare <before.json> <after.json>
-                                   improved / regressed / unchanged per dimension;
-                                   refuses across a changed scenario or mismatched speeds
+  set-copilot replay-score compare <before.json> <after.json> [--scenario DIR]
+                                   improved / regressed / unchanged per dimension; refuses
+                                   across a changed scenario or mismatched speeds. Pass
+                                   --scenario to apply its measured noise band — without
+                                   one, a single-run difference is a reading, not evidence
   set-copilot replay <scenario-dir> [--speed N] [--output PATH]
                                    play a scenario into the transcript as if it were
                                    a live capture — the copilot cannot tell. Speed 1

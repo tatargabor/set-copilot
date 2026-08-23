@@ -279,6 +279,37 @@ describe("compareScorecards", () => {
     expect(out.dimensions.coverage.direction).toBe("unchanged");
   });
 
+  it("calls a difference inside the measured noise band unchanged, not a regression", () => {
+    // The failure this exists to prevent, measured: two runs of one scenario with nothing
+    // changed moved coverage 0.857 → 0.571, and the comparison called it a regression.
+    const after = card();
+    after.dimensions.coverage = { measured: true, source: "judged", value: 0.42, unit: "ratio" };
+    const out = compareScorecards(card(), after, { coverage: 0.2 });
+    expect(out.dimensions.coverage.direction).toBe("unchanged");
+    expect(out.dimensions.coverage.note).toMatch(/noise band/);
+  });
+
+  it("still calls a difference beyond the band what it is", () => {
+    const after = card();
+    after.dimensions.coverage = { measured: true, source: "judged", value: 0.95, unit: "ratio" };
+    const out = compareScorecards(card(), after, { coverage: 0.2 });
+    expect(out.dimensions.coverage.direction).toBe("improved");
+  });
+
+  it("says so when no band is declared — a single-run difference is a reading, not evidence", () => {
+    const after = card();
+    after.dimensions.coverage = { measured: true, source: "judged", value: 0.42, unit: "ratio" };
+    const out = compareScorecards(card(), after);
+    expect(out.dimensions.coverage.direction).toBe("regressed");
+    expect(out.dimensions.coverage.note).toMatch(/not evidence/);
+  });
+
+  it("applies the band to a lower-is-better dimension too", () => {
+    const after = card();
+    after.dimensions.fillerShare = { measured: true, source: "computed", value: 0.24, unit: "ratio" };
+    expect(compareScorecards(card(), after, { fillerShare: 0.06 }).dimensions.fillerShare.direction).toBe("unchanged");
+  });
+
   it("reports an activity count without grading it", () => {
     const after = card();
     after.dimensions.draws = { measured: true, source: "computed", value: 12, unit: "count" };
