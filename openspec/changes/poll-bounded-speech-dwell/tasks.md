@@ -9,8 +9,8 @@
 
 ## 3. Measure
 
-- [ ] 3.1 Re-run the `reference` scenario in real time and score it. [REQ: A poll returns once enough new speech has accumulated]
-- [ ] 3.2 Compare against the baseline WITH the noise band: latency should move well beyond ±2244 ms, and `fillerShare` must not degrade beyond its band. Report both honestly. [REQ: A poll returns once enough new speech has accumulated]
+- [x] 3.1 Re-run the `reference` scenario in real time and score it. [REQ: A poll returns once enough new speech has accumulated]
+- [x] 3.2 Compare against the baseline WITH the noise band: latency should move well beyond ±2244 ms, and `fillerShare` must not degrade beyond its band. Report both honestly. [REQ: A poll returns once enough new speech has accumulated]
 
 ## Acceptance Criteria (from spec scenarios)
 
