@@ -102,6 +102,7 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     maxBufferWords: 80,
     topicMatcher,
     detect: cfg.detect,
+    fastLane: cfg.copilot.fastLane,
   });
 
   const useWhisper = cfg.sttBackend === "whisper";

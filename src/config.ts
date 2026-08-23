@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 
+import type { FastLaneConfig } from "./fast-lane.js";
 import type { AlertCategory, KeywordPattern } from "./knowledge/types.js";
 import type { WallConfig, Category, WallLayout, WallWindow, RedactionConfig } from "./wall/types.js";
 import { compileRedactor } from "./wall/redaction.js";
@@ -115,6 +116,22 @@ export interface CopilotPromptConfig {
    * opt-in, so the chat-primary / wall-secondary separation is preserved unless asked for.
    */
   mirror: MirrorConfig;
+  /**
+   * The fast lane: a spoken command, bracketed by a start and an end word, taken out of
+   * the ambient stream and handed over the instant the closing word is said.
+   *
+   * The rest of the copilot is inference, and inference is deliberately gated — silence,
+   * dwell, a whole model turn. Measured end to end, a reaction lands ~33 s after the
+   * sentence that warranted it. An instruction needs none of that judgement, so it should
+   * pay none of that cost: `poll` returns on a command event at its next 250 ms tick.
+   *
+   * The taxonomy is config, the mechanism is engine (`fast-lane.ts`), like `detect.*`.
+   * A note on the shipped defaults: `copilot` is a word almost nobody says mid-meeting,
+   * while `start`/`stop` are ordinary speech — they are included because both bracket
+   * styles were asked for, but a project whose meetings say them should drop them here.
+   * A command needs BOTH words in order, which is what keeps the risk to a stray pair.
+   */
+  fastLane: FastLaneConfig;
   /**
    * A project command `stop` runs AFTER the transcript is archived and the derived
    * artifacts are written — the seam that lets a project hand its transcript on
@@ -669,6 +686,31 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
  * language; the shipped defaults encode the one lesson the Haiku-worker prototype
  * cost us: an ungrounded producer draws everything and the result is a hairball.
  */
+/**
+ * The shipped fast-lane vocabulary. Two bracket styles, because both are natural:
+ * "COPILOT … CSINÁLD" reads as addressing it, "START … STOP" as dictating a block.
+ *
+ * The caps are what make an abandoned command harmless: 45 s is longer than any spoken
+ * instruction and shorter than a topic, and 600 characters is well past a sentence. Both
+ * exist so a speaker who says the opening word and changes their mind loses nothing but
+ * that word — and hears about it, rather than having the next half hour quietly become
+ * the instruction.
+ */
+/** A non-empty list of strings from config, or null when absent/malformed. */
+function strings(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null;
+  const out = v.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+  return out.length ? out : null;
+}
+
+export const DEFAULT_FAST_LANE: FastLaneConfig = {
+  enabled: true,
+  start: ["copilot", "start"],
+  end: ["csináld", "stop", "vége"],
+  maxSpanMs: 45_000,
+  maxChars: 600,
+};
+
 export const DEFAULT_DRAWING_CONVENTIONS: string[] = [
   "Draw when the *structure* of what was said is the point — components and how they relate, a sequence, a comparison of quantities. Prose that is already clear in chat does not need a picture.",
   "Prefer few nodes that carry the argument over many that are merely true. A diagram with everything in it says nothing; if it exceeds roughly a dozen nodes, you are transcribing, not drawing.",
@@ -799,6 +841,7 @@ export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     acknowledge: true,
     drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },
     narration: { enabled: true, verbosity: "normal", maxLines: 1 },
+    fastLane: DEFAULT_FAST_LANE,
     mirror: {
       enabled: false,
       category: "tükör",
@@ -1060,6 +1103,22 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         conventions: Array.isArray(copilot.drawing?.conventions)
           ? copilot.drawing.conventions.filter((c): c is string => typeof c === "string")
           : DEFAULT_DRAWING_CONVENTIONS,
+      },
+      // Same posture as `detect.*`: a malformed or empty marker list falls back to the
+      // default rather than silently disarming the lane. An EMPTY list here is not a
+      // meaningful "never guess" (as it is for `transcript.completeWords`) — it would
+      // mean "no way to address the copilot", which is what `enabled: false` says
+      // explicitly. Disabling should be said, not achieved by emptying a list.
+      fastLane: {
+        enabled: copilot.fastLane?.enabled !== false,
+        start: strings(copilot.fastLane?.start) ?? DEFAULT_FAST_LANE.start,
+        end: strings(copilot.fastLane?.end) ?? DEFAULT_FAST_LANE.end,
+        maxSpanMs: typeof copilot.fastLane?.maxSpanMs === "number" && copilot.fastLane.maxSpanMs > 0
+          ? copilot.fastLane.maxSpanMs
+          : DEFAULT_FAST_LANE.maxSpanMs,
+        maxChars: typeof copilot.fastLane?.maxChars === "number" && copilot.fastLane.maxChars > 0
+          ? copilot.fastLane.maxChars
+          : DEFAULT_FAST_LANE.maxChars,
       },
       narration: {
         // Absent key → default (on). Only an explicit `false` disables it, mirroring

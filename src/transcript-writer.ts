@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { DEFAULT_DETECT, type DetectionConfig } from "./config.js";
+import { FastLane, type FastLaneConfig, type FastLaneEvent } from "./fast-lane.js";
 import type { TranscriptEvent } from "./soniox-rt.js";
 
 export interface TranscriptLine {
@@ -64,6 +65,11 @@ export interface TranscriptWriterOptions {
   topicMatcher?: (text: string) => string[];
   /** Regex sources behind the urgency/question flags (default: config DEFAULT_DETECT) */
   detect?: DetectionConfig;
+  /**
+   * The spoken-command brackets (`copilot.fastLane`). Absent → the lane is not armed and
+   * the writer behaves exactly as before, byte for byte.
+   */
+  fastLane?: FastLaneConfig;
 }
 
 const noopMatcher = (): string[] => [];
@@ -136,6 +142,12 @@ export class TranscriptWriter {
   private urgencyRe: RegExp | null;
   private questionRe: RegExp | null;
   private commandRe: RegExp | null;
+  /**
+   * The spoken-command assembler. It is fed the TOKEN stream, before any flush: a
+   * marker split by a line cut ("CSI" | "NÁLD") is invisible to anything reading the
+   * written lines, and an instruction that spans two sentences would arrive in halves.
+   */
+  private fastLane: FastLane | null;
   /** Wall-clock time of the last final transcript event (any speaker); 0 = no speech yet */
   private lastEventAt = 0;
   /** True once the silence event for the current silence period has been written */
@@ -151,6 +163,7 @@ export class TranscriptWriter {
     this.urgencyRe = compileDetector(detect.urgency, "urgency");
     this.questionRe = compileDetector(detect.question, "question");
     this.commandRe = compileDetector(detect.command ?? [], "command");
+    this.fastLane = opts?.fastLane ? new FastLane(opts.fastLane) : null;
 
     const emptyBuffer = () => ({
       text: "",
@@ -189,6 +202,16 @@ export class TranscriptWriter {
         buf.resuming = true;
         buf.resumedMidWord = !/^\s/.test(event.text);
         buf.severed = false;
+      }
+    }
+
+    // The fast lane sees the token BEFORE any flush rule does. This is the whole reason
+    // it lives here rather than over the written lines: the flush boundary is a function
+    // of sentence punctuation, that speaker's silence and a token cap, none of which know
+    // where a spoken instruction begins or ends.
+    if (this.fastLane) {
+      for (const ev of this.fastLane.feed(event.speaker, event.text, event.timestampMs, Date.now())) {
+        this.writeFastLaneEvent(ev);
       }
     }
 
@@ -327,6 +350,24 @@ export class TranscriptWriter {
     appendFileSync(this.outputPath, JSON.stringify(line) + "\n");
   }
 
+  /**
+   * Write a fast-lane verdict into the transcript, in the same stream as the speech.
+   *
+   * A completed command is marked `urgency:"high"` as well as typed, so a consumer that
+   * only knows the old vocabulary still treats it as something to act on now rather than
+   * skipping an event type it has never heard of.
+   *
+   * An abandoned span is written too, and that is deliberate: an instruction that quietly
+   * never happened looks exactly like one the microphone never heard, and the operator
+   * would go and debug their audio chain.
+   */
+  private writeFastLaneEvent(ev: FastLaneEvent): void {
+    const line = ev.kind === "command"
+      ? { type: "command", speaker: ev.speaker, text: ev.text, startTs: ev.startTs, ts: ev.ts, urgency: "high" }
+      : { type: "command-abandoned", speaker: ev.speaker, partial: ev.partial, reason: ev.reason, startTs: ev.startTs, ts: ev.ts };
+    appendFileSync(this.outputPath, JSON.stringify(line) + "\n");
+  }
+
   private writeSilence(durationMs: number): void {
     const event: SilenceEvent = {
       type: "silence",
@@ -358,5 +399,11 @@ export class TranscriptWriter {
     }
     this.flushBuffer("mic");
     this.flushBuffer("system");
+    // A speaker cut off mid-instruction gets the abandonment recorded rather than the
+    // span vanishing with the process.
+    if (this.fastLane) {
+      const ts = Math.max(this.buffers.mic.lastTs, this.buffers.system.lastTs);
+      for (const ev of this.fastLane.close(ts)) this.writeFastLaneEvent(ev);
+    }
   }
 }

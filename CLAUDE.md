@@ -118,6 +118,40 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   The ledger is advisory by construction: missing → everything pending, a corrupt line skipped,
   the artifacts on disk are the real evidence. Losing it costs redone work, never data.
 - **`src/capture.ts`** — wires the above together; also owns the runtime-dir invariants (below).
+- **`src/fast-lane.ts`** — the spoken command lane. Everything else the copilot does is
+  inference, and inference is deliberately gated (silence, dwell, a whole model turn):
+  measured end to end, a reaction lands ~33 s after the sentence that warranted it. An
+  *instruction* needs none of that judgement, so it pays none of that cost — a bracketed
+  command (`COPILOT … CSINÁLD`, `START … STOP`) becomes a `{"type":"command"}` event that
+  `poll` returns on at its next 250 ms tick.
+
+  Three things carry it, each forced by how speech actually arrives:
+
+  - **It reads the token stream, not the written lines.** A line is a flush artefact
+    (sentence punctuation, that speaker's 3 s silence, 80 tokens) and none of those rules
+    know where an instruction starts. A marker split by a flush — `"CSI"` | `"NÁLD"` — is
+    invisible to any line-level matcher, so the lane keeps its own rolling buffer per
+    speaker that no flush touches. Verified: `" Copi"`, `"lot"` opens a command.
+  - **The closing word is load-bearing, not ceremony.** Speech has no reliable
+    end-of-thought: the recogniser's punctuation is a guess and a speaker who pauses
+    mid-instruction has not finished. Without a terminator the engine would have to guess
+    when to execute, and the failure mode is acting on half a sentence. It also makes the
+    trigger deliberate — one marker can be said by accident, both in order much less so.
+  - **An unterminated span dies out loud** (`{"type":"command-abandoned"}`), on a time or
+    length cap. A command that quietly never happened is indistinguishable from one the
+    microphone never heard, and the operator would go debug their audio chain. It is also
+    what stops the next twenty minutes of speech from silently becoming "the instruction".
+
+  The vocabulary is config (`copilot.fastLane`), the mechanism is engine — the `detect.*`
+  seam again. Matching is accent- and case-insensitive over Unicode letters and whole-word
+  only (`restart` never opens one); the extracted instruction keeps the speaker's own text.
+  A note on the shipped defaults: `copilot` is a word nobody says mid-meeting, while
+  `start`/`stop` are ordinary speech — both bracket styles ship because both were asked
+  for, and a project whose meetings say them should drop them in config. Requiring both
+  words in order is what keeps the risk to a stray pair. The command's words also remain in
+  the ordinary transcript line (the transcript is a record; editing it would be a lie), so
+  the policy tells the copilot to act on the *event*, never on the line — otherwise one
+  instruction is carried out twice.
 - **`src/poll.ts`** — long-poll consumed by the meeting-copilot Monitor loop. Tracks a byte-independent line offset in `poll-offset`, dedups mic/system echo, returns early on an urgent/question/silence event, and emits `{"type":"capture-dead"}` when the capture PID is gone.
 - **`src/mirror-follow.ts` / `mirror-policy.ts` / `mirror-format.ts`** — the chat→wall mirror.
   `mirror-follow` is the process (transcript resolution, offset, PID ownership, the log);

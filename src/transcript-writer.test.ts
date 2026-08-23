@@ -243,3 +243,49 @@ describe("addressing the copilot by name", () => {
     expect(lines().map((l) => l.command)).toEqual([true, undefined]);
   });
 });
+
+describe("the fast lane inside the writer", () => {
+  // The lane reads the TOKEN stream, so these tests feed tokens the way Soniox does —
+  // a leading space at a word boundary, none inside a word.
+  const LANE = { enabled: true, start: ["copilot"], end: ["csináld"], maxSpanMs: 45_000, maxChars: 600 };
+  const typed = (t: string) => lines().filter((l) => (l as unknown as { type?: string }).type === t);
+
+  const say = (pieces: string[], speaker: "mic" | "system" = "mic") =>
+    pieces.forEach((t, i) => writer!.onTranscript(token(t, speaker, 1000 + i)));
+
+  it("writes a command event the moment the closing word is said", () => {
+    writer = new TranscriptWriter(out, { fastLane: LANE });
+    say([" Copilot", " rajzold", " meg", " az", " ábrát", " csináld"]);
+    expect(typed("command")[0]).toMatchObject({
+      type: "command", speaker: "mic", text: "rajzold meg az ábrát", urgency: "high",
+    });
+  });
+
+  it("survives the flush that would have split the instruction", () => {
+    // A sentence boundary mid-instruction flushes a LINE; the lane's own buffer is
+    // untouched, which is the whole reason it is fed tokens rather than lines.
+    writer = new TranscriptWriter(out, { fastLane: LANE });
+    say([" Copilot", " nézd", " meg", " ezt.", " Aztán", " csináld"]);
+    expect((typed("command")[0] as unknown as { text: string }).text).toBe("nézd meg ezt. Aztán");
+  });
+
+  it("assembles a marker split across tokens", () => {
+    writer = new TranscriptWriter(out, { fastLane: LANE });
+    say([" Copi", "lot", " foglald", " össze", " csi", "náld"]);
+    expect((typed("command")[0] as unknown as { text: string }).text).toBe("foglald össze");
+  });
+
+  it("records an abandoned command rather than letting it vanish with the capture", () => {
+    writer = new TranscriptWriter(out, { fastLane: LANE });
+    say([" Copilot", " mutasd"]);
+    writer.close();
+    expect(typed("command-abandoned")[0]).toMatchObject({ partial: "mutasd", reason: "timeout" });
+  });
+
+  it("writes nothing new when no lane is configured — the old behaviour byte for byte", () => {
+    writer = new TranscriptWriter(out);
+    say([" Copilot", " rajzolj", " csináld."]);
+    writer.close();
+    expect(lines().some((l) => String((l as unknown as { type?: string }).type ?? "").startsWith("command"))).toBe(false);
+  });
+});
