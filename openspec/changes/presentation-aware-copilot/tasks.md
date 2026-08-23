@@ -28,10 +28,10 @@
 
 ## 5. Close the loop
 
-- [ ] 5.1 Configure the reference deck and rebuild the knowledge artifacts. [REQ: Slides reach the copilot through the existing knowledge pipeline]
-- [ ] 5.2 Re-run the `reference` scenario in real time with the deck configured, and score it. [REQ: A slide's numeric claims are extracted as facts]
-- [ ] 5.3 Compare against the three-run baseline WITH the scenario's noise band. Report honestly whether `m-asp-osszeg` was caught and whether coverage moved beyond the band — a single run inside the band is not evidence. [REQ: A slide's numeric claims are extracted as facts]
-- [ ] 5.4 Check precision against its band too: a copilot that now cites slides for things nobody contradicted is a regression, and this is where it would show. [REQ: Slides reach the copilot through the existing knowledge pipeline]
+- [x] 5.1 Configure the reference deck and rebuild the knowledge artifacts. [REQ: Slides reach the copilot through the existing knowledge pipeline]
+- [x] 5.2 Re-run the `reference` scenario in real time with the deck configured, and score it. [REQ: A slide's numeric claims are extracted as facts]
+- [x] 5.3 Compare against the three-run baseline WITH the scenario's noise band. Report honestly whether `m-asp-osszeg` was caught and whether coverage moved beyond the band — a single run inside the band is not evidence. [REQ: A slide's numeric claims are extracted as facts]
+- [x] 5.4 Check precision against its band too: a copilot that now cites slides for things nobody contradicted is a regression, and this is where it would show. [REQ: Slides reach the copilot through the existing knowledge pipeline]
 
 ## 6. Documentation
 
@@ -47,7 +47,7 @@
 - [x] AC-6: A deck that extracts to nothing produces a warning naming it and the reason. [REQ: Common presentation formats are handled, including wrapped exports, scenario: A deck that extracts to nothing says so]
 - [x] AC-7: A numeric claim is captured with its scale or unit and enough context to identify it. [REQ: A slide's numeric claims are extracted as facts, scenario: A figure with a scale word is captured with it]
 - [x] AC-8: Every fact names the slide it came from. [REQ: A slide's numeric claims are extracted as facts, scenario: A slide's facts name their slide]
-- [ ] AC-9: A transcript line matching a slide's distinctive terms carries that slide as a topic. [REQ: Slides reach the copilot through the existing knowledge pipeline, scenario: A transcript line is tagged with the slide it belongs to]
+- [x] AC-9: A transcript line matching a slide's distinctive terms carries that slide as a topic. [REQ: Slides reach the copilot through the existing knowledge pipeline, scenario: A transcript line is tagged with the slide it belongs to]
 - [x] AC-10: The digest presents the deck's slides in order with their facts. [REQ: Slides reach the copilot through the existing knowledge pipeline, scenario: The digest carries the slides and their facts]
 - [x] AC-11: With no deck configured, every knowledge artifact is byte-identical to before. [REQ: Slides reach the copilot through the existing knowledge pipeline, scenario: A project with no deck is unchanged]
 - [x] AC-12: `set-copilot deck` prints the slides in order with titles and facts, and names what failed to extract. [REQ: The extraction is inspectable before it is relied on, scenario: An operator can read the extracted slides]
