@@ -220,6 +220,29 @@ describe("drawing contract in the full prompt", () => {
     expect(out).toContain("you are transcribing, not drawing");
   });
 
+  // The contract described staging and said only a promotion lifts a visual public, then
+  // documented every payload shape EXCEPT that one. Across four measured real-time runs
+  // every prediction expired unpromoted. These assertions are what the fix consists of.
+  it("teaches the promotion command, the id requirement, and when to promote", () => {
+    const out = renderCopilotPrompt(
+      wallCfg({ drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS } }),
+    );
+
+    // AC-1: the command's shape, not merely its name.
+    expect(out).toContain('"kind":"promote"');
+    expect(out).toMatch(/\{"kind":"promote","category":"[^"]*","visual":"[^"]*","zone":"public"\}/);
+
+    // AC-2: a staged visual must be identifiable, because the promotion names it.
+    expect(out).toMatch(/staged prediction MUST carry a `visual` id/);
+
+    // AC-3: the trigger is the conversation arriving, and expiry is a correct ending.
+    expect(out).toMatch(/actually arrives/);
+    expect(out).toMatch(/expires unused is a \*correct\* outcome/);
+
+    // The producer asks rather than remembers.
+    expect(out).toContain("wall-staged");
+  });
+
   it("omits the contract when drawing is disabled", () => {
     const out = renderCopilotPrompt(
       wallCfg({ drawing: { enabled: false, conventions: DEFAULT_DRAWING_CONVENTIONS } }),
@@ -356,6 +379,7 @@ describe("renderBoxPolicies", () => {
     expect(withoutMandate).not.toContain("Rajzold ELŐRE");
     expect(withoutMandate).not.toContain("## Per-box policy");
   });
+
 });
 
 describe("narration mandate (live-narration)", () => {

@@ -675,6 +675,7 @@ export const DEFAULT_DRAWING_CONVENTIONS: string[] = [
   "People, side threads, and scheduling are not architecture. Leave them out of the graph.",
   "Redraw when the understanding changed, not when new words arrived. An unchanged picture is a correct picture.",
   "A number is a chart only when it is comparable to another number. A single figure belongs in text.",
+  "Promote a staged prediction when the conversation actually reaches what it anticipated — never on a timer, and never because it has been waiting. A guess that expires unused is the right ending for a guess that was wrong; publishing an unspoken one is the failure.",
 ];
 
 /**

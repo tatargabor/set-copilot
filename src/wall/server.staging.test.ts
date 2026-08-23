@@ -179,3 +179,88 @@ describe("expiry: an unused prediction is released and no longer promotable", ()
     priv.close(); pub.close();
   });
 });
+
+describe("the promotable listing: the producer asks instead of remembering", () => {
+  function get(port: number, path: string): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      http.get({ host: "127.0.0.1", port, path }, (res) => {
+        let b = "";
+        res.setEncoding("utf-8");
+        res.on("data", (c: string) => { b += c; });
+        res.on("end", () => { try { resolve(JSON.parse(b)); } catch (e) { reject(e); } });
+      }).on("error", reject);
+    });
+  }
+  const listOf = (j: Record<string, unknown>) => j.staged as { category: string; visual: string; expiresInMs: number }[];
+
+  it("lists a staged, unexpired, unpromoted prediction with its remaining time", async () => {
+    const s = await startServer({ stagingTtlMs: 60_000, stagingSweepMs: 10_000 });
+    s.ingest(stage("v1"));
+    await sleep(20);
+    const list = listOf(await get(s.boundPort(), "/api/staged"));
+    expect(list).toHaveLength(1);
+    expect(list[0].category).toBe("előrejelzés");
+    expect(list[0].visual).toBe("v1");
+    // A remaining time, not a stagedAt: the producer needs "how long have I got".
+    expect(list[0].expiresInMs).toBeGreaterThan(0);
+    expect(list[0].expiresInMs).toBeLessThanOrEqual(60_000);
+  });
+
+  it("empty is empty — nothing staged lists nothing", async () => {
+    const s = await startServer({ stagingTtlMs: 60_000 });
+    expect(listOf(await get(s.boundPort(), "/api/staged"))).toHaveLength(0);
+  });
+
+  it("a promoted prediction is no longer listed", async () => {
+    const s = await startServer({ stagingTtlMs: 60_000, stagingSweepMs: 10_000 });
+    s.ingest(stage("v1"));
+    s.ingest(stage("v2"));
+    await sleep(20);
+    expect(listOf(await get(s.boundPort(), "/api/staged"))).toHaveLength(2);
+
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" } as WireMessage);
+    await sleep(20);
+    const list = listOf(await get(s.boundPort(), "/api/staged"));
+    expect(list.map((e) => e.visual)).toEqual(["v2"]);
+  });
+
+  it("an expired prediction is not listed, and asking does not revive it", async () => {
+    // Sweep disabled: the listing must filter by the clock on its own, so a prediction
+    // cannot become promotable again just because the sweep timer has not fired yet.
+    const s = await startServer({ stagingTtlMs: 25, stagingSweepMs: 10_000 });
+    s.ingest(stage("v1"));
+    await sleep(60);
+    expect(listOf(await get(s.boundPort(), "/api/staged"))).toHaveLength(0);
+    // Asking did not extend its life: a promote after the ttl is still refused.
+    const pub = await connect(s.boundPort(), "/pub");
+    await sleep(20);
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" } as WireMessage);
+    await sleep(30);
+    expect(graphs(pub)).toHaveLength(0);
+    pub.close();
+  });
+
+  it("asking broadcasts nothing and changes no state (read-only)", async () => {
+    const s = await startServer({ stagingTtlMs: 60_000, stagingSweepMs: 10_000 });
+    const port = s.boundPort();
+    const priv = await connect(port, "/priv");
+    const pub = await connect(port, "/pub");
+    await sleep(20);
+    s.ingest(stage("v1"));
+    await sleep(30);
+    const privBefore = priv.msgs.length;
+    const pubBefore = pub.msgs.length;
+
+    const a = listOf(await get(port, "/api/staged"));
+    await sleep(30);
+    const b = listOf(await get(port, "/api/staged"));
+
+    // No client saw anything because of the query...
+    expect(priv.msgs.length).toBe(privBefore);
+    expect(pub.msgs.length).toBe(pubBefore);
+    // ...and the answer is stable except for the ticking clock.
+    expect(b.map((e) => e.visual)).toEqual(a.map((e) => e.visual));
+    expect(b[0].expiresInMs).toBeLessThanOrEqual(a[0].expiresInMs);
+    priv.close(); pub.close();
+  });
+});

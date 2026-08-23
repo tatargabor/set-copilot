@@ -520,8 +520,22 @@ export class WallServer {
       console.warn(`[set-copilot] wall: refusing promote — nothing staged for "${p.category}"/"${p.visual}"`);
       return;
     }
-    if (!this.staged.has(key)) {
+    // Expiry is decided by the CLOCK, not by whether the sweep timer has fired yet. The
+    // gate used to be plain map presence, which left a window as wide as the sweep
+    // interval (5 s by default) in which a prediction past its ttl could still be
+    // published — the exact "an unspoken guess reaches the wall late and out of context"
+    // failure the ttl exists to prevent. Found by the promotable-listing tests: the
+    // listing filtered by the clock while the gate did not, so the two disagreed.
+    const stagedAt = this.staged.get(key);
+    const ttl = this.opts.stagingTtlMs ?? 120_000;
+    if (stagedAt === undefined || (ttl > 0 && Date.now() - stagedAt >= ttl)) {
       console.warn(`[set-copilot] wall: refusing promote — "${p.visual}" is not a live staged prediction (expired or never staged)`);
+      if (stagedAt !== undefined) {
+        // Past its ttl but not yet swept: retire it here so the sweep's private marker
+        // still goes out exactly once, and no second promote sees it as live.
+        this.staged.delete(key);
+        this.broadcastStageExpired({ kind: "stage-expired", category: p.category, visual: p.visual });
+      }
       return;
     }
     this.staged.delete(key); // promoted → no longer staged or expirable
@@ -532,6 +546,30 @@ export class WallServer {
       visual: p.visual,
       graph: { op: "reset", nodes: [...g.private.nodes.values()], edges: g.private.edges },
     });
+  }
+
+  /**
+   * What is promotable at `now` — category, visual id, and how long it has left.
+   *
+   * READ-ONLY, and provably so: it filters the same map by the same clock the sweep uses,
+   * broadcasts nothing, and defers nothing. A query that quietly extended a prediction's
+   * life would make "expired" mean "expired unless someone looked".
+   *
+   * It exists because the producer must not have to REMEMBER what it staged. Measured
+   * across four real-time runs: every prediction expired unpromoted, because the producer
+   * had no way to know it had one waiting. This project already replaced one prompt-held
+   * memory with a mechanism after it drifted in a live meeting.
+   */
+  promotable(now = Date.now()): { category: string; visual: string; expiresInMs: number }[] {
+    const ttl = this.opts.stagingTtlMs ?? 120_000;
+    const out: { category: string; visual: string; expiresInMs: number }[] = [];
+    for (const [key, at] of this.staged) {
+      const left = ttl > 0 ? ttl - (now - at) : Number.POSITIVE_INFINITY;
+      if (left <= 0) continue; // already past its ttl — the sweep just has not run yet
+      const [category, visual] = JSON.parse(key) as [string, string];
+      out.push({ category, visual, expiresInMs: left === Number.POSITIVE_INFINITY ? -1 : Math.round(left) });
+    }
+    return out;
   }
 
   /** Release staged predictions past their ttl: drop them and mark the private view (D4). */
@@ -981,6 +1019,10 @@ export class WallServer {
         categories: this.opts.registry.list(),
         heartbeatMs,
       });
+    }
+    if (path === "/api/staged") {
+      // Read-only (D2): the producer asks what it may promote; nothing here changes state.
+      return this.json(res, { staged: this.promotable() });
     }
     if (path === "/media") {
       return this.serveMedia(res, url.searchParams.get("src") ?? "");

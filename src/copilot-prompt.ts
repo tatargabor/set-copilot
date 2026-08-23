@@ -200,6 +200,23 @@ export function renderDrawingContract(categories: Category[], conventions: strin
     '{"category":"<chart-cat>","chart":{"type":"bar","title":"…","unit":"%","data":[{"label":"…","value":1}]}}',
     "```",
     "",
+    // Taught here, not left implied. The contract described staging and said only a
+    // promotion lifts a visual public, then documented every payload shape EXCEPT that
+    // one — and across four measured runs every prediction expired unpromoted.
+    "**Promoting a prediction.** A visual you drew ahead into staging reaches the public wall only by this command — and it names the visual, so a staged prediction MUST carry a `visual` id:",
+    "",
+    "```json",
+    '{"kind":"promote","category":"<staged-cat>","visual":"<id>","zone":"public"}',
+    "```",
+    "",
+    "Promote when the conversation **actually arrives** at what the prediction anticipated — not on a timer, and not because it has been sitting there. A guess that expires unused is a *correct* outcome for a guess that turned out wrong, not a miss; what would be wrong is putting an unspoken guess in front of an audience.",
+    "",
+    "You do not have to remember what you staged — ask:",
+    "",
+    "```bash",
+    "npx set-copilot wall-staged",
+    "```",
+    "",
     "**Public zone & internal content.** Anything `public` or `both` can reach a wall a live audience sees. Before it does, the server runs public-zone redaction over the whole payload. To keep an internal detail off the public wall, either use `zone:\"private\"` (the only reliable guarantee), or mark the sensitive span **`[belső]`** — the server scrubs from the marker to the end of that string, or withholds the event if the marker lands in an `image.src`/`webpage.url`. Redaction is a backstop, not a license: when in doubt, mark it `[belső]` or leave it out. A redaction failure withholds the event from the public zone, never leaks it.",
     "",
   );
