@@ -33,7 +33,16 @@ function filterLines(lines: string[]): string[] {
     // Non-speech events carry no "text" — pass them through instead of letting the
     // dedup below drop them. A reconnect marker in particular MUST reach the copilot:
     // it is the only signal that a stretch of the meeting may be missing.
-    if (line.includes('"type":"silence"') || line.includes('"type":"reconnect"')) {
+    if (
+      line.includes('"type":"silence"') ||
+      line.includes('"type":"reconnect"') ||
+      // A spoken command and its abandonment carry `text`/`partial`, but they must never
+      // be dropped by the echo dedup either: an instruction repeated verbatim ("copilot
+      // rajzold meg CSINÁLD" twice, because the first drew the wrong thing) is a second
+      // instruction, not an echo of the first.
+      line.includes('"type":"command"') ||
+      line.includes('"type":"command-abandoned"')
+    ) {
       out.push(line);
       continue;
     }
@@ -97,7 +106,15 @@ export function pollDecision(alive: boolean, all: string[], last: number, dwell 
         // complete sentence — the writer flushes on `. ? !`, so the silence
         // event is a second, redundant coherence check, worth keeping only
         // for ambient listening where the copilot infers rather than obeys.
-        l.includes('"command":true'),
+        l.includes('"command":true') ||
+        // The fast lane (fast-lane.ts): a bracketed spoken instruction is complete by
+        // construction — the speaker said the closing word — so it goes over at the
+        // next 250 ms tick rather than behind the ambient gate. This is the whole
+        // point of the lane: inference is what the gate exists for, and there is none
+        // here. The abandonment is included for the same reason a reconnect is: the
+        // operator needs to know their command did not take, immediately.
+        l.includes('"type":"command"') ||
+        l.includes('"type":"command-abandoned"'),
     ) ||
     (unread.some((l) => l.includes('"type":"silence"')) && unread.some((l) => l.includes('"speaker"')));
 

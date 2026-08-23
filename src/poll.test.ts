@@ -127,3 +127,23 @@ describe("pollDecision — the capture is gone", () => {
     expect(pollDecision(false, [PLAIN, QUESTION], 1)).toEqual({ kind: "ready", reason: "capture-gone" });
   });
 });
+
+describe("the fast lane reaches the copilot at once", () => {
+  const cmd = '{"type":"command","speaker":"mic","text":"rajzold meg az ábrát","urgency":"high"}';
+  const abandoned = '{"type":"command-abandoned","speaker":"mic","partial":"mutasd","reason":"timeout"}';
+
+  it("returns on a command event without waiting for the ambient gate", () => {
+    // No silence, no question, fewer speech lines than the dwell — nothing else here
+    // would have ended the poll.
+    expect(pollDecision(true, [cmd], 0, 4)).toEqual({ kind: "ready", reason: "early" });
+  });
+
+  it("returns on an abandoned command too — the operator must know it did not take", () => {
+    expect(pollDecision(true, [abandoned], 0, 4)).toEqual({ kind: "ready", reason: "early" });
+  });
+
+  it("never lets the echo dedup swallow a repeated command", () => {
+    // The same instruction said twice is a second instruction, not an echo.
+    expect(pollDecision(true, [cmd, cmd], 0, 0)).toEqual({ kind: "ready", reason: "early" });
+  });
+});

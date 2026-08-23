@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import type { CopilotConfig, CopilotPromptConfig, Engagement } from "./config.js";
+import type { FastLaneConfig } from "./fast-lane.js";
 import type { AlertCategory } from "./knowledge/types.js";
 import { resolveWindows } from "./wall/layout.js";
 import type { Category } from "./wall/types.js";
@@ -87,6 +88,33 @@ function renderEngagement(engagement: Engagement, maxLines: number, allowWeb: bo
  * engine text rather than config because it is about how a turn is executed, not about
  * what this project considers worth saying.
  */
+function renderFastLane(cfg: FastLaneConfig): string[] {
+  if (!cfg.enabled) return [];
+  const pair = `${cfg.start[0]?.toUpperCase() ?? "COPILOT"} … ${cfg.end[0]?.toUpperCase() ?? "CSINÁLD"}`;
+  return [
+    "## Spoken commands — the fast lane",
+    "",
+    `The speaker can address you directly by bracketing an instruction between a start and an end word (${pair}). When they do, the transcript carries a single event instead of you having to notice it in the ambient text:`,
+    "",
+    "```json",
+    '{"type":"command","speaker":"mic","text":"<the instruction, markers stripped>","urgency":"high"}',
+    "```",
+    "",
+    "**A command event is an instruction, not a topic.** Execute it — this is the one case where you act rather than judge whether acting is warranted, and it comes ahead of everything in the turn order above, including an alert. The engagement rule does not apply to it: answer even if nothing else would have made you speak.",
+    "",
+    `Opening words: ${cfg.start.join(", ")} · closing words: ${cfg.end.join(", ")}. The text between them is already extracted for you; the markers are gone.`,
+    "",
+    "The words also stay in the ordinary transcript line that carried them — the transcript is a record of what was said, and editing it would be a lie. **Act on the event, not on the line**: treating both as work is how one instruction gets carried out twice.",
+    "",
+    "```json",
+    '{"type":"command-abandoned","partial":"<what was said>","reason":"timeout|too-long"}',
+    "```",
+    "",
+    "This says the speaker opened a command and never closed it. **Do not execute a partial instruction** — say in one chat line that you heard the opening and are waiting for the closing word. Acting on half an instruction is worse than not hearing it: the speaker believes they were understood.",
+    "",
+  ];
+}
+
 function renderTurnOrder(): string[] {
   return [
     "## Turn order — the reaction goes out first",
@@ -287,6 +315,7 @@ export function renderAlerts(alerts: AlertCategory[], opts?: Partial<CopilotProm
     );
   }
 
+  if (opts?.fastLane) lines.push(...renderFastLane(opts.fastLane));
   lines.push(...renderTurnOrder());
   lines.push(...renderEngagement(engagement, maxLines, allowWeb));
   if (acknowledge) lines.push(...renderFeedback());

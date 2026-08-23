@@ -105,6 +105,46 @@ describe("renderCopilotPrompt", () => {
  * which made a bug-triage watcher and a design-call participant impossible to express
  * in the same package. It is config now, so these assertions guard the three levels.
  */
+describe("spoken commands — the fast lane", () => {
+  const withLane = (over = {}) => renderCopilotPrompt(cfg({
+    alerts: DEFAULT_ALERTS,
+    fastLane: { enabled: true, start: ["copilot"], end: ["csináld"], maxSpanMs: 45_000, maxChars: 600, ...over },
+  } as never));
+
+  it("teaches the command event, that it is an instruction, and that it outranks the turn order", () => {
+    const out = withLane();
+    expect(out).toContain('{"type":"command"');
+    expect(out).toMatch(/instruction, not a topic/);
+    expect(out).toMatch(/ahead of everything in the turn order/);
+  });
+
+  it("names the project's own markers rather than the shipped ones", () => {
+    const out = withLane({ start: ["figyelj"], end: ["mehet"] });
+    expect(out).toMatch(/FIGYELJ … MEHET/);
+    expect(out).toContain("Opening words: figyelj");
+    expect(out).not.toContain("csináld");
+  });
+
+  it("warns that the raw line still carries the words, so one command is not done twice", () => {
+    expect(withLane()).toMatch(/Act on the event, not on the line/);
+  });
+
+  it("forbids acting on a partial instruction, and says why", () => {
+    const out = withLane();
+    expect(out).toContain('{"type":"command-abandoned"');
+    expect(out).toMatch(/Do not execute a partial instruction/);
+    expect(out).toMatch(/believes they were understood/);
+  });
+
+  it("renders nothing when the lane is disabled — no phantom vocabulary", () => {
+    expect(withLane({ enabled: false })).not.toContain("## Spoken commands");
+  });
+
+  it("says nothing about it when the config carries no lane at all", () => {
+    expect(renderCopilotPrompt(cfg({ alerts: DEFAULT_ALERTS }))).not.toContain("## Spoken commands");
+  });
+});
+
 describe("turn order — the latency lever", () => {
   // Measured 2026-08-23: 39.4 s to a reaction, of which 14.5 s was waiting for the next
   // poll and 24.9 s the model turn — one batched emit per cycle, composed all at once,
