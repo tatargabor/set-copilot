@@ -65,8 +65,15 @@ export interface CopilotPromptConfig {
    * was the gate that was slow.
    *
    * This is a cost/latency trade the operator owns: every extra return is a model turn.
-   * The default halves the measured wait rather than minimising it — below that, each
-   * further return buys less latency than it costs.
+   *
+   * The default is CALIBRATED, not picked. A presentation runs at roughly one flushed
+   * sentence per 9.6 s (measured: 69 speech lines over 663 s), so the expected wait is
+   * `pollDwell × 9.6 s`. The first attempt used 4 and measured 32–36 s in practice — no
+   * better than the 30.7 s pause it was meant to replace. Two gives ~19 s, roughly halving
+   * it; going lower buys less latency per extra turn than it costs.
+   *
+   * A project whose meetings run at a different pace should recalibrate rather than copy
+   * this number: what matters is the product, not the count.
    */
   pollDwell: number;
   /**
@@ -786,7 +793,7 @@ export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     alerts: DEFAULT_ALERTS,
     engagement: "reactive",
     maxLines: 3,
-    pollDwell: 4,
+    pollDwell: 2,
     allowWebResearch: false,
     acknowledge: true,
     drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },

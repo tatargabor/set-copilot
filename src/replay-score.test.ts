@@ -12,8 +12,8 @@ import { describe, expect, it } from "vitest";
 import type { ReplayRunRecord } from "./replay.js";
 import type { Scenario, PlantedMoment } from "./replay-scenario.js";
 import {
-  compareScorecards, candidatesFor, contentEvents, isDrawn, latencyRefusal, scoreRun,
-  type Match, type Scorecard, type WallEventRecord,
+  compareScorecards, candidatesFor, contentEvents, isDrawn, latencyRefusal, promotedVisuals,
+  scoreRun, type Match, type Scorecard, type WallEventRecord,
 } from "./replay-score.js";
 
 const START = 1_700_000_000_000;
@@ -77,14 +77,21 @@ describe("scoreRun — refusals", () => {
     expect(card.dimensions.coverage.measured).toBe(true);
   });
 
-  it("excludes an unstamped event from latency instead of substituting a time", () => {
-    // One stamped event keeps the run measurable; the unstamped one is simply left out
-    // of the average rather than counted as zero delay.
+  it("excludes an unstamped matched event from latency instead of substituting a time", () => {
     const matches: Match[] = [{ momentId: "m-q", eventIndex: 0 }, { momentId: "m-c", eventIndex: 1 }];
     const events = [ev({ emittedAt: START + 12_000 }), ev({ emittedAt: undefined })];
     const card = scoreRun(scenario(), artifacts(events), matches);
-    expect(card.dimensions.coverage.measured).toBe(false);
-    expect(card.notes.join(" ")).toMatch(/cannot fall inside/);
+    expect(card.dimensions.reactionLatency).toMatchObject({ measured: true, value: 2_000 });
+    expect(card.notes.join(" ")).toMatch(/never substituted/);
+  });
+
+  it("excludes a few unstamped events without invalidating the run", () => {
+    // One stray unstamped event declaring a 45-event run unmeasurable was the rule
+    // overshooting its purpose, which is to stop a stamp-LESS log reading as silence.
+    const matches: Match[] = [{ momentId: "m-q", eventIndex: 0 }, { momentId: "m-c", eventIndex: null }];
+    const card = scoreRun(scenario(), artifacts([ev(), ev({ emittedAt: undefined })]), matches);
+    expect(card.dimensions.coverage.measured).toBe(true);
+    expect(card.notes.join(" ")).toMatch(/excluded from matching/);
   });
 
   it("does not blame the copilot for an evidence gap — unstamped events make coverage unmeasurable", () => {
@@ -189,10 +196,12 @@ describe("scoreRun — dimensions", () => {
   });
 
   it("counts a staged prediction that expired unused against the prediction ratio", () => {
+    // The command's real shape: `kind` at the top level, not nested. Reading it wrong made
+    // the scorer report 0 promotions on the one run that actually had 1 of 1.
     const events = [
       ev({ staged: true, visual: "v1", zone: "private" }),
       ev({ staged: true, visual: "v2", zone: "private" }),
-      { promote: { visual: "v1", category: "súgás" } } as WallEventRecord,
+      { kind: "promote", category: "súgás", visual: "v1" } as WallEventRecord,
     ];
     const card = scoreRun(scenario(), artifacts(events), matches);
     expect(card.dimensions.predictionsStaged).toMatchObject({ value: 2 });
@@ -206,8 +215,12 @@ describe("scoreRun — dimensions", () => {
 });
 
 describe("contentEvents / isDrawn / candidatesFor", () => {
-  it("does not count a promote command as wall content — it names a visual, it is not one", () => {
-    expect(contentEvents([ev(), { promote: { visual: "v1" } }])).toHaveLength(1);
+  it("does not count a command as wall content — it names a visual, it is not one", () => {
+    expect(contentEvents([ev(), { kind: "promote", category: "súgás", visual: "v1" }])).toHaveLength(1);
+  });
+
+  it("finds a promoted visual by the command's real shape", () => {
+    expect([...promotedVisuals([{ kind: "promote", visual: "v1" }, ev()])]).toEqual(["v1"]);
   });
 
   it("recognises every drawn payload type", () => {

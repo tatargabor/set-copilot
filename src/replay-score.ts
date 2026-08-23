@@ -43,7 +43,13 @@ export interface WallEventRecord {
   emittedAt?: number;
   staged?: boolean;
   visual?: string;
-  promote?: { visual?: string; category?: string };
+  /**
+   * Commands (`promote`, `pending`, `show`) are tagged with `kind` at the TOP level —
+   * `{kind:"promote", category, visual, zone}` — not nested under a key of their own.
+   * Getting this wrong made the scorer count commands as wall content AND never find a
+   * promotion, so the prediction rate read 0 on the one run where it was 1/1.
+   */
+  kind?: string;
   [k: string]: unknown;
 }
 
@@ -144,9 +150,18 @@ export function loadRunArtifacts(runtimeDir: string): RunArtifacts {
   return { events, record, missing };
 }
 
-/** Events that are actual wall content — a `promote` command names a visual, it is not one. */
+/** Events that are actual wall content — a command names a visual, it is not one. */
 export function contentEvents(events: WallEventRecord[]): WallEventRecord[] {
-  return events.filter((e) => !e.promote && typeof e.category === "string");
+  return events.filter((e) => e.kind === undefined && typeof e.category === "string");
+}
+
+/** Visuals a `promote` command lifted public. */
+export function promotedVisuals(events: WallEventRecord[]): Set<string> {
+  return new Set(
+    events
+      .filter((e) => e.kind === "promote" && typeof e.visual === "string")
+      .map((e) => e.visual as string),
+  );
 }
 
 /** Does this event carry a drawn payload rather than text? */
@@ -227,9 +242,16 @@ export function scoreRun(
    * before `emittedAt` existed, which read as a total copilot failure.
    */
   const unstampedContent = content.filter((e) => typeof e.emittedAt !== "number").length;
-  const evidenceGap = unstampedContent > 0
-    ? `${unstampedContent} of ${content.length} wall event(s) carry no emittedAt — they cannot fall inside any moment's window, so coverage and precision are unmeasurable for this run (a log written before emission times existed)`
+  // The gap invalidates the run only when NOTHING is stamped — a log written before
+  // emission times existed. A few unstamped events are excluded from candidacy and noted;
+  // letting one stray event declare a 45-event run unmeasurable was the rule overshooting
+  // its purpose, which is to stop a stamp-less log from reading as a silent copilot.
+  const evidenceGap = content.length > 0 && unstampedContent === content.length
+    ? `none of this run's ${content.length} wall event(s) carry an emittedAt — they cannot fall inside any moment's window, so coverage and precision are unmeasurable (a log written before emission times existed)`
     : null;
+  if (unstampedContent > 0 && !evidenceGap) {
+    notes.push(`${unstampedContent} of ${content.length} wall event(s) carry no emittedAt and were excluded from matching — never substituted`);
+  }
 
   const byId = new Map(matches.map((m) => [m.momentId, m]));
   const judged = matches.length > 0;
@@ -313,10 +335,8 @@ export function scoreRun(
 
   // Prediction: staged private guesses against the ones a promote actually lifted.
   const staged = content.filter((e) => e.staged === true);
-  const promotedVisuals = new Set(
-    events.filter((e) => e.promote?.visual).map((e) => e.promote?.visual as string),
-  );
-  const promoted = staged.filter((e) => e.visual && promotedVisuals.has(e.visual)).length;
+  const lifted = promotedVisuals(events);
+  const promoted = staged.filter((e) => e.visual && lifted.has(e.visual)).length;
   dimensions.predictionsStaged = { measured: true, source: "computed", value: staged.length, unit: "count" };
   dimensions.predictionsPromoted = staged.length
     ? {
