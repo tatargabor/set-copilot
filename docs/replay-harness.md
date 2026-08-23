@@ -122,6 +122,32 @@ Egy dimenzió lehet **nem mérhető**, és ez nem hiba, hanem a lényeg:
   nélküli esemény sosem eshet egy pillanat ablakába. Ez a különbség aközött, hogy „a
   copilot nem reagált" és „a log nem tudja megmondani, mikor".
 
+### A mérce saját zaja — ezt előbb kell tudni, mint bármit
+
+Egy futás nem bizonyíték. Mérve 2026-08-23-án, ugyanazon a forgatókönyvön, azonos kóddal:
+
+| | 7 pillanattal | 18 pillanattal |
+|---|---|---|
+| lefedettség szórása két futás közt | 0,286 | **0,167** |
+| latencia szórása | 2924 ms | **978 ms** |
+
+Hét pillanatnál egy pillanat a pontszám egyhetedét érte, tehát egyetlen ingadozás 14 pontot
+mozgatott — és az összehasonlító „regressziót" jelentett úgy, hogy semmi nem változott.
+
+A zaj két forrása szétválasztható, és érdemes is: **ugyanazt a változatlan futást háromszor
+újrabírálva a lefedettség és az elmulasztott halmaz betű szerint azonos** — a bíráló stabil,
+a copilot ingadozik. (A latencia eleinte mozgott, mert több illő esemény közül nem mindig
+ugyanazt választotta; a bírálati szabály most a legkorábbit írja elő, és azóta azonos.)
+
+Ebből következik a `noiseBand` a forgatókönyv metájában: sávon belüli különbség
+**„változatlan", nem verdikt**. A sáv a forgatókönyvön él és nem a motorban, mert a zaj *ennek*
+a scriptnek és *ennek* a copilotnak a tulajdonsága, nem állandó. Sáv nélkül az összehasonlítás
+továbbra is jelent irányt, de kimondja: egy egyfutásos különbség **olvasat, nem bizonyíték**.
+
+```bash
+set-copilot replay-score compare before.json after.json --scenario scenarios/<név>
+```
+
 Az összehasonlítás **megtagadja a verdiktet**, ha a forgatókönyv ujjlenyomata változott: egy
 elmozdult mércéhez képest mérni úgy néz ki, mint egy eredmény, és az rosszabb, mint a
 semmi.
