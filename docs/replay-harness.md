@@ -133,6 +133,30 @@ Két javítás, mindkettő mechanizmus, nem prompt-fegyelem:
 Egy előrejelzés lejárata **nem hiba**: egy rossz tipp helyes vége. Amit a szám mérni tud, az
 az, hogy a *jó* tipp elérte-e a falat.
 
+**Mérve a javítás után** (2026-08-23, valós idő, azonos ujjlenyomat,
+`baselines/2026-08-23-promote-contract.json`):
+
+| | előtte (deck+dwell) | utána |
+|---|---|---|
+| `predictionsStaged` | 7 | 9 |
+| `predictionsPromoted` | **0** | **0,889** (8/9) |
+| `coverage` | 0,833 | 0,778 — a sávon **belül** |
+| `reactionLatency` | 33 419 ms | 39 388 ms — a sávon **kívül** |
+| `precision` | 0,385 | 0,100 — épp a sáv szélén kívül (0,285 vs 0,284) |
+
+Az állítás **egy** futás: a promóció innentől megtörténik, nem az, hogy „88,9% az arány".
+A copilot saját zárása szerint egyetlen tippet szándékosan hagyott elévülni (az előadó
+átugrotta azt a diát) — pontosan az a viselkedés, amit a szerződés leír.
+
+A két romló szám őszintén: a latencia egy futásból ~6 mp-cel magasabb, ami a sávon kívül van
+— nem tudjuk megmondani, a promóciós munka ára-e vagy futás-ingadozás, ehhez új sáv kell. A
+precizitás esése viszont **legalább részben a mérőé**: ebben a futásban a copilot az érdemi
+rajzait az `előrejelzés` kategóriába tette (staged → promote), amit a precizitás nem számol
+reakciónak, a bíráló pedig egy pillanathoz a *legkorábbi* illeszkedő eseményt rendeli — 31
+narráció-esemény mellett a `súgás`/`riasztás` sorok árván maradnak. Vagyis a jelenlegi
+precizitás-definíció bünteti azt, hogy a rajz a saját kategóriájába került. Ez a dimenzió
+újragondolást kér, mielőtt bárki regressziót olvasna ki belőle.
+
 ## A scorecard olvasása
 
 | Dimenzió | Forrás | Jelentés |
