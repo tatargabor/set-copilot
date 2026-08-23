@@ -157,6 +157,51 @@ narráció-esemény mellett a `súgás`/`riasztás` sorok árván maradnak. Vagy
 precizitás-definíció bünteti azt, hogy a rajz a saját kategóriájába került. Ez a dimenzió
 újragondolást kér, mielőtt bárki regressziót olvasna ki belőle.
 
+### A precizitás hibás volt — és mennyit rontott
+
+2026-08-23-án a promóciós futás 0,10 precizitást kapott. Nem a copilot teljesítménye volt:
+
+- **indextér:** a bíráló `eventIndex`-e a teljes eseménynaplóba mutat, a szűrő viszont a
+  *tartalmi* eseményeket számozta; az első `promote` után a két számozás szétcsúszik;
+- **egy kredit pillanatonként:** az `eventIndex` szándékosan a *legkorábbi* érintő esemény
+  (ez a latencia definíciója), így minden későbbi, ugyanarra a pillanatra adott reakció
+  „semmire nem reagált" lett. 31 narráció-esemény vitte el a kreditet a `súgás` sorok elől.
+
+A bíráló ezért mostantól megnevezi a többi érintő jelöltet is (`alsoAddressing`), és egy
+soha nem promotált staged jóslat nem számít reakciónak — az soha nem volt a falon.
+
+**Bizonyíték, ugyanazokon az artefaktumokon:** a javított mérő **0,90**-et ad ott, ahol a
+hibás 0,10-et adott. Ezért a javítás előtti precizitás-számok nem hasonlíthatók a
+későbbiekhez; a régi futásokat újra kell pontozni, nem összevetni.
+
+### Miből áll a ~40 másodperc
+
+Mérve a promóciós futáson, a runner saját leiratából (mikor indult egy poll, mikor jött a
+válasza, mikor ment ki az emit):
+
+| komponens | mérés |
+|---|---|
+| a poll maga | **2,5 mp** — mindig volt már várakozó sor, a kapu sosem várt |
+| várakozás a következő poll-körre | **14,5 mp** |
+| modell-forduló (gondolkodás + emit) | **24,9 mp** |
+| egy teljes ciklus | 28,5 mp, körönként **egyetlen**, mindent egyben komponált emittel |
+
+Vagyis a riasztás megfizette a narráció gondolkodási idejét, a következő elhangzó mondat
+pedig az egészet. Ezért van a policyban **Turn order** blokk: a reakció megy ki elsőként, a
+többi egy kötegben utána, majd azonnal vissza a hallgatásra (a következő poll ugyanabba a
+parancsba fűzve, ha a hurok Bash-hurok).
+
+**Amit ez mozgatott (1 futás):** a ciklusidő 28,5 → **25,1 mp**, és a copilot 26 körből
+**24-ben** egyetlen hívásba fűzte az emitet és a következő pollt. A végponttól végpontig
+mért latencia 33,1 mp — jobb a promóciós futás 39,4-énél, de a korábbi legjobb 31,1-hez
+képest **nem megkülönböztethető**: egy futás, és a sáv is újramérésre vár. A mechanizmus
+javult, a végeredmény javulása nincs bizonyítva.
+
+**A padló, amit ez nem visz lejjebb.** A modell-forduló ~20 mp, a beszéd ~9,6 mp-enként ad
+egy mondatot: a hurok telített, a reakció szerkezetileg egy ciklussal van lemaradva. Ez alá
+csak külön gyors sáv vinne — egy olcsó, kizárólag riasztásra figyelő menet a narráció és a
+rajzolás mellett. Az már terv, nem beállítás.
+
 ## A scorecard olvasása
 
 | Dimenzió | Forrás | Jelentés |
