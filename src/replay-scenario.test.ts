@@ -117,6 +117,27 @@ describe("loadScenario", () => {
     expect(after).not.toBe(before);
   });
 
+  it("ignores the noise band — recording a measurement must not invalidate what measured it", () => {
+    // The band changes no dimension's value, only how a comparison is worded. Including it
+    // made the ruler circular: measuring the noise needs runs, recording the result changes
+    // the fingerprint, which invalidates those very runs. A loop with no fixed point.
+    const before = loadScenario(write()).fingerprint;
+    const after = loadScenario(write(FULL_SCRIPT, FULL_MOMENTS, { noiseBand: { coverage: 0.2 } })).fingerprint;
+    expect(after).toBe(before);
+  });
+
+  it("ignores an underscore-prefixed note — a comment is not part of the ruler", () => {
+    const before = loadScenario(write()).fingerprint;
+    const after = loadScenario(write(FULL_SCRIPT, FULL_MOMENTS, { _note: "miért így mérünk" })).fingerprint;
+    expect(after).toBe(before);
+  });
+
+  it("is stable against key order in the meta", () => {
+    const a = loadScenario(write(FULL_SCRIPT, FULL_MOMENTS, { language: "hu", defaultWithinMs: 1000 })).fingerprint;
+    const b = loadScenario(write(FULL_SCRIPT, FULL_MOMENTS, { defaultWithinMs: 1000, language: "hu" })).fingerprint;
+    expect(b).toBe(a);
+  });
+
   it("gives an identical fingerprint to identical content", () => {
     const a = loadScenario(write()).fingerprint;
     const b = loadScenario(write()).fingerprint;
