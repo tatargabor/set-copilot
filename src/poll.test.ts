@@ -49,6 +49,52 @@ describe("pollDecision — live capture", () => {
   });
 });
 
+describe("pollDecision — accumulated speech (poll-bounded-speech-dwell)", () => {
+  // Measured: from a spoken line to the next silence event is 30.7s on average during a
+  // presentation, and that wait was almost the whole of the copilot's ~34s reaction
+  // latency. The model reacts promptly once it sees a line; the gate was the slow part.
+
+  // Distinct lines on purpose: identical ones are deduped as mic/system echo before the
+  // count ever sees them, which is the existing filter doing its job.
+  const A = speech("Az első mondat.");
+  const B = speech("A második mondat.");
+  const C = speech("A harmadik mondat.");
+
+  it("returns once enough new speech has accumulated", () => {
+    expect(pollDecision(true, [A, B, C], 0, 3)).toEqual({ kind: "ready", reason: "dwell" });
+  });
+
+  it("keeps waiting below the threshold", () => {
+    expect(pollDecision(true, [A, B], 0, 3)).toEqual({ kind: "wait" });
+  });
+
+  it("counts what survives the echo filter, not raw lines", () => {
+    // Three lines on the wire, one line of content: an echoed sentence must not push the
+    // poll over its threshold.
+    expect(pollDecision(true, [A, A, A], 0, 3)).toEqual({ kind: "wait" });
+  });
+
+  it("does not count non-speech events — a run of events is not something to react to", () => {
+    expect(pollDecision(true, [SILENCE, SILENCE, SILENCE], 0, 3)).toEqual({ kind: "wait" });
+  });
+
+  it("counts only what is unread, not the whole file", () => {
+    expect(pollDecision(true, [A, B, C, speech("Negyedik.")], 3, 3)).toEqual({ kind: "wait" });
+  });
+
+  it("is off at zero — the previous gating, exactly", () => {
+    expect(pollDecision(true, [A, B, C, speech("Negyedik."), speech("Ötödik.")], 0, 0)).toEqual({ kind: "wait" });
+  });
+
+  it("lets an existing trigger win, so a question never waits for the count", () => {
+    expect(pollDecision(true, [QUESTION], 0, 5)).toEqual({ kind: "ready", reason: "early" });
+  });
+
+  it("does not fire on a dead capture path — the drain decides there", () => {
+    expect(pollDecision(false, [A, B, C], 0, 3)).toEqual({ kind: "ready", reason: "capture-gone" });
+  });
+});
+
 describe("pollDecision — the capture is gone", () => {
   it("hands over the unread lines instead of reporting death over them", () => {
     // The regression this whole change exists for.

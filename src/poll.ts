@@ -57,7 +57,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** What one tick of the poll decides to do. */
 export type PollAction =
   /** Stop waiting and hand over what is pending. */
-  | { kind: "ready"; reason: "early" | "capture-gone" }
+  | { kind: "ready"; reason: "early" | "capture-gone" | "dwell" }
   /** The capture is gone and there is nothing left to hand over. */
   | { kind: "dead" }
   /** Nothing yet — wait another tick. */
@@ -72,7 +72,12 @@ export type PollAction =
  * previous poll and the capture's exit — the closing minutes of a meeting, where the
  * decisions are.
  */
-export function pollDecision(alive: boolean, all: string[], last: number): PollAction {
+/** A speech line, as opposed to a non-speech event. Events have their own trigger. */
+function isSpeech(line: string): boolean {
+  return line.includes('"speaker"') && !line.includes('"type":"');
+}
+
+export function pollDecision(alive: boolean, all: string[], last: number, dwell = 0): PollAction {
   const unread = all.length > last ? filterLines(all.slice(last)) : [];
 
   if (!alive) {
@@ -96,7 +101,20 @@ export function pollDecision(alive: boolean, all: string[], last: number): PollA
     ) ||
     (unread.some((l) => l.includes('"type":"silence"')) && unread.some((l) => l.includes('"speaker"')));
 
-  return early ? { kind: "ready", reason: "early" } : { kind: "wait" };
+  if (early) return { kind: "ready", reason: "early" };
+
+  // Bound how long a line can sit unseen during continuous speech. Speech lines are
+  // already complete sentences (the writer flushes on `. ? !`), so a batch of them is
+  // coherent without a pause to confirm it — and without this bound the wait for that
+  // pause measured 30.7 s on average during a presentation.
+  //
+  // Speech only: a run of events is not something to react to, and the events that are
+  // have their own trigger above.
+  if (dwell > 0 && unread.filter(isSpeech).length >= dwell) {
+    return { kind: "ready", reason: "dwell" };
+  }
+
+  return { kind: "wait" };
 }
 
 /**
@@ -130,7 +148,7 @@ export async function runPoll(cfg: CopilotConfig, maxWaitSec = 60): Promise<void
 
   const start = Date.now();
   while (Date.now() - start < maxWaitSec * 1000) {
-    const decision = pollDecision(captureAlive(cfg), readAll(), last);
+    const decision = pollDecision(captureAlive(cfg), readAll(), last, cfg.copilot.pollDwell);
     if (decision.kind === "dead") {
       process.stdout.write('{"type":"capture-dead"}\n');
       return;
