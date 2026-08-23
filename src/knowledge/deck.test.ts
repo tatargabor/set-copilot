@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_FACTS_PER_SLIDE, extractDeck, extractFacts, extractFile, fileOrder, htmlTitle,
-  htmlToText, parseFigure, unwrapBundlerTemplate,
+  htmlToText, looksLikeBuildId, parseFigure, unwrapBundlerTemplate,
 } from "./deck.js";
 
 const quiet = (): void => {};
@@ -102,8 +102,35 @@ describe("htmlTitle", () => {
     expect(htmlTitle(wrapped)).toBe("Igazi cím");
   });
 
+  it("prefers a real heading over a build identifier", () => {
+    // An export stamps `07-quick-win-… — deck-export/profile` as the title. Taken as
+    // the slide's name, its words become keyword stems and `quick`/`profile`/`deck` then
+    // match half the deck — tagging everything, which is tagging nothing.
+    const html = "<title>11-quick-win-asp — deck-export/profile</title><h1>Nem elhibázott beruházás</h1>";
+    expect(htmlTitle(html)).toBe("Nem elhibázott beruházás");
+  });
+
+  it("falls back to the build identifier when there is no heading at all", () => {
+    expect(htmlTitle("<title>11-asp — x/deck-profile</title><p>szöveg</p>")).toBe("11-asp — x/deck-profile");
+  });
+
+  it("keeps a human title even when a heading exists", () => {
+    expect(htmlTitle("<title>04 — A vállalás megvan</title><h1>Más</h1>")).toBe("04 — A vállalás megvan");
+  });
+
   it("returns null when there is nothing to take", () => {
     expect(htmlTitle("<p>csak szöveg</p>")).toBeNull();
+  });
+});
+
+describe("looksLikeBuildId", () => {
+  it("recognises a path-like or space-less title", () => {
+    expect(looksLikeBuildId("deck-export/profile")).toBe(true);
+    expect(looksLikeBuildId("11-quick-win-asp")).toBe(true);
+  });
+
+  it("leaves a human title alone", () => {
+    expect(looksLikeBuildId("04 — A vállalás megvan. A fedezete nincs.")).toBe(false);
   });
 });
 

@@ -133,16 +133,35 @@ export function htmlToText(html: string): string {
 }
 
 /** Title of an HTML document: its `<title>`, else its first heading. */
+/**
+ * A `<title>` that is a build identifier rather than a human title.
+ *
+ * Export tools stamp things like `07-quick-win-alkalmazott-ai — deck-export/profile`.
+ * Taken as the slide's name it is not merely ugly: its words become the slide's keyword
+ * stems, and `quick`, `profile`, and `deck` then match half the deck — tagging everything,
+ * which is the same as tagging nothing.
+ *
+ * The tell is a path-like fragment or a name with no spaces. A human slide title has
+ * words in it and no slashes.
+ */
+export function looksLikeBuildId(title: string): boolean {
+  return title.includes("/") || !/\s/.test(title.trim());
+}
+
 export function htmlTitle(html: string): string | null {
   const src = unwrapBundlerTemplate(html);
+  const heading = (): string | null => {
+    const h = /<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i.exec(src);
+    if (!h) return null;
+    const text = h[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    return text || null;
+  };
   const t = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(src);
-  if (t && t[1].trim()) return t[1].trim();
-  const h = /<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i.exec(src);
-  if (h) {
-    const text = h[1].replace(/<[^>]+>/g, " ").trim();
-    if (text) return text;
-  }
-  return null;
+  const title = t?.[1].trim();
+  if (title && !looksLikeBuildId(title)) return title;
+  // A build identifier is worse than no title: prefer a real heading, and only fall back
+  // to the identifier when the document has none.
+  return heading() ?? title ?? null;
 }
 
 /**

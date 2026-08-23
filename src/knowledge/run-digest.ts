@@ -34,13 +34,36 @@ export function resolveDeckFiles(projectRoot: string, deck: string[]): string[] 
  * every line in the meeting with every slide, which is the same as tagging nothing.
  */
 export function slideKeywordPatterns(slides: Slide[]): { topic: string; stems: string[] }[] {
+  /**
+   * Stems from a slide's title.
+   *
+   * Long words qualify on length. Short ones qualify only if the title wrote them with
+   * capitals — `ASP`, `KPI`, `GaaP`, `DÁP`. Those are precisely the terms a presenter says
+   * out loud when they arrive at a slide, and a flat five-character floor drops every one
+   * of them. The frequency filter below is what makes the lower bar safe.
+   */
+  const words = (title: string): string[] => {
+    const out: string[] = [];
+    for (const raw of title.split(/[^\p{L}\p{N}]+/u)) {
+      if (!raw) continue;
+      const acronymish = raw.length >= 3 && /\p{Lu}/u.test(raw.slice(1)) || raw.length >= 3 && raw === raw.toUpperCase() && /\p{L}/u.test(raw);
+      if (raw.length >= 5 || acronymish) out.push(raw.toLowerCase());
+    }
+    return [...new Set(out)];
+  };
+
+  // A stem shared by many slides is not distinctive — it tags every line with every slide,
+  // which is the same as tagging nothing. Measured on a real deck: an export's build-id
+  // titles put `quick`, `profile` and `deck` on half the slides.
+  const freq = new Map<string, number>();
+  for (const s of slides) for (const w of words(s.title)) freq.set(w, (freq.get(w) ?? 0) + 1);
+  const tooCommon = Math.max(2, Math.ceil(slides.length * 0.3));
+
   return slides
-    .map((s) => {
-      const stems = [...new Set(
-        s.title.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 5),
-      )];
-      return { topic: `dia ${s.index}: ${s.title}`, stems };
-    })
+    .map((s) => ({
+      topic: `dia ${s.index}: ${s.title}`,
+      stems: words(s.title).filter((w) => (freq.get(w) ?? 0) < tooCommon),
+    }))
     .filter((p) => p.stems.length > 0);
 }
 
