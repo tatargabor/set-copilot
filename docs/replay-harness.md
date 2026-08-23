@@ -116,6 +116,23 @@ a régi viselkedés. Az alapérték **kalibrált, nem tippelt** — 9,6 mp/monda
 érték ~38 mp várakozást adna, vagyis semmivel sem jobbat annál, amit lecserélni hivatott;
 kettővel mérve hat pollon átlag **14,2 mp**.
 
+### Az előrejelzés-koreográfia — amit a mérce kimutatott
+
+Négy valós idejű futáson a copilot **2, 3, 2 és 7** előrejelzést készített elő (staged), és
+**0, 0, 0, illetve 1**-et léptetett elő. Nem ítélőképesség-hiba volt: a rendelt policy
+kimondta, hogy a publikus falra csak explicit promóció emel, de a parancs **alakját** nem
+dokumentálta sehol (`grep -c '"kind":"promote"'` a rendereltt prompton: 0). A koreográfia
+második fele elérhetetlen volt, mert soha nem tanítottuk meg.
+
+Két javítás, mindkettő mechanizmus, nem prompt-fegyelem:
+
+- a promóciós parancs alakja a többi payload mellé került (+ a `visual` id követelménye és
+  a kiváltó ok: a beszélgetés *odaér*),
+- `set-copilot wall-staged` megkérdezhető — a producer ne emlékezzen, hanem kérdezzen.
+
+Egy előrejelzés lejárata **nem hiba**: egy rossz tipp helyes vége. Amit a szám mérni tud, az
+az, hogy a *jó* tipp elérte-e a falat.
+
 ## A scorecard olvasása
 
 | Dimenzió | Forrás | Jelentés |

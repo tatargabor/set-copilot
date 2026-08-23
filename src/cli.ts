@@ -258,6 +258,34 @@ async function main(): Promise<void> {
     }
     case "wall-stop": return cmdWallStop();
     case "wall-shot": return cmdWallShot(args);
+    case "wall-staged": {
+      // The producer asks what it may promote instead of remembering — see the staging
+      // section of `set-copilot prompt`.
+      const cfg = loadConfig();
+      const urlFile = join(cfg.runtimeDir, "wall.url");
+      if (!existsSync(urlFile)) {
+        // An empty list would read as "nothing staged", which is a different fact.
+        console.error(`[set-copilot] no wall running for ${cfg.runtimeDir} — cannot tell what is staged`);
+        process.exit(1);
+      }
+      const base = readFileSync(urlFile, "utf-8").trim();
+      try {
+        const res = await fetch(`${base}/api/staged`);
+        const body = (await res.json()) as { staged: { category: string; visual: string; expiresInMs: number }[] };
+        if (!body.staged.length) {
+          console.log("nincs előrejelzés előléptethető állapotban");
+          return;
+        }
+        for (const s of body.staged) {
+          const left = s.expiresInMs < 0 ? "nem jár le" : `${Math.round(s.expiresInMs / 1000)} mp múlva jár le`;
+          console.log(`${s.category}  ${s.visual}  (${left})`);
+        }
+      } catch (err) {
+        console.error(`[set-copilot] could not reach the wall at ${base}: ${(err as Error).message}`);
+        process.exit(1);
+      }
+      return;
+    }
     case "wall-emit": {
       // A producer's hand on the wall: push a DisplayEvent (or a JSON array of them)
       // onto the canonical events log. The producer is a fork of the main session
@@ -1287,6 +1315,9 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    the next free one; writes wall.pid + wall.url.
                                    Fake-feed on by default
   set-copilot wall-stop            stop the wall serving this runtime dir (wall.pid)
+  set-copilot wall-staged          list the staged predictions that can be promoted right
+                                   now, with the time each has left — ask instead of
+                                   remembering what was drawn ahead
   set-copilot wall-emit '<json>'   push a DisplayEvent (or JSON array) onto the
                                    wall — the main session's producer seam (D9)
   set-copilot wall-shot <url> [--category id] [--zone z] [--caption t]
