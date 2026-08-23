@@ -14,3 +14,6 @@ keyword-index.json
 knowledge-context.json
 knowledge-digest.md
 set/.work/
+
+# Local project config: may carry machine-specific paths (e.g. knowledge.deck)
+set-copilot.config.json

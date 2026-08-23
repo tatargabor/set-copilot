@@ -21,6 +21,14 @@ export interface KnowledgeConfig {
   autoKeywords: boolean;
   /** Regex sources that mark a knowledge line as deferred / out-of-scope */
   deferredMarkers: string[];
+  /**
+   * The presentation this meeting is about — files or globs, `.md`/`.txt`/`.html`.
+   *
+   * Separate from `sources` because a deck is *ordered* and its slides are *citable*: an
+   * alert that names the knowledge base cannot be acted on mid-meeting, one that names
+   * slide 11 can. Empty by default; a project without a deck is unchanged.
+   */
+  deck: string[];
 }
 
 /**
@@ -759,6 +767,7 @@ export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     keywords: [],
     autoKeywords: true,
     deferredMarkers: DEFAULT_DEFERRED_MARKERS,
+    deck: [],
   },
   copilot: {
     alerts: DEFAULT_ALERTS,
@@ -814,6 +823,21 @@ function readConfigFile(path: string): RawConfig {
  * accepted and flattened, because the group name never reached the transcript
  * anyway: only `topic` does.
  */
+/** Deck paths: a list of strings, or nothing. Anything else is dropped, loudly. */
+export function normalizeDeck(raw: unknown, warn: (m: string) => void = console.warn): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    warn("[set-copilot] knowledge.deck must be a list of paths or globs — ignoring it");
+    return [];
+  }
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry === "string" && entry.trim()) out.push(entry);
+    else warn(`[set-copilot] knowledge.deck: dropping non-string entry ${JSON.stringify(entry)}`);
+  }
+  return out;
+}
+
 export function normalizeKeywords(raw: unknown): KeywordPattern[] {
   const flat: KeywordPattern[] = [];
   const push = (list: unknown): void => {
@@ -984,6 +1008,10 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       deferredMarkers: knowledge.deferredMarkers?.length
         ? knowledge.deferredMarkers
         : DEFAULTS.knowledge.deferredMarkers,
+      // A malformed value is dropped with a warning rather than killing the digest —
+      // the same posture as a bad `detect.*` regex. An unusable deck must not take the
+      // rest of the knowledge base down with it.
+      deck: normalizeDeck(knowledge.deck),
     },
     copilot: {
       instructions: copilot.instructions,

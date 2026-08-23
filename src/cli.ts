@@ -75,6 +75,39 @@ async function main(): Promise<void> {
     case "transcript": return cmdTranscript(args);
     case "recovery": return cmdRecovery(args);
     case "status": return cmdStatus();
+    case "deck": {
+      // The extraction has to be readable before a meeting depends on it. An extraction
+      // nobody has looked at fails in the worst direction: the copilot stays silent, and
+      // silence is indistinguishable from a meeting where nothing was worth saying.
+      const { extractDeck } = await import("./knowledge/deck.js");
+      const { resolveDeckFiles } = await import("./knowledge/run-digest.js");
+      const cfg = loadConfig();
+      const files = resolveDeckFiles(cfg.projectRoot, cfg.knowledge.deck);
+      if (!cfg.knowledge.deck.length) {
+        console.error("[set-copilot] no knowledge.deck configured — nothing to extract");
+        process.exit(1);
+      }
+      if (!files.length) {
+        console.error(`[set-copilot] knowledge.deck matched no files (patterns: ${cfg.knowledge.deck.join(", ")})`);
+        process.exit(1);
+      }
+      const { slides, problems } = extractDeck(files);
+      const facts = slides.reduce((n, sl) => n + sl.facts.length, 0);
+      console.log(`${slides.length} dia · ${facts} kinyert szám · ${files.length} fájl\n`);
+      for (const sl of slides) {
+        console.log(`${String(sl.index).padStart(2)}. ${sl.title}`);
+        for (const f of sl.facts) {
+          console.log(`      ${f.figure}${f.unit ? " " + f.unit : ""}  ·  ${f.context.slice(0, 110)}`);
+        }
+        if (!sl.facts.length) console.log("      (nincs szám ezen a dián)");
+      }
+      if (problems.length) {
+        console.log("\nNem sikerült kinyerni:");
+        for (const p of problems) console.log(`  ${p.file} — ${p.reason}`);
+        process.exit(1);
+      }
+      return;
+    }
     case "digest": {
       const { runDigest } = await import("./knowledge/run-digest.js");
       console.log(await runDigest(loadConfig()));
@@ -1221,6 +1254,9 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot recovery abandon <file> --step review [--reason <text>]
                                    resolve a claim without completing it
   set-copilot status               capture state + transcript line count
+  set-copilot deck                 print the slides and numeric facts extracted from
+                                   knowledge.deck — read this before a meeting relies on
+                                   it; an unread extraction fails as silence
   set-copilot digest               (re)build knowledge index/context/digest
   set-copilot prompt               print the copilot policy the skill loads
                                    (alert categories + copilot.instructions)
