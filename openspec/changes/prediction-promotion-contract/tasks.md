@@ -19,8 +19,8 @@
 
 ## 4. Measure
 
-- [ ] 4.1 Re-run the `reference` scenario in real time and score it. [REQ: The producer is taught how to promote]
-- [ ] 4.2 Report honestly: a prediction reaching the public wall is the claim; with no noise band for this dimension, one run is a reading, not a rate. Check `precision` against its band — a copilot promoting noise would show there. [REQ: The producer is taught how to promote]
+- [x] 4.1 Re-run the `reference` scenario in real time and score it. [REQ: The producer is taught how to promote]
+- [x] 4.2 Report honestly: a prediction reaching the public wall is the claim; with no noise band for this dimension, one run is a reading, not a rate. Check `precision` against its band — a copilot promoting noise would show there. [REQ: The producer is taught how to promote]
 
 ## Acceptance Criteria (from spec scenarios)
 
