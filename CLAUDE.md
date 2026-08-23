@@ -302,6 +302,15 @@ A project that needs something the shared skill does not do should reach for a c
 
 ### The replay harness — how a copilot change is shown to be an improvement
 
+**Scenarios live outside this repo.** `scenarios/smoke` is the only one here — neutral by
+construction, the proof that nothing is deck-specific. The real measuring sticks are built
+from a partner's material (an imagined presentation of a real deck: its sentences, figures
+and names), so they live in a separate PRIVATE repo and are passed by path. Every command
+takes a directory, and the engine neither knows nor needs to know where it is — the same
+seam as `knowledge.sources`. A fixture that would embarrass someone if it were public
+belongs on the other side of that line, and the line is a repo boundary rather than a
+`.gitignore` entry because a gitignore protects nothing once someone commits with `-f`.
+
 `set-copilot replay` plays a recorded scenario into a runtime dir's transcript, paced by
 the scenario's own timestamps, while holding the runtime dir the way a capture does. A
 polling consumer cannot tell the difference — and that is the whole point: the measurement

@@ -4,6 +4,25 @@ Egy forgatókönyvet visszajátszunk a transcriptbe úgy, mintha a Sonioxtól j�
 megmérjük, mit csinál a copilot. Ettől lesz megválaszolható az a kérdés, amire eddig csak
 emlékezni lehetett: **jobb vagy rosszabb lett?**
 
+## Hol laknak a forgatókönyvek
+
+A repóban egyetlen forgatókönyv van: `scenarios/smoke` — szándékosan semleges, a
+deck-függetlenség bizonyítéka, nem mérce.
+
+**A valódi mércék külön, PRIVÁT repóban vannak** (`set-copilot-scenarios`), mert egy
+forgatókönyv egy konkrét partner anyagából készül: a benne lévő mondatok, számok és nevek
+nem tartoznak egy nyilvános kódrepóra, akkor sem, ha „csak" egy elképzelt előadás szövegei.
+A motor ezt nem tudja és nem is kell tudnia — minden parancs **útvonalat** vár:
+
+```bash
+set-copilot replay       ~/code/set-copilot-scenarios/<név>
+set-copilot replay-score ~/code/set-copilot-scenarios/<név> --judge --out card.json
+```
+
+Ugyanez a szétválasztás, mint a `knowledge.sources` vagy a `knowledge.deck` esetében: az
+anyag a projekté, a mechanizmus a motoré. Az alábbi példákban a `scenarios/<név>` bármelyik
+útvonalra cserélhető.
+
 ## Miért működik ez nulla motor-módosítással
 
 A copilot soha nem beszél a Sonioxszal. Egyetlen bemenete a

@@ -17,3 +17,6 @@ set/.work/
 
 # Local project config: may carry machine-specific paths (e.g. knowledge.deck)
 set-copilot.config.json
+
+# set-core futásidejű állapot (orphan-detect PID-ek) — soha nem verziózandó
+.set-core/
