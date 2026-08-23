@@ -19,7 +19,7 @@
 - [x] 3.1 Contribute slide-derived keyword patterns so a transcript line is tagged with its slide through the existing keyword index. [REQ: Slides reach the copilot through the existing knowledge pipeline]
 - [x] 3.2 Contribute slides and facts to the structured context. [REQ: Slides reach the copilot through the existing knowledge pipeline]
 - [x] 3.3 Render the deck into the session digest: slides in order, each with its facts, sized so the digest stays loadable. [REQ: Slides reach the copilot through the existing knowledge pipeline]
-- [ ] 3.4 Verify that with no deck configured every artifact is byte-identical to before. [REQ: Slides reach the copilot through the existing knowledge pipeline]
+- [x] 3.4 Verify that with no deck configured every artifact is byte-identical to before. [REQ: Slides reach the copilot through the existing knowledge pipeline]
 
 ## 4. Inspection
 
@@ -39,15 +39,15 @@
 
 ## Acceptance Criteria (from spec scenarios)
 
-- [ ] AC-1: A configured deck file yields slides in deck order, each with a position, title, and text. [REQ: A deck is extracted into ordered, titled slides, scenario: A deck file becomes slides]
-- [ ] AC-2: A slide whose source carries no heading is still titled and citable. [REQ: A deck is extracted into ordered, titled slides, scenario: A slide with no title of its own still gets one]
-- [ ] AC-3: An unreadable deck file is reported with its reason and the rest still extract. [REQ: A deck is extracted into ordered, titled slides, scenario: An unreadable deck file is reported, not fatal]
-- [ ] AC-4: An HTML slide yields visible text without markup, scripts, or data URIs. [REQ: Common presentation formats are handled, including wrapped exports, scenario: An HTML slide yields its visible text]
-- [ ] AC-5: A bundler-wrapped HTML export yields its real content, not the wrapper's loading text. [REQ: Common presentation formats are handled, including wrapped exports, scenario: A bundler-wrapped HTML export is unwrapped first]
-- [ ] AC-6: A deck that extracts to nothing produces a warning naming it and the reason. [REQ: Common presentation formats are handled, including wrapped exports, scenario: A deck that extracts to nothing says so]
-- [ ] AC-7: A numeric claim is captured with its scale or unit and enough context to identify it. [REQ: A slide's numeric claims are extracted as facts, scenario: A figure with a scale word is captured with it]
-- [ ] AC-8: Every fact names the slide it came from. [REQ: A slide's numeric claims are extracted as facts, scenario: A slide's facts name their slide]
+- [x] AC-1: A configured deck file yields slides in deck order, each with a position, title, and text. [REQ: A deck is extracted into ordered, titled slides, scenario: A deck file becomes slides]
+- [x] AC-2: A slide whose source carries no heading is still titled and citable. [REQ: A deck is extracted into ordered, titled slides, scenario: A slide with no title of its own still gets one]
+- [x] AC-3: An unreadable deck file is reported with its reason and the rest still extract. [REQ: A deck is extracted into ordered, titled slides, scenario: An unreadable deck file is reported, not fatal]
+- [x] AC-4: An HTML slide yields visible text without markup, scripts, or data URIs. [REQ: Common presentation formats are handled, including wrapped exports, scenario: An HTML slide yields its visible text]
+- [x] AC-5: A bundler-wrapped HTML export yields its real content, not the wrapper's loading text. [REQ: Common presentation formats are handled, including wrapped exports, scenario: A bundler-wrapped HTML export is unwrapped first]
+- [x] AC-6: A deck that extracts to nothing produces a warning naming it and the reason. [REQ: Common presentation formats are handled, including wrapped exports, scenario: A deck that extracts to nothing says so]
+- [x] AC-7: A numeric claim is captured with its scale or unit and enough context to identify it. [REQ: A slide's numeric claims are extracted as facts, scenario: A figure with a scale word is captured with it]
+- [x] AC-8: Every fact names the slide it came from. [REQ: A slide's numeric claims are extracted as facts, scenario: A slide's facts name their slide]
 - [ ] AC-9: A transcript line matching a slide's distinctive terms carries that slide as a topic. [REQ: Slides reach the copilot through the existing knowledge pipeline, scenario: A transcript line is tagged with the slide it belongs to]
-- [ ] AC-10: The digest presents the deck's slides in order with their facts. [REQ: Slides reach the copilot through the existing knowledge pipeline, scenario: The digest carries the slides and their facts]
-- [ ] AC-11: With no deck configured, every knowledge artifact is byte-identical to before. [REQ: Slides reach the copilot through the existing knowledge pipeline, scenario: A project with no deck is unchanged]
-- [ ] AC-12: `set-copilot deck` prints the slides in order with titles and facts, and names what failed to extract. [REQ: The extraction is inspectable before it is relied on, scenario: An operator can read the extracted slides]
+- [x] AC-10: The digest presents the deck's slides in order with their facts. [REQ: Slides reach the copilot through the existing knowledge pipeline, scenario: The digest carries the slides and their facts]
+- [x] AC-11: With no deck configured, every knowledge artifact is byte-identical to before. [REQ: Slides reach the copilot through the existing knowledge pipeline, scenario: A project with no deck is unchanged]
+- [x] AC-12: `set-copilot deck` prints the slides in order with titles and facts, and names what failed to extract. [REQ: The extraction is inspectable before it is relied on, scenario: An operator can read the extracted slides]
