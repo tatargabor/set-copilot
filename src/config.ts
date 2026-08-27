@@ -873,6 +873,27 @@ type RawKnowledge = Omit<Partial<KnowledgeConfig>, "keywords"> & {
 };
 type RawConfig = Omit<Partial<CopilotConfig>, "knowledge"> & { knowledge?: RawKnowledge };
 
+type RawAudio = Partial<CopilotConfig["audio"]>;
+
+/**
+ * Merge the `audio` section per key, treating an empty value in the higher-priority
+ * layer as absent.
+ *
+ * A device name is either a real device or nothing — there is no meaning to
+ * "override the user setting with the empty string", so the empty string is read as
+ * "this key was never filled in" and the lower layer keeps its value. See the call
+ * site for the failure this prevents.
+ */
+export function mergeAudio(base: RawAudio | undefined, over: RawAudio | undefined): RawAudio {
+  const merged: RawAudio = { ...base };
+  for (const [key, value] of Object.entries(over ?? {}) as [keyof RawAudio, unknown][]) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    (merged as Record<string, unknown>)[key] = value;
+  }
+  return merged;
+}
+
 function readConfigFile(path: string): RawConfig {
   if (!existsSync(path)) return {};
   try {
@@ -1014,6 +1035,17 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
   const resolvedNames = Array.isArray(copilot.names)
     ? copilot.names.filter((n): n is string => typeof n === "string" && !!n.trim())
     : DEFAULT_NAMES;
+  // `audio` merges per key too, and — unlike the other sections — an EMPTY value in
+  // the project layer counts as "not set" rather than as an override.
+  //
+  // The distinction cost a whole afternoon on 2026-08-27. A project config carried
+  // `audio: { micSource: "", monitorSource: "" }` (a scaffolded placeholder nobody
+  // filled in). The shallow spread replaced the user-level audio block wholesale, the
+  // configured mic vanished, parec fell back to the PulseAudio default — a digital
+  // input delivering noise — and every dictation in that project came back empty
+  // while the same setup worked everywhere else. Nobody writes `micSource: ""` to
+  // mean "use the default"; they write it because the key was scaffolded empty.
+  const audio = mergeAudio(userCfg.audio, projCfg.audio);
   const detect = { ...userCfg.detect, ...projCfg.detect };
   const wall = { ...userCfg.wall, ...projCfg.wall };
   const transcript = { ...userCfg.transcript, ...projCfg.transcript };
@@ -1057,11 +1089,11 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       model: process.env.WHISPER_MODEL || fileCfg.whisper?.model || join(userConfigDir(), "models", "ggml-small.en.bin"),
     },
     audio: {
-      micSource: process.env.MIC_SOURCE || fileCfg.audio?.micSource || DEFAULTS.audio.micSource,
-      monitorSource: process.env.MONITOR_SOURCE || fileCfg.audio?.monitorSource || DEFAULTS.audio.monitorSource,
-      sampleRate: fileCfg.audio?.sampleRate ?? DEFAULTS.audio.sampleRate,
-      toneStart: fileCfg.audio?.toneStart || DEFAULTS.audio.toneStart,
-      toneEnd: fileCfg.audio?.toneEnd || DEFAULTS.audio.toneEnd,
+      micSource: process.env.MIC_SOURCE || audio.micSource || DEFAULTS.audio.micSource,
+      monitorSource: process.env.MONITOR_SOURCE || audio.monitorSource || DEFAULTS.audio.monitorSource,
+      sampleRate: audio.sampleRate ?? DEFAULTS.audio.sampleRate,
+      toneStart: audio.toneStart || DEFAULTS.audio.toneStart,
+      toneEnd: audio.toneEnd || DEFAULTS.audio.toneEnd,
     },
     knowledge: {
       adapter: knowledge.adapter ?? DEFAULTS.knowledge.adapter,

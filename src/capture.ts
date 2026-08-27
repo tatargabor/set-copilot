@@ -324,12 +324,20 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     // Silence at this point is what turned a one-line diagnosis into a recurring mystery.
     if (micTokens === 0) {
       const secs = Math.round(micBytes / 32_000);
+      // Name the device. Which input was actually recorded is the fact that resolves
+      // this class of bug, and it is the one thing nobody can see from the outside —
+      // an unset `micSource` silently lands on the PulseAudio default, which may be
+      // any device at all, including one that only produces noise.
+      const dev = cfg.audio.micSource || "the system default input (no micSource configured)";
       if (micBytes === 0) {
-        console.error("[set-copilot] EMPTY TRANSCRIPT: the mic delivered 0 bytes — the audio process never produced anything. Check `set-copilot sources` and that parec/sox works.");
+        console.error(`[set-copilot] EMPTY TRANSCRIPT: the mic delivered 0 bytes from ${dev} — the audio process never produced anything. Check \`set-copilot sources\` and that parec/sox works.`);
       } else if (micLevel.maxRms < SPEECH_RMS_THRESHOLD) {
-        console.error(`[set-copilot] EMPTY TRANSCRIPT: ${secs}s of audio arrived, but it never rose above the noise floor (max rms ${micLevel.maxRms} < ${SPEECH_RMS_THRESHOLD}) — nothing was spoken into THIS input. Check \`set-copilot sources\` and the input gain.`);
+        console.error(`[set-copilot] EMPTY TRANSCRIPT: ${secs}s of audio arrived from ${dev}, but it never rose above the noise floor (max rms ${micLevel.maxRms} < ${SPEECH_RMS_THRESHOLD}) — nothing was spoken into THIS input. Check \`set-copilot sources\` and the input gain.`);
       } else {
-        console.error(`[set-copilot] EMPTY TRANSCRIPT: speech-level audio reached the STT backend (max rms ${micLevel.maxRms}) but it returned no tokens — check the key and model with \`set-copilot doctor\`.`);
+        // Deliberately NOT phrased as "the backend is broken": room noise, a fan or a
+        // keyboard clear this threshold easily at high gain, and recording the wrong
+        // device is by far the likelier cause. Give both, likeliest first.
+        console.error(`[set-copilot] EMPTY TRANSCRIPT: ${secs}s of audio from ${dev} reached the STT backend at up to rms ${micLevel.maxRms}, and it returned no tokens. Either nothing intelligible was spoken into that input (noise alone reaches this level), or the backend is not transcribing — check \`set-copilot doctor\`.`);
       }
     }
 

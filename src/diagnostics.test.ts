@@ -269,7 +269,7 @@ describe("known-key set (D2 guard)", () => {
     }
     // The per-section merged objects, read one level deep. The lookbehind keeps string
     // literals out (`join(runtimeDir, "transcript.jsonl")` is a path, not a config read).
-    for (const m of body.matchAll(/(?<!["'`\w.])(knowledge|copilot|detect|wall|transcript)\??\.(\w+)/g)) {
+    for (const m of body.matchAll(/(?<!["'`\w.])(knowledge|copilot|detect|wall|transcript|audio)\??\.(\w+)/g)) {
       read.add(`${m[1]}.${m[2]}`);
     }
 
