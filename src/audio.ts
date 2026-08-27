@@ -199,6 +199,55 @@ function killAll(processes: ChildProcess[]): void {
   }
 }
 
+export interface InputGain {
+  /** Source name as PulseAudio knows it. */
+  source: string;
+  /** Volume in percent — 100 is unity. */
+  percent: number;
+  muted: boolean;
+}
+
+/**
+ * Read the PulseAudio input gain of a capture source.
+ *
+ * Worth a subprocess at startup because a drifting gain is a RECURRING cause of
+ * empty transcripts: conferencing apps adjust the per-device input volume and leave
+ * it there, and at ~60% this mic's speech landed at rms 68 — under anything an STT
+ * backend can work with. The capture used to have no way to say that; it just went
+ * quiet. Linux/PulseAudio only — everywhere else this returns null and the caller
+ * simply does not warn.
+ */
+export async function readInputGain(source?: string): Promise<InputGain | null> {
+  if (platform() !== "linux") return null;
+  return new Promise((resolve) => {
+    const proc = spawn("pactl", ["list", "sources"], { stdio: ["ignore", "pipe", "ignore"] });
+    let output = "";
+    proc.stdout!.on("data", (d: Buffer) => { output += d.toString(); });
+    proc.on("error", () => resolve(null)); // no pactl — nothing to report
+    proc.on("close", () => resolve(parseInputGain(output, source)));
+  });
+}
+
+/**
+ * Pull one source's volume and mute state out of `pactl list sources`.
+ *
+ * Without an explicit source name there is no reliable "the one we are recording"
+ * in this output, so we decline rather than warn about the wrong device.
+ */
+export function parseInputGain(pactlOutput: string, source?: string): InputGain | null {
+  if (!source) return null;
+  const blocks = pactlOutput.split(/\n(?=Source #)/);
+  for (const block of blocks) {
+    const name = block.match(/^\s*Name:\s*(.+)$/m)?.[1]?.trim();
+    if (name !== source) continue;
+    const percent = block.match(/^\s*Volume:.*?(\d+)%/m)?.[1];
+    const muted = /^\s*Mute:\s*yes/m.test(block);
+    if (percent === undefined) return null;
+    return { source, percent: Number(percent), muted };
+  }
+  return null;
+}
+
 /**
  * List available audio sources (for config discovery)
  */

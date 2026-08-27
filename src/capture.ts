@@ -11,7 +11,7 @@ import type { EventEmitter } from "node:events";
 
 import { loadConfig, keywordIndexPath } from "./config.js";
 import { claimRuntimeDir, RuntimeDirBusyError } from "./runtime-dir.js";
-import { startDualCapture, listSources } from "./audio.js";
+import { startDualCapture, listSources, readInputGain } from "./audio.js";
 import { SonioxRtClient, SonioxChunkClient } from "./soniox-rt.js";
 import { WhisperLocalClient } from "./whisper-local.js";
 import { TranscriptWriter } from "./transcript-writer.js";
@@ -110,6 +110,13 @@ export class LevelMeter {
  * magnitude higher. 300 sits in the empty band between the two.
  */
 export const SPEECH_RMS_THRESHOLD = 300;
+
+/**
+ * Below this input gain a capture is worth a warning. Measured on this hardware:
+ * at 59% (-13.83 dB) speech reached rms 68 and transcribed to nothing; at 100% the
+ * same mic in the same room produced tokens immediately.
+ */
+const GAIN_WARN_PERCENT = 75;
 
 export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   const cfg = loadConfig();
@@ -343,4 +350,18 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
 
   void listSources; // available for `set-copilot sources`
   console.log("[set-copilot] Recording — Ctrl+C to stop");
+
+  // A gain that drifted down is the one root cause you cannot hear and cannot see in
+  // the byte counter, and it recurs — conferencing apps move the per-device input
+  // volume and leave it there. Say it at startup, before three minutes are wasted.
+  void readInputGain(cfg.audio.micSource || undefined).then((gain) => {
+    if (!gain) return;
+    if (gain.muted) {
+      console.error(`[set-copilot] WARNING: the mic (${gain.source}) is MUTED — nothing will be transcribed.`);
+    } else if (gain.percent < GAIN_WARN_PERCENT) {
+      console.error(`[set-copilot] WARNING: mic input gain is ${gain.percent}% — low gain has produced empty transcripts before. Raise it with: pactl set-source-volume ${gain.source} 100%`);
+    } else {
+      console.log(`[set-copilot] Mic gain: ${gain.percent}%`);
+    }
+  });
 }
