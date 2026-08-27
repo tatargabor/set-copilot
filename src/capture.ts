@@ -56,6 +56,61 @@ function attachReconnectLogging(
   });
 }
 
+/**
+ * Running signal level over s16le mono audio.
+ *
+ * `rms` is the loudness of a whole window, `peak` the loudest single sample. Speech
+ * moves rms into the thousands; a room's noise floor sits in the tens or low
+ * hundreds, and a digital input with nothing plugged into it reads ~1. That
+ * distinction is the whole point: it separates "the mic hears you" from "the mic is
+ * delivering silence at a perfect 32 kB/s".
+ */
+export class LevelMeter {
+  private sumSquares = 0;
+  private samples = 0;
+  /** Loudest sample in the current window. */
+  peak = 0;
+  /** Loudest rms of any window so far — survives reset(), so it answers "did anything
+   *  ever reach speech level during this capture?". */
+  peakRms = 0;
+
+  add(chunk: Buffer): void {
+    for (let i = 0; i + 1 < chunk.length; i += 2) {
+      const v = chunk.readInt16LE(i);
+      this.sumSquares += v * v;
+      this.samples++;
+      const a = v < 0 ? -v : v;
+      if (a > this.peak) this.peak = a;
+    }
+  }
+
+  get rms(): number {
+    return this.samples ? Math.round(Math.sqrt(this.sumSquares / this.samples)) : 0;
+  }
+
+  /** Highest rms seen anywhere in the capture, current window included. */
+  get maxRms(): number {
+    return Math.max(this.peakRms, this.rms);
+  }
+
+  /** Close the current window and open a new one. */
+  reset(): void {
+    if (this.rms > this.peakRms) this.peakRms = this.rms;
+    this.sumSquares = 0;
+    this.samples = 0;
+    this.peak = 0;
+  }
+}
+
+/**
+ * Above this rms a window holds speech rather than room noise.
+ *
+ * Measured on the capture that failed on 2026-08-27: 44 consecutive seconds of noise
+ * floor at rms 68 (peak ~270), while normal speech into the same mic sits an order of
+ * magnitude higher. 300 sits in the empty band between the two.
+ */
+export const SPEECH_RMS_THRESHOLD = 300;
+
 export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   const cfg = loadConfig();
 
@@ -125,7 +180,11 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     if (!micOnly) sysClient = new SonioxChunkClient(soniox, "system", 10_000);
   }
 
+  /** Any token at all from the mic — zero of these is the symptom we must explain. */
+  let micTokens = 0;
+
   micClient.on("transcript", (event) => {
+    micTokens++;
     writer.onTranscript(event);
     if (event.isFinal && event.text.trim()) {
       process.stdout.write(`\r[mic] ${event.text.trim().slice(0, 80)}\n`);
@@ -175,10 +234,18 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   // Byte counters: the single most useful signal when "nothing happens".
   // 16 kHz s16le mono = 32 000 B/s per stream — 0 bytes means the audio
   // process is not delivering (wrong device, broken parec/sox binary).
+  //
+  // Bytes alone are NOT enough, and the gap cost a whole dictation on 2026-08-27:
+  // parec on a live-but-deaf input delivers a flawless 32 kB/s of near-silence, so the
+  // counter climbed, the socket stayed open, Soniox correctly returned nothing, and the
+  // capture reported no problem for three minutes. Hence the level meters — bytes say
+  // the pipe is open, rms says whether anything is coming through it.
   let micBytes = 0;
   let sysBytes = 0;
-  capture.micStream.on("data", (chunk: Buffer) => { micBytes += chunk.length; micClient.sendAudio(chunk); });
-  if (sysClient) capture.systemStream.on("data", (chunk: Buffer) => { sysBytes += chunk.length; sysClient!.sendAudio(chunk); });
+  const micLevel = new LevelMeter();
+  const sysLevel = new LevelMeter();
+  capture.micStream.on("data", (chunk: Buffer) => { micBytes += chunk.length; micLevel.add(chunk); micClient.sendAudio(chunk); });
+  if (sysClient) capture.systemStream.on("data", (chunk: Buffer) => { sysBytes += chunk.length; sysLevel.add(chunk); sysClient!.sendAudio(chunk); });
   capture.micStream.on("error", (err) => console.error(`[set-copilot] Mic stream: ${err.message}`));
   capture.systemStream.on("error", (err) => console.error(`[set-copilot] Sys stream: ${err.message}`));
 
@@ -192,8 +259,37 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   }, 5000);
 
   const audioStats = setInterval(() => {
-    console.log(`[set-copilot] audio: mic=${Math.round(micBytes / 1024)}KB sys=${Math.round(sysBytes / 1024)}KB`);
+    // Level of the minute just ended, not of the whole capture — a mic that goes
+    // dead halfway through has to be visible while it is still happening.
+    const mic = `mic=${Math.round(micBytes / 1024)}KB rms=${micLevel.rms} peak=${micLevel.peak}`;
+    const sys = micOnly ? "" : ` sys=${Math.round(sysBytes / 1024)}KB rms=${sysLevel.rms}`;
+    console.log(`[set-copilot] audio: ${mic}${sys} tokens=${micTokens}`);
+    micLevel.reset();
+    sysLevel.reset();
   }, 60_000);
+
+  /**
+   * The deaf-capture watchdog.
+   *
+   * Two failures look identical from the outside — an empty transcript — and neither
+   * said anything until now:
+   *   - audio flows but never rises above the noise floor (wrong input device, muted
+   *     headset, gain too low, nobody near the mic)
+   *   - the level is fine but the STT backend hands back nothing
+   * They need opposite fixes, so the message has to name which one it is.
+   */
+  let deafWarned = false;
+  const deafCheck = setInterval(() => {
+    if (deafWarned || micBytes === 0) return;
+    deafWarned = true;
+    if (micLevel.maxRms < SPEECH_RMS_THRESHOLD) {
+      console.error(`[set-copilot] WARNING: 30s of audio, but the level never rose above the noise floor (max rms ${micLevel.maxRms}, speech starts around ${SPEECH_RMS_THRESHOLD}) — nothing can be transcribed from this. Check that the input in \`set-copilot sources\` is the one you speak into, and its gain.`);
+    } else if (micTokens === 0) {
+      console.error("[set-copilot] WARNING: speech-level audio for 30s but not one transcript token has come back — the STT backend is taking the audio and returning nothing. Check the key and model with `set-copilot doctor`.");
+    } else {
+      deafWarned = false; // healthy: leave the watchdog armed for a later failure
+    }
+  }, 30_000);
 
   /**
    * Order matters: stop the mic FIRST (no new audio), then ask Soniox to flush the
@@ -208,12 +304,27 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     console.log("\n[set-copilot] Stopping...");
     clearTimeout(noAudioCheck);
     clearInterval(audioStats);
+    clearInterval(deafCheck);
     capture.stop();
 
     await Promise.all([
       micClient.finalize(),
       sysClient ? sysClient.finalize() : Promise.resolve(),
     ]);
+
+    // An empty transcript has to explain itself HERE — stop is the moment someone is
+    // actually reading, and with `/ds` running in the background it is the only moment.
+    // Silence at this point is what turned a one-line diagnosis into a recurring mystery.
+    if (micTokens === 0) {
+      const secs = Math.round(micBytes / 32_000);
+      if (micBytes === 0) {
+        console.error("[set-copilot] EMPTY TRANSCRIPT: the mic delivered 0 bytes — the audio process never produced anything. Check `set-copilot sources` and that parec/sox works.");
+      } else if (micLevel.maxRms < SPEECH_RMS_THRESHOLD) {
+        console.error(`[set-copilot] EMPTY TRANSCRIPT: ${secs}s of audio arrived, but it never rose above the noise floor (max rms ${micLevel.maxRms} < ${SPEECH_RMS_THRESHOLD}) — nothing was spoken into THIS input. Check \`set-copilot sources\` and the input gain.`);
+      } else {
+        console.error(`[set-copilot] EMPTY TRANSCRIPT: speech-level audio reached the STT backend (max rms ${micLevel.maxRms}) but it returned no tokens — check the key and model with \`set-copilot doctor\`.`);
+      }
+    }
 
     writer.close();
     claim.release();
