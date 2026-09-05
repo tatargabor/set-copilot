@@ -49,6 +49,7 @@ export const EXTRA_KNOWN_KEYS: readonly string[] = [
   "knowledge.decisionIdPrefix",
   "copilot.instructions",
   "copilot.handoverCommand",
+  "copilot.dictationHandoverCommand",
   "wall.categoriesModule",
 ];
 

@@ -17,6 +17,7 @@
   },
   "copilot": {
     "instructions": "",
-    "handoverCommand": ""
+    "handoverCommand": "",
+    "dictationHandoverCommand": ""
   }
 }

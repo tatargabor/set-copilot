@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce } from "./handover.js";
+import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runDictationHandoverCommand } from "./handover.js";
 import type { CopilotConfig } from "./config.js";
 
 let dir: string;
@@ -212,5 +212,64 @@ describe("printTranscriptOnce (dictation path)", () => {
     expect(err).toHaveBeenCalled(); // the fallback is never silent
     expect(saved).toMatch(/dictation-.*\.jsonl$/); // and the archive still happened, once
     expect(readdirSync(dir)).not.toContain("dictation.jsonl");
+  });
+});
+
+describe("runDictationHandoverCommand (the dictation hand-off seam)", () => {
+  /** A config carrying just the one key the dictation seam reads. */
+  function withCommand(command?: string): CopilotConfig {
+    return { ...cfg, copilot: { dictationHandoverCommand: command } } as unknown as CopilotConfig;
+  }
+
+  it("does nothing when the project configured no command", () => {
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    runDictationHandoverCommand(withCommand(undefined), join(dir, "dictation-x.jsonl"));
+    expect(write).not.toHaveBeenCalled();
+    expect(err).not.toHaveBeenCalled();
+  });
+
+  it("passes the archived transcript and the runtime dir through the ENVIRONMENT", () => {
+    const archived = join(dir, "dictation-x.jsonl");
+    const proof = join(dir, "env-proof.txt");
+    runDictationHandoverCommand(
+      withCommand(`node -e "require('fs').writeFileSync(process.argv[1], process.env.SET_COPILOT_TRANSCRIPT + '|' + process.env.SET_COPILOT_DIR)" ${JSON.stringify(proof)}`),
+      archived,
+    );
+    expect(readFileSync(proof, "utf-8")).toBe(`${archived}|${dir}`);
+  });
+
+  it("NEVER lets the command's stdout reach stdout — that channel carries the user's dictated message", () => {
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    runDictationHandoverCommand(
+      withCommand(`node -e "console.log('CONTAMINATION')"`),
+      join(dir, "dictation-x.jsonl"),
+    );
+
+    // The whole point: a hand-off that announces where it saved the file must not be able to
+    // splice a sentence the user never spoke into the user's own instruction.
+    expect(write).not.toHaveBeenCalled();
+    // It is not swallowed either — it surfaces on stderr, marked as tooling.
+    expect(err.mock.calls.flat().join("\n")).toContain("CONTAMINATION");
+  });
+
+  it("forwards the command's stderr too, and reports a non-zero exit without throwing", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const archived = join(dir, "dictation-x.jsonl");
+
+    expect(() =>
+      runDictationHandoverCommand(
+        withCommand(`node -e "console.error('lift failed'); process.exit(3)"`),
+        archived,
+      ),
+    ).not.toThrow();
+
+    const said = err.mock.calls.flat().join("\n");
+    expect(said).toContain("lift failed");
+    // The archive is the invariant: a broken hand-off must say where the transcript still is.
+    expect(said).toContain("copilot.dictationHandoverCommand failed (exited with 3)");
+    expect(said).toContain(archived);
   });
 });

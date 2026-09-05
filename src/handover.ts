@@ -81,11 +81,52 @@ export interface HandoverPaths {
  * transcript landed reaches the operator instead of vanishing into a buffer.
  */
 export function runHandoverCommand(cfg: CopilotConfig, paths: HandoverPaths): void {
-  const command = cfg.copilot.handoverCommand;
+  runProjectHandover(cfg.copilot.handoverCommand, "copilot.handoverCommand", cfg, paths, true);
+}
+
+/**
+ * The same seam for a DICTATION stop — with the child's stdout deliberately NOT inherited.
+ *
+ * This is the one difference that makes it a separate entry point rather than a second call
+ * to `runHandoverCommand`, and it is not a style choice. On the dictation path stdout is the
+ * channel the user's spoken words travel on: `printTranscriptOnce` has just written the
+ * stitched message there, and whatever the consumer reads next it reads as part of that
+ * message. A project script announcing "saved to docs/inputs/dictation/…" on stdout would
+ * therefore splice a sentence the user never said into the user's own instruction — a
+ * corruption with no recording to go back to, exactly the failure `printTranscriptOnce`'s
+ * own comment describes for a bad word join.
+ *
+ * So it is captured and re-emitted on stderr, prefixed. Visible to the operator, invisible to
+ * the message. Everything else — the environment, the timeout, the "cannot fail the handover"
+ * posture — is shared with the meeting path, because it is literally the same function.
+ *
+ * A dictation has no derived artifacts (the text is a message, not a document), so the
+ * command is told only `SET_COPILOT_TRANSCRIPT` and `SET_COPILOT_DIR`.
+ */
+export function runDictationHandoverCommand(cfg: CopilotConfig, archived: string): void {
+  runProjectHandover(cfg.copilot.dictationHandoverCommand, "copilot.dictationHandoverCommand", cfg, { archived }, false);
+}
+
+/**
+ * Run a project hand-off command. Shared by both paths; `inheritStdout` is the only knob,
+ * and the reason it exists is written on `runDictationHandoverCommand`.
+ *
+ * stdio for the meeting path is inherited, so the project's own report of where the
+ * transcript landed reaches the operator instead of vanishing into a buffer. For dictation
+ * the same output is captured and forwarded to stderr instead.
+ */
+function runProjectHandover(
+  command: string | undefined,
+  key: string,
+  cfg: CopilotConfig,
+  paths: HandoverPaths,
+  inheritStdout: boolean,
+): void {
   if (!command) return;
   const result = spawnSync(command, {
     shell: true,
-    stdio: "inherit",
+    stdio: inheritStdout ? "inherit" : ["ignore", "pipe", "pipe"],
+    encoding: "utf-8",
     timeout: HANDOVER_COMMAND_TIMEOUT_MS,
     cwd: process.cwd(),
     env: {
@@ -96,6 +137,7 @@ export function runHandoverCommand(cfg: CopilotConfig, paths: HandoverPaths): vo
       ...(paths.structured ? { SET_COPILOT_TRANSCRIPT_JSONL: paths.structured } : {}),
     },
   });
+  if (!inheritStdout) forwardToStderr(result.stdout, result.stderr);
   const failure =
     result.error ? result.error.message
     : result.signal === "SIGTERM" ? `timed out after ${HANDOVER_COMMAND_TIMEOUT_MS / 1000}s`
@@ -103,9 +145,24 @@ export function runHandoverCommand(cfg: CopilotConfig, paths: HandoverPaths): vo
     : null;
   if (failure) {
     console.error(
-      `[set-copilot] copilot.handoverCommand failed (${failure}): ${command}\n` +
+      `[set-copilot] ${key} failed (${failure}): ${command}\n` +
       `              The transcript is handed over and intact at ${paths.archived}`,
     );
+  }
+}
+
+/**
+ * Re-emit a captured hand-off's output on stderr, one prefixed line at a time.
+ *
+ * Prefixed rather than raw because this text lands next to the dictated message in the
+ * same terminal scrollback: the marker is what tells a reader (and the model reading the
+ * stop's output) that these lines are the tooling talking, not the speaker.
+ */
+function forwardToStderr(...streams: (string | null | undefined)[]): void {
+  for (const stream of streams) {
+    for (const line of (stream ?? "").split("\n")) {
+      if (line.trim()) console.error(`[set-copilot] handover: ${line}`);
+    }
   }
 }
 

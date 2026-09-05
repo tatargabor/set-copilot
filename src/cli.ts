@@ -42,7 +42,7 @@ import {
   digestMarkdownPath, type CopilotConfig,
 } from "./config.js";
 import { capturePidPath, captureAlive } from "./runtime-dir.js";
-import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runHandoverCommand } from "./handover.js";
+import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runDictationHandoverCommand, runHandoverCommand } from "./handover.js";
 import {
   applySkillInstall, destLinkTarget, inspectDest, planSkillInstall, resolveInstallMode, skillNames,
 } from "./skill-install.js";
@@ -751,8 +751,15 @@ async function cmdStop(print = false): Promise<void> {
  */
 function handoverAtStop(cfg: CopilotConfig, print: boolean): void {
   // Dictation returns here: the raw text IS the user's message, not a document, so it
-  // gets no derived artifacts.
-  if (print) { printTranscriptOnce(cfg); return; }
+  // gets no derived artifacts. It does get the project hand-off, on its own entry point —
+  // the transcript still lands in a gitignored runtime dir, and until 2026-09-05 nothing
+  // lifted it out unless a human remembered to. See `runDictationHandoverCommand` for why
+  // that one may not inherit stdout.
+  if (print) {
+    const dictated = printTranscriptOnce(cfg);
+    if (dictated) runDictationHandoverCommand(cfg, dictated);
+    return;
+  }
   const saved = handoverTranscriptOnce(cfg);
   if (!saved) { console.log("[set-copilot] Nothing to hand over"); return; }
   console.log(`[set-copilot] Transcript saved: ${saved}`);

@@ -567,3 +567,28 @@ describe("copilot.handoverCommand (the project hand-off seam)", () => {
     }
   });
 });
+
+describe("copilot.dictationHandoverCommand (the dictation hand-off seam)", () => {
+  it("is absent by default — a project that does not ask for it sees no change", () => {
+    expect(loadConfig(project).copilot.dictationHandoverCommand).toBeUndefined();
+  });
+
+  it("resolves from the project config, trimmed", () => {
+    writeCfg(project, { copilot: { dictationHandoverCommand: "  node scripts/dictation-archive.mjs  " } });
+    expect(loadConfig(project).copilot.dictationHandoverCommand).toBe("node scripts/dictation-archive.mjs");
+  });
+
+  it("is INDEPENDENT of handoverCommand — the two paths write to different places", () => {
+    writeCfg(project, { copilot: { handoverCommand: "node meeting.mjs" } });
+    const cfg = loadConfig(project).copilot;
+    expect(cfg.handoverCommand).toBe("node meeting.mjs");
+    expect(cfg.dictationHandoverCommand).toBeUndefined();
+  });
+
+  it("drops a blank or a non-string rather than throwing", () => {
+    for (const bad of ["", "   ", 42, [], {}]) {
+      writeCfg(project, { copilot: { dictationHandoverCommand: bad } });
+      expect(loadConfig(project).copilot.dictationHandoverCommand).toBeUndefined();
+    }
+  });
+});

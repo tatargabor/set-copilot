@@ -151,6 +151,26 @@ export interface CopilotPromptConfig {
    */
   handoverCommand?: string;
   /**
+   * The project's own hand-off for a DICTATION stop (`stop --print`), run after the
+   * transcript was printed and archived. Same contract as `handoverCommand` — same
+   * environment, same "cannot fail the handover" posture — with one difference that is
+   * the whole reason it is a separate key rather than a reuse of that one:
+   *
+   * **The child's stdout is NOT inherited here.** On the dictation path stdout carries the
+   * user's spoken message to the model, so a project script printing "saved to docs/inputs/…"
+   * would splice its own line into what the user said. Whatever the command prints is
+   * captured and re-emitted on stderr, prefixed, so it stays visible without contaminating
+   * the message.
+   *
+   * Why the seam exists at all: dictation transcripts land in the gitignored runtime dir,
+   * and lifting them into a project's inputs was left to a later manual step. Measured in the
+   * consumer project, 2026-09-05: the lift script existed and NOTHING called it — every one of
+   * the 308 saved dictations came from a hand-run or a session hand-off, and the ones nobody
+   * ran it for are simply gone. The omission is silent: an inputs tree with no dictations in it
+   * looks exactly like a project where nobody ever dictated.
+   */
+  dictationHandoverCommand?: string;
+  /**
    * What the copilot answers to. Plain words, not regexes — naming one of these
    * marks the line `command: true`, and `poll` returns at once instead of waiting
    * for the silence gate. Default `["copilot"]`; add nicknames or slang freely
@@ -952,13 +972,13 @@ export function normalizeKeywords(raw: unknown): KeywordPattern[] {
  * a throw: this command runs after the archive, and nothing it can be must be able to stop
  * a transcript from being handed over.
  */
-function validHandoverCommand(raw: unknown): string | undefined {
+function validHandoverCommand(raw: unknown, key = "handoverCommand"): string | undefined {
   if (raw === undefined || raw === null) return undefined;
   // An empty string is "not configured", silently — the same idiom the shipped example
   // config already uses for `copilot.instructions`, so the key can sit in the example as
   // its own documentation without warning on every load.
   if (typeof raw === "string") return raw.trim() || undefined;
-  console.warn(`[set-copilot] Ignoring malformed copilot.handoverCommand: ${JSON.stringify(raw)}`);
+  console.warn(`[set-copilot] Ignoring malformed copilot.${key}: ${JSON.stringify(raw)}`);
   return undefined;
 }
 
@@ -1198,6 +1218,7 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       // `detect.*` regex: a malformed hand-off must not be able to take the stop down with
       // it — losing the hand-off costs a manual copy, losing the stop costs the transcript.
       handoverCommand: validHandoverCommand(copilot.handoverCommand),
+      dictationHandoverCommand: validHandoverCommand(copilot.dictationHandoverCommand, "dictationHandoverCommand"),
       names: resolvedNames,
     },
     detect: {
