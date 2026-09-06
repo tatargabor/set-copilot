@@ -1,6 +1,6 @@
 # P0 — capture goes deaf and nothing says so: no guard on an empty transcript
 
-**Filed:** 2026-08-22, from a real dictation session in the `consumer` consumer project.
+**Filed:** 2026-08-22, from a real dictation session in a consumer project.
 **Cost of this instance:** 10 minutes of speech, unrecoverable — the capture streams, it
 does not archive audio, so there is nothing to re-transcribe.
 

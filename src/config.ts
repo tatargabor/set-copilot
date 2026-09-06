@@ -163,7 +163,7 @@ export interface CopilotPromptConfig {
    * the message.
    *
    * Why the seam exists at all: dictation transcripts land in the gitignored runtime dir,
-   * and lifting them into a project's inputs was left to a later manual step. Measured in the
+   * and lifting them into a project's inputs was left to a later manual step. Measured in a
    * consumer project, 2026-09-05: the lift script existed and NOTHING called it — every one of
    * the 308 saved dictations came from a hand-run or a session hand-off, and the ones nobody
    * ran it for are simply gone. The omission is silent: an inputs tree with no dictations in it

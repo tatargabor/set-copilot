@@ -148,7 +148,7 @@ the record.
 ## Arm the watch — once per session
 
 ```
-Monitor({ command: "SET_AGENT_NAME=set-copilot ~/.nvm/versions/node/v22.22.0/bin/node ~/code2/set-agent-comm/bin/sac.mjs wait set-copilot", description: "agent-comm inbox", persistent: true })
+Monitor({ command: "SET_AGENT_NAME=set-copilot node <set-agent-comm>/bin/sac.mjs wait set-copilot", description: "agent-comm inbox", persistent: true })
 ```
 
 This is the **only** thing that starts a turn while you sit idle at the prompt. The file watcher
@@ -160,5 +160,7 @@ the message against your `focus`. Both err towards waking you.
 
 ## If you swallowed something
 
-`inbox` marks messages read. To undo that: `~/.nvm/versions/node/v22.22.0/bin/node ~/code2/set-agent-comm/bin/sac.mjs unread <room> [n]` makes the last n
+`inbox` marks messages read. To undo that: `node <set-agent-comm>/bin/sac.mjs unread <room> [n]` makes the last n
 unread again. Use it the moment you notice, rather than reconstructing from `history`.
+(`<set-agent-comm>` is the machine-local checkout of the set-agent-comm repo — resolve it
+before running anything.)
