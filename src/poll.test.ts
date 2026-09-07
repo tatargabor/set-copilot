@@ -147,3 +147,94 @@ describe("the fast lane reaches the copilot at once", () => {
     expect(pollDecision(true, [cmd, cmd], 0, 0)).toEqual({ kind: "ready", reason: "early" });
   });
 });
+
+// ---- the wall-input seam (wall-input-to-session) ----
+
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runPoll, wallInputsFrom } from "./poll.js";
+import type { CopilotConfig } from "./config.js";
+
+const input = (text: string, extra = ""): string =>
+  `${JSON.stringify({ ts: 1, route: "/wall", text })}${extra}`;
+
+describe("wallInputsFrom — the pure extraction", () => {
+  it("returns the texts and the offset past everything consumed", () => {
+    const lines = [input("első"), input("második")];
+    expect(wallInputsFrom(lines, 0)).toEqual({ texts: ["első", "második"], next: 2 });
+  });
+
+  it("skips blank and malformed lines without handing them over", () => {
+    const lines = ["", "not json", input("harmadik"), '{"route":"/wall"}'];
+    expect(wallInputsFrom(lines, 0)).toEqual({ texts: ["harmadik"], next: 4 });
+  });
+
+  it("yields nothing when the offset is at or beyond the end", () => {
+    const lines = [input("egy")];
+    expect(wallInputsFrom(lines, 1)).toEqual({ texts: [], next: 1 });
+    expect(wallInputsFrom(lines, 5)).toEqual({ texts: [], next: 5 });
+  });
+
+  it("resumes mid-file from a stored offset", () => {
+    const lines = [input("elso,"), input("masodik")];
+    expect(wallInputsFrom(lines, 1)).toEqual({ texts: ["masodik"], next: 2 });
+  });
+});
+
+describe("runPoll drains wall input — drain-before-dead, at command priority", () => {
+  const writes: string[] = [];
+  let orig: typeof process.stdout.write;
+
+  const capture = (dir: string): CopilotConfig =>
+    ({
+      runtimeDir: dir,
+      transcriptOutput: join(dir, "transcript.jsonl"),
+      copilot: { pollDwell: 0 },
+    }) as unknown as CopilotConfig;
+
+  const withCapturedStdout = async (fn: () => Promise<void>): Promise<void> => {
+    writes.length = 0; // a fresh buffer per capture — leftovers would fake ordering
+    orig = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await fn();
+    } finally {
+      process.stdout.write = orig;
+    }
+  };
+
+  it("hands the input over FIRST, even with the capture gone and the transcript unread", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wall-poll-"));
+    writeFileSync(join(dir, "wall-input.jsonl"), `${input("rajzold újra")}\n`);
+    writeFileSync(join(dir, "transcript.jsonl"), `${speech("addig is beszélünk.")}\n`);
+
+    await withCapturedStdout(() => runPoll(capture(dir), 0.3));
+    expect(writes.join("")).toBe(`{"type":"wall-input","text":"rajzold újra"}\n`);
+
+    // The transcript offset was NOT advanced by the input: the next poll gets the speech.
+    writes.length = 0;
+    await withCapturedStdout(() => runPoll(capture(dir), 0.3));
+    expect(writes.join("")).toContain("addig is beszélünk.");
+    expect(writes.join("")).not.toContain("wall-input");
+
+    // And only when nothing is left does the dead verdict arrive.
+    writes.length = 0;
+    await withCapturedStdout(() => runPoll(capture(dir), 0.3));
+    expect(writes.join("")).toBe('{"type":"capture-dead"}\n');
+  });
+
+  it("delivers a repeated input twice — operator input is never echo-deduped", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wall-poll-"));
+    writeFileSync(join(dir, "wall-input.jsonl"), `${input("ugyanaz")}\n${input("ugyanaz")}\n`);
+
+    await withCapturedStdout(() => runPoll(capture(dir), 0.3));
+    const out = writes.join("");
+    expect(out).toBe(`{"type":"wall-input","text":"ugyanaz"}\n{"type":"wall-input","text":"ugyanaz"}\n`);
+    expect(existsSync(join(dir, "wall-input-offset"))).toBe(true);
+    expect(readFileSync(join(dir, "wall-input-offset"), "utf-8").trim()).toBe("2");
+  });
+});

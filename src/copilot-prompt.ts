@@ -180,6 +180,21 @@ function renderNarration(narration: CopilotConfig["copilot"]["narration"]): stri
 }
 
 /**
+ * The wall's input seam (wall-input). Unconditional: the operator's keyboard into the
+ * session deserves the same "act on the event, never on an echo" protection the fast
+ * lane's words get — a transcript line that QUOTES a wall input must never trigger the
+ * action a second time.
+ */
+function renderWallInput(): string[] {
+  return [
+    "## Wall input — the operator's keyboard",
+    "",
+    'A poll batch may carry `{"type":"wall-input","text":"…"}`: the operator typed a message into the wall\'s strip and it is addressed to you. Treat it as a direct instruction at the same priority as a spoken fast-lane command — it returned early for exactly the same reason. Act on the EVENT, never on a similar line in the transcript (someone may read the message aloud or quote it back); never answer it on the wall as if you had said it — your reply is chat, as always.',
+    "",
+  ];
+}
+
+/**
  * The chat→wall mirroring mandate (wall-chat-mirror). Rendered ONLY when mirroring is
  * enabled, exactly like narration — so with mirroring off the policy text above is
  * byte-for-byte the pre-change output. It is an opt-in overlay on the primary voice: the
@@ -426,6 +441,11 @@ export function renderBoxPolicies(cfg: CopilotConfig): string[] {
  */
 export function renderCopilotPrompt(cfg: CopilotConfig): string {
   const parts = [renderAlerts(cfg.copilot.alerts, cfg.copilot)];
+  // The wall's input seam (wall-input): unconditional and small — it is a wire shape and
+  // a priority rule, not judgement, so it is always taught. It sits immediately after the
+  // alert policy so the opt-in overlays below still only ever APPEND: the invariant that
+  // disabling a channel leaves the policy before it byte-identical survives this section.
+  parts.push(renderWallInput().join("\n"));
   // The narration mandate is its own section, gated on `enabled` — so with narration
   // off the alert/engagement policy above is byte-for-byte the pre-change reactive text.
   if (cfg.copilot.narration?.enabled) {

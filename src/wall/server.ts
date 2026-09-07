@@ -13,7 +13,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 
 import type { CategoryRegistry } from "./categories.js";
@@ -23,6 +23,7 @@ import {
 } from "./director.js";
 import { normalizeEvent, normalizePending, normalizePromote } from "./emit.js";
 import type { EventSource } from "./event-source.js";
+import { normalizeWallInput, wallInputPath } from "./input.js";
 import { compileRedactor, splitForZones, type CompiledRedactor, type EventVariants } from "./redaction.js";
 import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
@@ -224,6 +225,11 @@ export interface WallServerOptions {
   stagingTtlMs?: number;
   /** How often to sweep for expired staged predictions. Default 5000 ms. */
   stagingSweepMs?: number;
+  /**
+   * Where `POST /api/input` appends (wall-input). Derived from `runtimeDir` when absent;
+   * injectable so a test can point the append at a temp file without a runtime dir.
+   */
+  inputPath?: string;
 }
 
 export class WallServer {
@@ -1010,6 +1016,66 @@ export class WallServer {
     return this.opts.windows.find((w) => w.route === route);
   }
 
+  /** Where viewer input appends: the injected test path, or the runtime dir's file. */
+  private inputPath(): string | undefined {
+    return this.opts.inputPath ?? (this.opts.runtimeDir ? wallInputPath(this.opts.runtimeDir) : undefined);
+  }
+
+  /**
+   * Receive one operator message from the wall page (wall-input).
+   *
+   * SECURITY NOTE: the wall binds 127.0.0.1 (`host ?? "127.0.0.1"` at the listen call),
+   * and that loopback bind is the WHOLE security story of this endpoint — anyone who can
+   * reach it is on the operator's machine. A future `--host 0.0.0.0` would expose a write
+   * path into the session's input file and must be a deliberate decision, not a flag flip.
+   *
+   * The append is safe without a lock: a single-process server, `appendFileSync` is
+   * O_APPEND, and nothing else writes this file (the poll only reads it and advances its
+   * own offset sidecar). The input is the viewer seam, NOT a display event: it is never
+   * broadcast to wall clients and never enters `wall-events.jsonl` — the producer's
+   * canonical log stays producers-only.
+   */
+  private handleInput(req: IncomingMessage, res: ServerResponse): void {
+    const status = (code: number, text: string) => {
+      res.writeHead(code, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(text);
+    };
+    if (req.method !== "POST") return status(405, "method not allowed — /api/input is POST-only");
+    const inputPath = this.inputPath();
+    if (!inputPath) return status(503, "no runtime dir — nowhere to append the input");
+
+    // Byte cap BEFORE parsing: a huge body is refused without ever reaching validation.
+    const MAX_BODY = 4096; // the client sends ~450; 4096 is generous room for any encoding
+    let size = 0;
+    const chunks: Buffer[] = [];
+    let overflow = false;
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > MAX_BODY) { overflow = true; chunks.length = 0; return; }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (overflow) return status(413, `body exceeds ${MAX_BODY} bytes`);
+      let text: unknown;
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf-8")) as { text?: unknown };
+        text = body.text;
+      } catch {
+        return status(400, "body is not valid JSON");
+      }
+      const checked = normalizeWallInput(text);
+      if (!checked.ok) return status(400, checked.reason);
+      try {
+        appendFileSync(inputPath, `${JSON.stringify({ ts: Date.now(), route: this.opts.windows[0]?.route ?? "/", text: checked.text })}\n`);
+      } catch (e) {
+        console.warn(`[set-copilot] wall: could not append wall input: ${(e as Error).message}`);
+        return status(500, "could not append the input");
+      }
+      res.writeHead(204);
+      res.end();
+    });
+  }
+
   private handle(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
@@ -1047,6 +1113,9 @@ export class WallServer {
       // Read-only (D2): the producer asks what it may promote; nothing here changes state.
       return this.json(res, { staged: this.promotable() });
     }
+    // The viewer seam (wall-input): the one route a human at the wall can write through.
+    // Everything above is GET-shaped by construction; this is the server's first POST.
+    if (path === "/api/input") return this.handleInput(req, res);
     if (path === "/media") {
       return this.serveMedia(res, url.searchParams.get("src") ?? "");
     }

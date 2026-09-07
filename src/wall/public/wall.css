@@ -171,6 +171,50 @@ body {
 .viewport-reset:hover { color: var(--text); border-color: var(--accent); }
 .viewport-reset[hidden] { display: none; }
 
+/* The operator's input (wall-input): strip-styled like the reset button, pushed to the
+   right edge. No autofocus by design — the page is a shared screen, and stealing focus
+   mid-meeting types a password into the copilot. */
+.wall-input {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.wall-input input {
+  font: inherit;
+  font-size: 11px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 8px;
+  width: 200px;
+}
+.wall-input input::placeholder { color: var(--muted); }
+.wall-input input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+.wall-input button {
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.wall-input button:hover { color: var(--text); border-color: var(--accent); }
+/* The send's transient outcome — the only echo it gets, so it must not pretend to be
+   wall content (wall.js: the text stream is the copilot's voice, not the operator's). */
+.wall-input-note {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* Splitter handles (wall-viewport-and-activity D1). Quiet until approached: a hairline
    that thickens and picks up the accent on hover, so it is findable without competing
    with the content on either side of it. They straddle the gap and occupy no track.

@@ -472,13 +472,15 @@ describe("narration mandate (live-narration)", () => {
     expect(out).toContain("At most **3** line(s) per emission.");
   });
 
-  it("disabled → no mandate, and the reactive policy is byte-for-byte unchanged", () => {
+  it("disabled → no mandate, and the reactive policy is unperturbed", () => {
     const off = renderCopilotPrompt(base({ enabled: false, verbosity: "normal", maxLines: 1 }));
     const on = renderCopilotPrompt(base({ enabled: true, verbosity: "normal", maxLines: 1 }));
     expect(off).not.toContain("## Narration");
-    // The reactive alert/engagement/feedback text is exactly renderAlerts — narration
-    // never perturbs it — and the enabled output only *appends* the mandate to it.
-    expect(off).toBe(renderAlerts(DEFAULT_ALERTS, base({ enabled: false, verbosity: "normal", maxLines: 1 }).copilot));
+    // The policy's floor is renderAlerts + the unconditional wall-input section (its rule
+    // is wire mechanics, not judgement — wall-input). Narration still only ever APPENDS
+    // to that floor; it never perturbs the alert/engagement/feedback text.
+    expect(off).toContain("## Wall input");
+    expect(off.startsWith(renderAlerts(DEFAULT_ALERTS, base({ enabled: false, verbosity: "normal", maxLines: 1 }).copilot))).toBe(true);
     expect(on.startsWith(off)).toBe(true);
   });
 });

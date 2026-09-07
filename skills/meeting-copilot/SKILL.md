@@ -181,6 +181,7 @@ Each notification is one batch of JSONL lines:
 - `question: true` = looks like a question that may need a knowledge-backed answer.
 - `type: "silence"` = a pause started — a good moment for a slightly deeper lookup.
 - `{"type":"reconnect", "downtime_ms": N}` = the transcription socket dropped and came back. Audio buffered during the gap is replayed, but if `downtime_ms` is large, **words may be missing here** — treat the surrounding text as possibly incomplete, and say so rather than guessing at a half-sentence.
+- `{"type":"wall-input", "text": "…"}` = **the operator typed this on the wall itself** (the strip's message box). Treat it as a direct instruction with the same priority as a fast-lane spoken command: act on this EVENT, never on a similar line you see in the transcript, which may be someone reading it aloud or quoting it.
 - `{"type":"capture-dead"}` = capture stopped (stop/timeout/crash); the Monitor exits — process remaining lines and give the closing summary.
 
 #### Phase 4: Continuous Analysis

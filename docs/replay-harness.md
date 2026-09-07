@@ -294,3 +294,19 @@ reakciónak. A kategória-nevek ott vannak és nem a motorban: a taxonómia a pr
 | A `poll` eldobta a capture végén olvasatlanul maradt sorokat — élő meetingen a záró perceket | javítva (`poll-drains-before-capture-dead`) |
 | A fal-események nem hordoztak időbélyeget — egy terepi jelentés sosem volt ellenőrizhető | javítva (`wall-events-carry-a-timestamp`) |
 | „Hiányos rajzolási szerződés" | **cáfolva** — a teszt-prompt nem töltötte be a policy-t |
+
+## Wall input as a second harness-drivable seam
+
+Since `wall-input-to-session`, `poll` tails a second file in the runtime dir:
+`wall-input.jsonl` — the seam a human at the wall writes through (`POST /api/input` → one
+JSON line `{"ts", "route", "text"}`), surfaced to the session as
+`{"type":"wall-input","text":…}` at command-class priority, drained before a
+`capture-dead` verdict. Because it is a plain append-only file, the harness can drive it
+exactly like the transcript: append lines to inject operator input. It is not broadcast
+to wall clients and never enters `wall-events.jsonl`.
+
+Two facts to keep straight when driving it: the wall resets the seam on every start
+(rotating a non-empty file aside and zeroing `wall-input-offset`), so a harness that
+restarts the wall must not expect earlier inputs to be re-delivered; and `replay-score`
+currently ignores wall-input events entirely, so scoring operator-input handling is
+future work.

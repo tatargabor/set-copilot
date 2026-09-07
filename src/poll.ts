@@ -61,6 +61,32 @@ function filterLines(lines: string[]): string[] {
   return out;
 }
 
+/**
+ * Extract operator-typed wall inputs (wall-input) from raw JSONL lines.
+ *
+ * Pure, and deliberately SEPARATE from `filterLines`: the transcript's echo-dedup exists
+ * because a recogniser repeats itself, but an operator who sends the same instruction
+ * twice means it twice — the dedup would silently swallow the second send. Blank and
+ * malformed lines are skipped (a half-written line is never handed over), and `next`
+ * points past everything consumed so the offset only ever advances over content.
+ */
+export function wallInputsFrom(lines: string[], last: number): { texts: string[]; next: number } {
+  const texts: string[] = [];
+  let next = last;
+  for (let i = last; i < lines.length; i++) {
+    next = i + 1; // consumed, valid or not — the file is append-only operator input
+    let text: string | undefined;
+    try {
+      const o = JSON.parse(lines[i]) as { text?: unknown };
+      if (typeof o?.text === "string" && o.text.trim()) text = o.text;
+    } catch {
+      text = undefined;
+    }
+    if (text !== undefined) texts.push(text);
+  }
+  return { texts, next };
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** What one tick of the poll decides to do. */
@@ -135,11 +161,21 @@ export function pollDecision(alive: boolean, all: string[], last: number, dwell 
 }
 
 /**
- * Long-poll the transcript. Blocks until a reaction-worthy event appears or
- * maxWaitSec elapses, then prints the accumulated (filtered) lines to stdout.
+ * Long-poll the transcript (and the wall-input seam, wall-input-to-session). Blocks until
+ * a reaction-worthy event appears or maxWaitSec elapses, then prints the accumulated
+ * (filtered) lines to stdout.
  *
  * Early return when the fresh batch contains an urgent line, a question, or a
- * silence event that closes a spoken thought unit.
+ * silence event that closes a spoken thought unit — or an operator input from the wall,
+ * which returns at the next tick like a spoken command: it is an instruction, and the
+ * inference gate the poll exists for has nothing to do with it.
+ *
+ * Wall input is checked BEFORE the dead verdict, for the same reason the transcript is
+ * drained before it: reporting a dead capture before reading what is pending would
+ * discard it, and an operator who typed at the wall deserves their instruction delivered
+ * even as the capture exits. The transcript offset is NOT advanced by wall input — the
+ * two channels keep their own offsets, and a repeated wall input is a repeated
+ * instruction, never an echo.
  *
  * When the capture is gone, the remaining unread lines are handed over FIRST and
  * {"type":"capture-dead"} is emitted on the following poll, once there is nothing
@@ -149,6 +185,8 @@ export function pollDecision(alive: boolean, all: string[], last: number, dwell 
 export async function runPoll(cfg: CopilotConfig, maxWaitSec = 60): Promise<void> {
   const file = cfg.transcriptOutput;
   const stateFile = join(cfg.runtimeDir, "poll-offset");
+  const inputFile = join(cfg.runtimeDir, "wall-input.jsonl");
+  const inputStateFile = join(cfg.runtimeDir, "wall-input-offset");
   // 250ms, not 2000: the tick is pure detection granularity added to every reaction,
   // and re-reading one small file eight times a second costs nothing next to the
   // seconds it saves. Measured: the old tick added up to 2s to every round.
@@ -159,12 +197,34 @@ export async function runPoll(cfg: CopilotConfig, maxWaitSec = 60): Promise<void
     const n = parseInt(readFileSync(stateFile, "utf-8").trim(), 10);
     if (Number.isFinite(n)) last = n;
   }
+  let lastInput = 0;
+  if (existsSync(inputStateFile)) {
+    const n = parseInt(readFileSync(inputStateFile, "utf-8").trim(), 10);
+    if (Number.isFinite(n)) lastInput = n;
+  }
 
   const readAll = (): string[] =>
     existsSync(file) ? readFileSync(file, "utf-8").split("\n").filter(Boolean) : [];
+  const readInputs = (): string[] =>
+    existsSync(inputFile) ? readFileSync(inputFile, "utf-8").split("\n").filter(Boolean) : [];
+
+  /** Emit every pending wall input; true when anything was written. */
+  const drainInputs = (): boolean => {
+    const { texts, next } = wallInputsFrom(readInputs(), lastInput);
+    if (!texts.length) return false;
+    for (const t of texts) {
+      process.stdout.write(`${JSON.stringify({ type: "wall-input", text: t })}\n`);
+    }
+    lastInput = next;
+    writeFileSync(inputStateFile, String(lastInput));
+    return true;
+  };
 
   const start = Date.now();
   while (Date.now() - start < maxWaitSec * 1000) {
+    // Wall input first: it is an instruction, and it must also survive the capture's
+    // exit — drain-before-dead, the same order the transcript side already paid for.
+    if (drainInputs()) return;
     const decision = pollDecision(captureAlive(cfg), readAll(), last, cfg.copilot.pollDwell);
     if (decision.kind === "dead") {
       process.stdout.write('{"type":"capture-dead"}\n');
@@ -174,6 +234,7 @@ export async function runPoll(cfg: CopilotConfig, maxWaitSec = 60): Promise<void
     await sleep(tick);
   }
 
+  drainInputs();
   const all = readAll();
   if (all.length > last) {
     const pending = filterLines(all.slice(last));

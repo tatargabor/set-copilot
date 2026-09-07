@@ -467,9 +467,72 @@ function ensureStrip() {
   reset.addEventListener("click", resetViewport);
   statusEl.appendChild(reset);
 
+  // The operator's keyboard into the session (wall-input): the strip is the one piece of
+  // furniture guaranteed in every layout, same reasoning as the reset button above.
+  const form = document.createElement("form");
+  form.id = "wall-input";
+  form.className = "wall-input";
+  form.autocomplete = "off";
+  const msg = document.createElement("input");
+  msg.type = "text";
+  msg.maxLength = 400;
+  msg.placeholder = "Üzenet a copilotnak…";
+  msg.setAttribute("aria-label", "Üzenet a copilotnak");
+  const send = document.createElement("button");
+  send.type = "submit";
+  send.textContent = "Küldés";
+  form.append(msg, send);
+  form.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    sendWallInput(msg);
+  });
+  statusEl.appendChild(form);
+
   stripParts = { label, chans };
   updateResetAffordance();
   return stripParts;
+}
+
+/**
+ * A one-shot note on the strip — the least-mechanism echo of a wall-input send.
+ *
+ * Deliberately NOT a display event: echoing the operator's text into the wall's text
+ * stream would fake a copilot emission and lie about who said it. The confirmation says
+ * the send happened; nothing more.
+ */
+let stripNoteTimer = null;
+function flashStripNote(text) {
+  if (!statusEl) return;
+  let note = statusEl.querySelector(".wall-input-note");
+  if (!note) {
+    note = document.createElement("span");
+    note.className = "wall-input-note";
+    statusEl.appendChild(note);
+  }
+  note.textContent = text;
+  clearTimeout(stripNoteTimer);
+  stripNoteTimer = setTimeout(() => note.remove(), 2000);
+}
+
+async function sendWallInput(msg) {
+  const text = msg.value;
+  // A drag owns the pointer and the operator's attention; a send mid-drag is a mis-click.
+  if (!text.trim() || document.body.classList.contains("dragging-col") || document.body.classList.contains("dragging-row")) return;
+  try {
+    const res = await fetch("/api/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ route, text }),
+    });
+    if (res.status === 204) {
+      msg.value = "";
+      flashStripNote("✓ elküldve");
+      return;
+    }
+    flashStripNote("✗ nem sikerült");
+  } catch {
+    flashStripNote("✗ nem sikerült");
+  }
 }
 
 const CHANNEL_STATE_TEXT = {
