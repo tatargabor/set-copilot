@@ -5,7 +5,8 @@
  */
 
 import {
-  gridTemplate, boxesForCategory, renderForEvent, connectionState, applyViewportOverride, stripState,
+  gridTemplate, boxesForCategory, renderForEvent, connectionState, applyViewportOverride,
+  dragPairShares, stripState,
 } from "./wall-core.mjs";
 import { parseWallText } from "./text-format.mjs";
 import { appendBlocks } from "./text-render.mjs";
@@ -80,6 +81,10 @@ function mountGrid(win) {
   // After the boxes exist: a row with no declared size takes it from the box occupying it,
   // so the template can only be derived once they are known.
   applyGrid();
+  // replaceChildren() removed the handles with everything else; forget the remembered
+  // shape so syncHandles rebuilds them even when the layout did not change.
+  handlesShape = null;
+  syncHandles(root);
 }
 
 // ---- runtime layout switch (wall-chat-mirror) ----
@@ -97,6 +102,7 @@ function onLayout(msg) {
   // made against tracks that no longer mean the same thing. Switching back finds that
   // window's own adjustment again, because storage is keyed per layout.
   applyGrid();
+  syncHandles(document.getElementById("wall"));
   const positions = new Set(msg.layout.areas.flat().filter((c) => c && c !== "."));
   for (const entry of boxEls.values()) {
     entry.el.style.display = positions.has(entry.box.position) ? "" : "none";
@@ -116,6 +122,16 @@ function onLayout(msg) {
 
 /** The layout currently mounted — the override is keyed to it, and re-read on a switch. */
 let currentLayout = null;
+
+/**
+ * The override an active drag is building, applied by applyGrid WITHOUT touching storage:
+ * it is written to localStorage once, on release (wall-splitter-and-drag-fixes). Two
+ * synchronous storage ops per mousemove bought nothing.
+ */
+let liveOverride = null;
+
+/** The shape (layout id + track counts) the current handle set was built for. */
+let handlesShape = null;
 
 const OVERRIDE_PREFIX = "set-copilot:wall:viewport";
 
@@ -141,23 +157,25 @@ function clearOverride(layoutId) {
 }
 
 /**
- * Derive the grid template, apply this viewer's override, paint it, and rebuild the handles.
+ * Derive the grid template, apply this viewer's override, paint it.
  *
  * The single place the grid is written. Mount, a runtime layout switch, a drag and a reset
  * all funnel through here, so there is exactly one description of what geometry the window
  * has — the failure mode otherwise is a drag that survives a layout switch on one path and
- * not another.
+ * not another. It deliberately does NOT touch the handles: they are grid items and move
+ * with the tracks on their own, and rebuilding them here used to destroy the element under
+ * the pointer on every mousemove of a drag (wall-splitter-and-drag-fixes).
  */
 function applyGrid() {
   const root = document.getElementById("wall");
   if (!root || !currentLayout) return;
   const boxes = [...boxEls.values()].map((e) => e.box);
   const base = gridTemplate(currentLayout, boxes);
-  const t = applyViewportOverride(base, readOverride(currentLayout.id), currentLayout.id);
+  const o = liveOverride ?? readOverride(currentLayout.id);
+  const t = applyViewportOverride(base, o, currentLayout.id);
   root.style.gridTemplateAreas = t.gridTemplateAreas;
   root.style.gridTemplateRows = t.gridTemplateRows;
   root.style.gridTemplateColumns = t.gridTemplateColumns;
-  buildHandles(root);
   updateResetAffordance();
 }
 
@@ -173,9 +191,11 @@ function resolvedTracks(root, axis) {
  *
  * Grid children can be placed by line number even under named areas, so a column handle is
  * a full-height item in the column left of the boundary, pinned to its trailing edge and
- * pulled half its width outward — it straddles the gap instead of stealing space from
- * either region. That is what keeps the handles out of the layout arithmetic entirely:
- * they occupy no track of their own.
+ * pulled over the gap by a negative margin (see wall.css for the arithmetic — the sign
+ * there is what centers the visible bar on the gap). That is what keeps the handles out of
+ * the layout arithmetic entirely: they occupy no track of their own, and as grid items
+ * they MOVE WITH THE TRACKS — which is why nothing here needs to run again while a drag
+ * only changes sizes.
  */
 function buildHandles(root) {
   for (const old of [...root.querySelectorAll(".splitter")]) old.remove();
@@ -184,6 +204,25 @@ function buildHandles(root) {
 
   for (let i = 0; i < cols - 1; i++) root.appendChild(makeHandle("columns", i, rows, cols));
   for (let i = 0; i < rows - 1; i++) root.appendChild(makeHandle("rows", i, rows, cols));
+}
+
+/**
+ * Rebuild the handles only when the grid's SHAPE changed.
+ *
+ * Handles depend on the track counts, never on the track sizes, so a drag — which changes
+ * only sizes — has no reason to come through here. Callers are the two things that change
+ * the shape: a mount and a runtime layout switch. mountGrid resets `handlesShape` because
+ * replaceChildren() removes the handles along with everything else, even when the layout
+ * id and counts come back identical.
+ */
+function syncHandles(root) {
+  if (!root || !currentLayout) return;
+  const cols = currentLayout.areas[0]?.length ?? 1;
+  const rows = currentLayout.areas.length;
+  const shape = `${currentLayout.id}:${cols}x${rows}`;
+  if (shape === handlesShape) return;
+  handlesShape = shape;
+  buildHandles(root);
 }
 
 function makeHandle(axis, index, rows, cols) {
@@ -214,27 +253,57 @@ function startDrag(ev, axis, index) {
   const sizes = resolvedTracks(root, axis);
   if (sizes.length < index + 2) return;
   const startPos = axis === "columns" ? ev.clientX : ev.clientY;
+  const totalPx = sizes.reduce((a, b) => a + b, 0);
+  // The whole gesture is measured against the layout it started on; if a runtime layout
+  // switch or a reconnect-bootstrap lands under the pointer, the drag is discarded — a px
+  // measurement against tracks that no longer exist must never be persisted (and the
+  // track-count check inside applyViewportOverride alone would miss the case where the
+  // counts coincidentally match).
+  const dragLayoutId = currentLayout.id;
+  const o = readOverride(dragLayoutId) ?? { layoutId: dragLayoutId };
+  o.layoutId = dragLayoutId;
+  // Only one form can hold an axis. A whole-axis override stays whole-axis when any
+  // boundary on that axis is dragged again (the newer gesture wins, measured px baked to
+  // shares); a pair override is refined by the SAME boundary and degraded to whole-axis
+  // shares by a DIFFERENT one — proportions that boundary's drag cannot express.
+  if (o[axis] && !Array.isArray(o[axis]) && !(o[axis].pair && o[axis].pair.index === index)) {
+    o[axis] = sizes.map((px) => px / totalPx);
+  }
+  liveOverride = o;
   ev.target.setPointerCapture?.(ev.pointerId);
   ev.preventDefault();
   document.body.classList.add(axis === "columns" ? "dragging-col" : "dragging-row");
 
+  const cancel = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    liveOverride = null;
+    document.body.classList.remove("dragging-col", "dragging-row");
+  };
   const move = (m) => {
+    if (!currentLayout || currentLayout.id !== dragLayoutId) return cancel();
     const delta = (axis === "columns" ? m.clientX : m.clientY) - startPos;
-    const next = sizes.slice();
-    next[index] = sizes[index] + delta;
-    next[index + 1] = sizes[index + 1] - delta;
-    // Push px through the pure function: it normalises to shares and clamps, so a drag
-    // past a region's floor stops there instead of collapsing it.
-    const o = readOverride(currentLayout.id) ?? { layoutId: currentLayout.id };
-    o.layoutId = currentLayout.id;
-    o[axis] = next;
-    writeOverride(o);
+    if (o[axis] && !Array.isArray(o[axis])) {
+      // Pair mode: the dragged boundary moves alone, untouched tracks stay verbatim.
+      // Push px through the pure function: it normalises to shares and keeps each side at
+      // or above the floor, so a drag past a region's floor stops there instead of
+      // collapsing it — and no other boundary moves to pay for it.
+      const p = dragPairShares(totalPx, sizes[index], sizes[index + 1], delta);
+      if (p) o[axis] = { pair: { index, a: p.a, b: p.b } };
+    } else {
+      // Whole-axis mode: normalise the measured px to shares; applyViewportOverride clamps.
+      if (!(totalPx > 0)) return;
+      const next = sizes.slice();
+      next[index] = sizes[index] + delta;
+      next[index + 1] = sizes[index + 1] - delta;
+      o[axis] = next.map((px) => px / totalPx);
+    }
     applyGrid();
   };
   const up = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-    document.body.classList.remove("dragging-col", "dragging-row");
+    cancel();
+    writeOverride(o);
+    updateResetAffordance();
     // The regions changed size; an auto-fitting graph should follow (D4 meets D1 here).
     for (const entry of boxEls.values()) entry.graph?.refit?.();
   };

@@ -51,11 +51,16 @@ floor needs.
 `${a}fr ${b}fr`. This is what preserves `auto` (and any other non-`fr` declaration) on
 untouched tracks — the current path rewrites the whole axis from px measurements, which is
 how a pinned `latest` row silently became a fixed fraction. The override gains an additive
-`pair = {axis, index, a, b}` branch, validated like the existing arrays and ignored
-silently when malformed; a legacy `columns`/`rows` override stays valid. Degradation,
-documented: if a whole-axis override exists and the operator drags a *second* boundary on
-that axis, the measured px are baked to shares for the whole axis (both forms cannot hold
-one axis; the newer gesture wins, exactly like today).
+per-axis form: an axis slot (`override.columns` / `override.rows`) may hold
+`{pair: {index, a, b}}` alongside the legacy number array, validated and ignored silently
+when malformed. Implementation refinement: the pair travels INSIDE the axis key rather
+than as a top-level `override.pair` — a top-level field could hold only one axis's pair,
+so the next drag on the other axis would clobber the first; per-axis slots keep both axes
+independently storable. A legacy whole-axis override stays valid. Degradation, documented:
+if a whole-axis override exists for an axis and the operator drags a *second* boundary on
+that axis (or a different boundary than an existing pair names), the measured px are
+baked to shares for the whole axis — both forms cannot hold one axis, and the newer
+gesture wins.
 
 **3. Handles rebuild only when the grid's shape changes.**
 Handles depend on track *count*, never track *size* — as grid items they move with the

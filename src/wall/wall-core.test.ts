@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 // The client's pure logic lives in a browser-loadable ES module; import it here
 // directly so the same code the browser runs is what the test exercises.
 import {
-  applyViewportOverride, boxesForCategory, connectionState, gridTemplate, MIN_TRACK_SHARE,
-  renderForEvent, stripState, zoneMatches,
+  applyPairToTracks, applyViewportOverride, boxesForCategory, connectionState, dragPairShares,
+  gridTemplate, MIN_TRACK_SHARE, renderForEvent, stripState, zoneMatches,
 } from "./public/wall-core.mjs";
 
 const stacked = { id: "stacked", areas: [["pinned"], ["stream"], ["canvas"]] };
@@ -176,6 +176,109 @@ describe("applyViewportOverride (wall-viewport-and-activity)", () => {
     const t = template();
     applyViewportOverride(t, { layoutId: "három-régió", columns: [3, 1] }, "három-régió");
     expect(t.gridTemplateColumns).toBe("1fr 1fr");
+  });
+
+  it("applies a pair to one axis while the other axis's declared sizes survive", () => {
+    // The pair form exists so dragging one boundary touches only that boundary. The rows
+    // here carry the declared "2fr 1fr" — including a non-fr track's right to survive.
+    const t = applyViewportOverride(
+      template(),
+      { layoutId: "három-régió", columns: { pair: { index: 0, a: 0.75, b: 0.25 } } },
+      "három-régió",
+    );
+    const [c1, c2] = tracks(t.gridTemplateColumns);
+    expect(c1 / (c1 + c2)).toBeCloseTo(0.75, 3);
+    expect(t.gridTemplateRows).toBe("2fr 1fr");
+    expect(t.gridTemplateAreas).toBe(template().gridTemplateAreas);
+  });
+
+  it("rejects a malformed pair rather than emitting broken CSS", () => {
+    for (const pair of [
+      { index: 1, a: 0.5, b: 0.5 }, // boundary 1 does not exist on a 2-track axis
+      { index: -1, a: 0.5, b: 0.5 },
+      { index: 0, a: NaN, b: 0.5 },
+      { index: 0, a: -1, b: 0.5 },
+      { index: 0, a: 0, b: 0 }, // a zero pair describes no geometry
+      { a: 0.5, b: 0.5 }, // no index
+    ]) {
+      const t = applyViewportOverride(template(), { layoutId: "három-régió", columns: { pair } }, "három-régió");
+      expect(t.gridTemplateColumns).toBe("1fr 1fr");
+    }
+  });
+});
+
+describe("dragPairShares (wall-splitter-and-drag-fixes)", () => {
+  // 1000px axis, floor 6% = 60px.
+  const total = 1000;
+
+  it("moves the dragged pair by the delta and nowhere else", () => {
+    // 400 + 600 with +100: exactly 500/500, expressed as shares of the axis.
+    const p = dragPairShares(total, 400, 600, 100);
+    expect(p!.a * total).toBeCloseTo(500, 6);
+    expect(p!.b * total).toBeCloseTo(500, 6);
+  });
+
+  it("conserves the pair sum exactly", () => {
+    for (const delta of [-350, -60, 0, 90, 340]) {
+      const p = dragPairShares(total, 400, 600, delta)!;
+      expect((p.a + p.b) * total).toBeCloseTo(1000, 6);
+    }
+  });
+
+  it("stops at the floor on the dragged side instead of collapsing the region", () => {
+    const p = dragPairShares(total, 400, 600, -500)!;
+    expect(p.a * total).toBeCloseTo(60, 6); // MIN_TRACK_SHARE * 1000
+    expect(p.b * total).toBeCloseTo(940, 6);
+  });
+
+  it("stops at the floor on the far side too", () => {
+    const p = dragPairShares(total, 400, 600, 540)!;
+    expect(p.b * total).toBeCloseTo(60, 6);
+    expect(p.a * total).toBeCloseTo(940, 6);
+  });
+
+  it("never moves a track outside the dragged pair (the water-filling defect)", () => {
+    // The regression this helper exists for: with three tracks, clamping the dragged pair
+    // must not donate the deficit to the third track — the caller splices only the pair.
+    const p = dragPairShares(total, 400, 300, -400)!;
+    expect(p.a * total).toBeCloseTo(60, 6);
+    expect(p.b * total).toBeCloseTo(640, 6);
+  });
+
+  it("splits an over-tight pair evenly rather than vanishing either side", () => {
+    // A pair whose sum cannot honour the floor on both sides: the only geometry that
+    // keeps either side from disappearing is the even split.
+    const p = dragPairShares(total, 60, 40, 25)!;
+    expect(p.a).toBeCloseTo(p.b, 9);
+  });
+
+  it("returns null on input that cannot describe a drag", () => {
+    expect(dragPairShares(0, 400, 600, 10)).toBeNull();
+    expect(dragPairShares(-100, 400, 600, 10)).toBeNull();
+    expect(dragPairShares(total, NaN, 600, 10)).toBeNull();
+    expect(dragPairShares(total, 400, Infinity, 10)).toBeNull();
+    expect(dragPairShares(total, 400, 600, NaN)).toBeNull();
+    expect(dragPairShares(total, 0, 0, 10)).toBeNull();
+  });
+});
+
+describe("applyPairToTracks (wall-splitter-and-drag-fixes)", () => {
+  it("splices the pair and leaves every other track verbatim — including auto", () => {
+    // This is the pinned-region guarantee: a content-driven `auto` track survives a
+    // boundary drag on its own axis untouched.
+    expect(applyPairToTracks("auto 1fr 2fr", 1, 0.3, 0.7)).toBe("auto 0.3fr 0.7fr");
+    expect(applyPairToTracks("2fr 1fr 1fr", 0, 0.65, 0.35)).toBe("0.65fr 0.35fr 1fr");
+  });
+
+  it("returns the input unchanged on a bad index", () => {
+    expect(applyPairToTracks("1fr 1fr", 2, 0.5, 0.5)).toBe("1fr 1fr");
+    expect(applyPairToTracks("1fr 1fr", -1, 0.5, 0.5)).toBe("1fr 1fr");
+    expect(applyPairToTracks("", 0, 0.5, 0.5)).toBe("");
+  });
+
+  it("rounds shares to the same precision the fr renderer uses", () => {
+    const out = applyPairToTracks("1fr 1fr", 0, 1 / 3, 2 / 3);
+    expect(out).toBe("0.3333fr 0.6667fr");
   });
 });
 

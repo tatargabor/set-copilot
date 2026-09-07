@@ -90,6 +90,47 @@ function toFrTracks(shares) {
 }
 
 /**
+ * Move ONE boundary: redistribute `deltaPx` between the two tracks that meet at it.
+ *
+ * Returns shares of `totalPx` (an `fr` pair), or null when the input cannot describe a
+ * drag. The pair's sum is conserved exactly, and each side is kept at or above the floor —
+ * which is why redistribution is deliberately NOT water-filled across the other tracks
+ * (wall-splitter-and-drag-fixes): the operator drags one boundary, so the geometry nobody
+ * touched must not move. When the dragged pair saturates at the floor the drag stops there;
+ * the pair always has room to satisfy the floor, because both sides start at or above it
+ * (the rendered state was already clamped) and the sum is conserved.
+ */
+export function dragPairShares(totalPx, aPx, bPx, deltaPx, minShare = MIN_TRACK_SHARE) {
+  const nums = [totalPx, aPx, bPx, deltaPx];
+  if (!nums.every((v) => typeof v === "number" && Number.isFinite(v))) return null;
+  if (!(totalPx > 0) || !(aPx + bPx > 0)) return null;
+  const sum = aPx + bPx;
+  const floorPx = minShare * totalPx;
+  // A pair this tight cannot honour the floor on both sides — split it evenly, which is
+  // the only geometry that keeps either side from vanishing.
+  if (sum <= 2 * floorPx) return { a: sum / 2 / totalPx, b: sum / 2 / totalPx };
+  const a = Math.min(sum - floorPx, Math.max(floorPx, aPx + deltaPx));
+  return { a: a / totalPx, b: (sum - a) / totalPx };
+}
+
+/**
+ * Splice a dragged pair into a CSS track list, leaving every other track VERBATIM.
+ *
+ * This is what preserves a content-driven (`auto`) track on an axis where some other
+ * boundary was dragged: the old path rewrote the whole axis from px measurements, which
+ * silently converted `auto` rows to a fixed fraction — defeating "a pinned region the
+ * stream cannot displace". A bad index returns the input unchanged.
+ */
+export function applyPairToTracks(trackList, index, a, b) {
+  const tracks = String(trackList || "").trim().split(/\s+/).filter(Boolean);
+  if (!Number.isInteger(index) || index < 0 || index + 1 >= tracks.length) return trackList;
+  const next = tracks.slice();
+  next[index] = `${Number(a.toFixed(4))}fr`;
+  next[index + 1] = `${Number(b.toFixed(4))}fr`;
+  return next.join(" ");
+}
+
+/**
  * Apply a viewer's viewport override to a derived grid template (wall-viewport-and-activity D3).
  *
  * An override is a per-viewer adjustment of the *track sizes* a window is rendered with —
@@ -98,27 +139,48 @@ function toFrTracks(shares) {
  * structural rather than a promise in a comment. That is also why it takes `layoutId`
  * separately instead of reaching into a layout object.
  *
+ * Each axis slot (`override.columns` / `override.rows`) holds one of two forms:
+ *
+ *  - A **number array** (legacy): whole-axis shares, water-filled and clamped so no track
+ *    falls below the floor.
+ *  - A **`{pair: {index, a, b}}` object** (wall-splitter-and-drag-fixes): a single
+ *    boundary's adjustment. Only the two named tracks change; every other track keeps its
+ *    declared size verbatim — including a content-driven `auto`. The pair travels inside
+ *    the axis key so one axis's pair adjustment can never clobber the other axis's.
+ *
  * Rejection is per axis and silent-but-total: a mismatched override leaves that axis at
  * the layout's declared proportions. Two ways to mismatch, both real:
  *
  *  - **A different layout** (D2). A runtime layout switch changes what the tracks *mean*;
  *    translating an old override onto new tracks would produce a geometry nobody chose.
- *  - **A different track count.** The stored override outlived an edit to the layout. The
- *    declared proportions are the only defensible fallback.
+ *  - **A different track count** (or a malformed value). The stored override outlived an
+ *    edit to the layout, or never was valid. The declared proportions are the only
+ *    defensible fallback.
  *
  * @param {{gridTemplateAreas: string, gridTemplateRows: string, gridTemplateColumns: string}} template
- * @param {{layoutId?: string, columns?: number[], rows?: number[]}|null|undefined} override
+ * @param {{layoutId?: string, columns?: number[]|{pair: object}, rows?: number[]|{pair: object}}|null|undefined} override
  * @param {string} layoutId — the id of the layout `template` was derived from
  */
 export function applyViewportOverride(template, override, layoutId) {
   if (!override || typeof override !== "object") return template;
   if (override.layoutId !== layoutId) return template;
 
-  const axis = (values, current) => {
-    if (!Array.isArray(values) || !values.length) return current;
-    if (values.length !== trackCount(current)) return current;
-    if (!values.every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)) return current;
-    return toFrTracks(clampShares(values, MIN_TRACK_SHARE));
+  const axis = (spec, current) => {
+    // New form: one boundary's pair, spliced; untouched tracks stay verbatim.
+    if (spec && typeof spec === "object" && !Array.isArray(spec)) {
+      const p = spec.pair;
+      if (!p || typeof p !== "object") return current;
+      const n = trackCount(current);
+      if (!Number.isInteger(p.index) || p.index < 0 || p.index + 2 > n) return current;
+      const ok = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
+      if (!ok(p.a) || !ok(p.b) || !(p.a + p.b > 0)) return current;
+      return applyPairToTracks(current, p.index, p.a, p.b);
+    }
+    // Legacy form: whole-axis shares.
+    if (!Array.isArray(spec) || !spec.length) return current;
+    if (spec.length !== trackCount(current)) return current;
+    if (!spec.every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)) return current;
+    return toFrTracks(clampShares(spec, MIN_TRACK_SHARE));
   };
 
   return {

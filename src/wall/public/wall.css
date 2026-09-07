@@ -62,8 +62,6 @@ body {
   min-height: 0;
   gap: var(--gap);
   padding: var(--gap);
-  /* The splitter handles are absolutely-positioned grid children, pulled outward over the
-     gap; without this they would be clipped at the wall's edge. */
   position: relative;
 }
 
@@ -175,7 +173,15 @@ body {
 
 /* Splitter handles (wall-viewport-and-activity D1). Quiet until approached: a hairline
    that thickens and picks up the accent on hover, so it is findable without competing
-   with the content on either side of it. They straddle the gap and occupy no track. */
+   with the content on either side of it. They straddle the gap and occupy no track.
+
+   Each handle is an IN-FLOW grid item placed in the track left of / above the boundary,
+   pinned to its trailing edge and pulled over the gap by a NEGATIVE margin — the margin
+   is what centers it on the gap, so the sign here is the whole ballgame: it must be
+   -(gap/2 + half the handle), i.e. `var(--gap) / -2 - 7px`. The 7px is half the width/
+   height below and must move together with its `+ 6px` term. An earlier version computed
+   -3px, which drew the bar INSIDE the left/top region — 8px off the boundary — and put
+   most of the hit-strip over panel content instead of the divider. */
 .splitter {
   position: relative;
   z-index: 4;
@@ -193,14 +199,15 @@ body {
 .splitter-v {
   width: calc(var(--gap) + 6px);
   justify-self: end;
-  margin-right: calc((var(--gap) + 6px) / -2 - var(--gap) / -2);
+  /* See the block comment: -(half the gap) - (half the 14px handle). */
+  margin-right: calc(var(--gap) / -2 - 7px);
   cursor: col-resize;
 }
 .splitter-v::after { top: 12px; bottom: 12px; left: 50%; width: 2px; transform: translateX(-50%); }
 .splitter-h {
   height: calc(var(--gap) + 6px);
   align-self: end;
-  margin-bottom: calc((var(--gap) + 6px) / -2 - var(--gap) / -2);
+  margin-bottom: calc(var(--gap) / -2 - 7px);
   cursor: row-resize;
 }
 .splitter-h::after { left: 12px; right: 12px; top: 50%; height: 2px; transform: translateY(-50%); }
@@ -216,7 +223,11 @@ body.dragging-row, body.dragging-row * { cursor: row-resize !important; user-sel
   position: absolute;
   right: 6px;
   bottom: 6px;
-  z-index: 6;
+  /* Below the splitter (z-index 4): the controls sit in the corner where the two
+     separators cross, and painted above the handle they stole its clicks — clicking what
+     looked like the boundary fired a zoom button instead. The badges/overlays stay above
+     the splitter only because they are pointer-events: none. */
+  z-index: 3;
   display: flex;
   gap: 4px;
   opacity: 0.35;
