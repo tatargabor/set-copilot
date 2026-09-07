@@ -86,6 +86,37 @@ That writes the skills into `~/.claude/skills/` and the config plus a `0600` `.e
 /meeting-copilot stop
 ```
 
+### One command to a meeting
+
+```bash
+set-copilot meeting                  # last used project, or this directory
+set-copilot meeting --project ⟨name-or-path⟩
+set-copilot meeting --mic-only       # no system audio — the skill's --lite mode
+set-copilot meeting --dry-run        # show the resolution and the command, start nothing
+```
+
+`meeting` resolves the project, checks that `claude` and the meeting-copilot skill
+are installed, runs `doctor` as a preflight (its exit is the gate), then starts a
+Claude Code session on `/meeting-copilot start wall`. **The session owns capture,
+wall and stop** — exactly as when started by hand; the launcher only opens the door.
+
+The project list is a per-user registry (`~/.config/set-copilot/projects.json`,
+advisory: nothing requires registration):
+
+```bash
+set-copilot project list             # name · path · last used
+set-copilot project add [path]       # default: current directory (--name to rename)
+set-copilot project remove ⟨name-or-path⟩
+set-copilot project scan             # git repos under projects.scanRoots + the projects
+                                     # Claude Code has opened, most recent first, "+" = unregistered
+```
+
+Scan roots come from config (`"projects": { "scanRoots": ["~/code", "~/src"] }`;
+default `~/code`, `~/src`, `~/projects`, `~/dev`). Both verbs work identically from a
+checkout and from a global install; on Windows they refuse with a pointer to the
+capture roadmap, since audio capture is macOS/Linux only. On macOS, the first
+preflight may surface the system mic-permission dialog — approve it once.
+
 ## Configuration — `set-copilot.config.json`
 
 Every field is optional. Dictation works with an empty config; the copilot needs `knowledge.sources`.
