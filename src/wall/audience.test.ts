@@ -81,17 +81,19 @@ describe("resolveAudience is fail-closed (3.1 / 3.3)", () => {
 });
 
 describe("the shipped config resolves to the same protection as before (3.5 / D2)", () => {
-  it("declares both windows explicitly, so a default install warns about nothing", () => {
+  it("ships exactly one window, explicitly public, so a default install warns about nothing", () => {
+    // single-wall-default: the shipped default IS the shared surface. Redaction on is not
+    // a degradation here — it is the point: the wall may always have an audience.
     const warnings: string[] = [];
     const resolved = resolveWindows(DEFAULT_WINDOWS, DEFAULT_LAYOUTS, (m) => warnings.push(m));
-    const by = Object.fromEntries(resolved.map((r) => [r.name, r.audience]));
-    expect(by["én"]).toBe("operator");
-    expect(by["fal"]).toBe("public");
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].name).toBe("fal");
+    expect(resolved[0].audience).toBe("public");
     expect(warnings.join("\n")).not.toContain("audience");
   });
 
   it("agrees with the OLD zone inference on the shipped windows — this change moves no default", () => {
-    // The regression fence for D2: whatever else changed, the two shipped windows must
+    // The regression fence for D2: whatever else changed, the shipped windows must
     // land on exactly the protection they had before the declaration existed.
     for (const w of DEFAULT_WINDOWS) {
       const oldInference = !w.zones.includes("private") ? "public" : "operator";

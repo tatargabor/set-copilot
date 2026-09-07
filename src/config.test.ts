@@ -425,15 +425,33 @@ describe("wall.scrollHistory config", () => {
   });
 });
 
-describe("narráció category + private box subscription (live-narration)", () => {
-  it("resolves the narráció category and the private text box subscribes to it", () => {
+describe("narráció category + wall box subscription (live-narration, single-wall-default)", () => {
+  it("resolves the narráció category and the single wall's text box subscribes to it", () => {
     const cfg = loadConfig(project);
     expect(cfg.wall.categories.some((c) => c.id === "narráció" && c.render === "text")).toBe(true);
-    const priv = cfg.wall.windows.find((w) => w.route === "/");
-    const textBox = (priv!.boxes as Record<string, { cats: string[] }>).szöveg;
+    const wall = cfg.wall.windows.find((w) => w.route === "/wall");
+    const textBox = (wall!.boxes as Record<string, { cats: string[] }>).szöveg;
     expect(textBox.cats).toContain("narráció");
-    // Still the private hint box — narration joins riasztás/súgás, doesn't replace them.
-    expect(textBox.cats).toEqual(expect.arrayContaining(["riasztás", "súgás", "narráció"]));
+    expect(textBox.cats).toContain("tükör");
+    // Alerts are chat-only now: no wall box subscribes to them (registry ≠ routing —
+    // the categories stay registered so a project can subscribe them from config).
+    expect(textBox.cats).not.toContain("riasztás");
+    expect(textBox.cats).not.toContain("súgás");
+  });
+
+  it("ships exactly one window: the public wall on the three-region layout", () => {
+    const cfg = loadConfig(project);
+    expect(cfg.wall.windows).toHaveLength(1);
+    const w = cfg.wall.windows[0];
+    expect(w.name).toBe("fal");
+    expect(w.route).toBe("/wall");
+    expect(w.audience).toBe("public");
+    expect(w.layout).toBe("három-régió");
+    // The pinned box carries no pacing — a paced swap would be exactly the "content moves
+    // on its own" behavior the pinned region exists to prevent.
+    const pinned = (w.boxes as Record<string, { behavior: string; pacing?: unknown }>).kitűzött;
+    expect(pinned.behavior).toBe("latest");
+    expect(pinned.pacing).toBeUndefined();
   });
 
   it("a project can rename the category from config without touching src", () => {
@@ -467,17 +485,19 @@ describe("copilot.narration config (verbosity lever)", () => {
   });
 });
 
-describe("predictive-staging config", () => {
-  it("ships the előrejelzés category, a private staging box, and a promote-able public box", () => {
+describe("predictive-staging config (single-wall-default)", () => {
+  it("ships the előrejelzés category and the public presentation box as the promote target", () => {
     const cfg = loadConfig(project);
     expect(cfg.wall.categories.some((c) => c.id === "előrejelzés" && c.render === "graph")).toBe(true);
-    const priv = cfg.wall.windows.find((w) => w.route === "/")!;
-    const staging = (priv.boxes as Record<string, { cats: string[] }>).staging;
-    expect(staging.cats).toEqual(["előrejelzés"]);
-    // A promoted (public-zone) prediction has somewhere to land on the public wall.
-    const pub = cfg.wall.windows.find((w) => w.route === "/wall")!;
-    const pubPrez = (pub.boxes as Record<string, { cats: string[] }>).prezentáció;
+    // The default no longer carries a private staging box: a staged prediction displays
+    // nowhere until promoted. The promote target is the wall's presentation box, which
+    // subscribes to the category so a promoted (public-zone) prediction lands there.
+    const wall = cfg.wall.windows.find((w) => w.route === "/wall")!;
+    const pubPrez = (wall.boxes as Record<string, { cats: string[] }>).prezentáció;
     expect(pubPrez.cats).toContain("előrejelzés");
+    // The mandate survived the box it used to live in: the drawing contract now carries it.
+    expect(cfg.copilot.drawing.conventions.join(" ")).toContain("staged:true");
+    expect(cfg.copilot.drawing.conventions.join(" ")).toContain("wall-staged");
   });
 
   it("defaults staging.ttlMs and honours a positive override, ignoring a bad one", () => {

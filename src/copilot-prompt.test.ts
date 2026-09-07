@@ -459,7 +459,11 @@ describe("narration mandate (live-narration)", () => {
     expect(out).toContain("At most **1** line(s) per emission.");
     // NO-FILLER is stated explicitly — the change's most fragile point.
     expect(out).toContain("NO FILLER");
-    expect(out).toContain('zone:"private"');
+    // single-wall-default: narration rides zone:"both", redaction-backed — the old
+    // private-only default left the wall's narration box receiving nothing at all.
+    expect(out).toContain('zone:"both"');
+    expect(out).toContain("[belső]");
+    expect(out).not.toContain("Private by default");
   });
 
   it("renders a louder verbosity verbatim", () => {

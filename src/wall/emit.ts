@@ -209,9 +209,12 @@ export type NormalizePendingResult =
 /**
  * Shape-check a `pending` marker (wall-pending-indicator D3/D4). Unlike a display
  * event it carries NO payload — just a category to target and a one-line label — and
- * it defaults to `zone: "private"`, because a placeholder is operator feedback and a
- * `both`/`public` "working…" caption would otherwise land on an audience wall. `ttlMs`
- * defaults so a producer that crashes mid-draw cannot strand a permanent spinner.
+ * it defaults to `zone: "both"` (single-wall-default): a placeholder is exactly what a
+ * wall must show while its content is being drawn, and a "drawing…" state nobody can
+ * see is no placeholder at all. The label is producer text, so the server scrubs a
+ * public-reaching marker's label and drops it when scrubbing does not clear the match —
+ * the policy requires captions short, mechanical, and content-free. `ttlMs` defaults
+ * so a producer that crashes mid-draw cannot strand a permanent spinner.
  */
 export function normalizePending(raw: unknown): NormalizePendingResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -229,7 +232,7 @@ export function normalizePending(raw: unknown): NormalizePendingResult {
     return { ok: false, reason: "pending requires a non-empty label" };
   }
 
-  let zone: Zone = "private"; // operator feedback by default (D4)
+  let zone: Zone = "both"; // a placeholder is wall feedback by default (single-wall-default)
   if (o.zone !== undefined) {
     if (typeof o.zone !== "string" || !ZONES.includes(o.zone as Zone)) {
       return { ok: false, reason: `bad zone ${JSON.stringify(o.zone)} (expected private|public|both)` };

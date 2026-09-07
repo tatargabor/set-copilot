@@ -643,10 +643,33 @@ export class WallServer {
     // event, but is NOT accumulated: it is transient placeholder feedback, not replayable
     // state, so a late join never reconstructs a stale spinner (D3). Re-validated here
     // because the JSONL tailer reaches ingest without passing through `wall-emit`.
+    //
+    // Its label is producer text, and the default marker now rides `zone:"both"` — so the
+    // label passes the redactor's scrutiny here, the same guarantee the funnel below gives
+    // every display event (single-wall-default closed the last bypass). Fail-closed: a
+    // label the redactor withholds — still matching after scrubbing, or scrubbing threw —
+    // drops the MARKER, not the privacy. A vanished spinner is recoverable; a published
+    // label is not. A private-only marker keeps its raw label: its audience is the
+    // operator, and redaction observability lives there.
     if (isPending(msg)) {
       const p = normalizePending(msg);
       if (!p.ok) {
         console.warn(`[set-copilot] wall: dropping invalid pending (${p.reason})`);
+        return;
+      }
+      if (reachesPublic(p.pending.zone) && this.redactor) {
+        let label = p.pending.label;
+        try {
+          label = this.redactor.scrub(label);
+          if (this.redactor.matches(label)) {
+            console.warn(`[set-copilot] wall: dropping pending label the redactor withheld`);
+            return;
+          }
+        } catch {
+          console.warn(`[set-copilot] wall: dropping pending label — redaction failed (fail-closed)`);
+          return;
+        }
+        this.broadcastPending({ ...p.pending, label });
         return;
       }
       this.broadcastPending(p.pending);
@@ -1029,6 +1052,16 @@ export class WallServer {
     }
     // A declared window route serves the static shell; other paths are assets.
     if (this.windowFor(path)) return this.serveFile(res, join(this.opts.publicDir, "index.html"));
+    // The root reaches the wall (single-wall-default): when no window claims `/`, serving
+    // the shell there would bootstrap-fail — the client derives its route from the
+    // pathname and no window would match. Redirect to a declared window instead, so the
+    // operator's untyped host:port lands on the wall. A window that DOES claim `/` was
+    // served above.
+    if (path === "/" && this.opts.windows.length) {
+      res.writeHead(302, { Location: this.opts.windows[0].route });
+      res.end();
+      return;
+    }
     this.serveFile(res, join(this.opts.publicDir, "." + path));
   }
 

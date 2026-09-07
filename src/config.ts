@@ -511,19 +511,20 @@ export const DEFAULT_DEFERRED_MARKERS = [
 export const DEFAULT_CATEGORIES: Category[] = [
   { id: "súgás", label: "Súgás", icon: "💡", render: "text" },
   { id: "riasztás", label: "Riasztás", icon: "⚠", render: "text" },
-  // The narration channel — one category, zone-differentiated (live-narration + the
-  // public narration box share it). Private-zone narration is the copilot's running,
-  // substantive commentary of what is being discussed, shown in the private text box;
-  // `both`/`public`-zone narration is the *processed* (condensed, filtered) audience
-  // line that goes out through public-zone redaction. Never a raw transcript either
-  // way. See DEFAULT_WINDOWS, the live-narration spec, and the box-policy spec.
+  // The narration channel (live-narration): the copilot's running, substantive commentary
+  // of what is being discussed — the wall's own text lane. Emitted `zone:"both"` and made
+  // safe by the ingest-funnel redactor, not by being careful; the *processed* (condensed,
+  // filtered) line, never a raw transcript. Internal spans are marked `[belső]` or dropped.
+  // See DEFAULT_WINDOWS, the live-narration spec, and the box-policy spec.
   { id: "narráció", label: "Narráció", icon: "🗣", render: "text" },
   { id: "architektúra", label: "Architektúra", icon: "🕸", render: "graph" },
   { id: "metrika", label: "Metrika", icon: "📊", render: "chart" },
   // The predictive-staging channel (predictive-staging). A visual drawn AHEAD during a
-  // `silence` window lands here in the PRIVATE staging box as `zone:"private"`, and only
-  // an explicit promote lifts it to the public presentation box. A guess never publishes
-  // itself: "prepared, not published". See DEFAULT_WINDOWS and the predictive-staging spec.
+  // `silence` window is emitted `zone:"private"` — with the shipped single wall that
+  // displays NOWHERE: it is prepared, not shown, and only an explicit promote lifts it to
+  // the presentation box. `wall-staged` is how the producer asks what it has prepared. A
+  // guess never publishes itself: "prepared, not published". See DEFAULT_WINDOWS and the
+  // predictive-staging spec.
   { id: "előrejelzés", label: "Előrejelzés", icon: "🔮", render: "graph" },
   // The chat-mirror channel (wall-chat-mirror). When mirroring is enabled, the copilot
   // echoes its substantive chat lines here as `text`, so a wall audience can also read the
@@ -553,9 +554,11 @@ export const DEFAULT_LAYOUTS: WallLayout[] = [
   { id: "stacked", areas: [["szöveg"], ["prezentáció"]] },
   { id: "third-two-thirds", areas: [["szöveg", "prezentáció"]], columns: ["1fr", "2fr"] },
   { id: "prezentáció-teljes", areas: [["prezentáció"]] },
-  // The private view's layout with a staging lane along the bottom (predictive-staging).
-  // Geometry only: a full-width row under the text + presentation, where a pre-drawn
-  // prediction waits privately until it is promoted.
+  // A private view's layout with a staging lane along the bottom (predictive-staging).
+  // No longer referenced by the shipped default (single-wall-default), but kept: a project
+  // that declares its own private window uses it as-is. Geometry only: a full-width row
+  // under the text + presentation, where a pre-drawn prediction waits privately until it
+  // is promoted.
   { id: "private-staging", areas: [["szöveg", "prezentáció"], ["staging", "staging"]], columns: ["1fr", "2fr"], rows: ["2fr", "1fr"] },
   // The chat-wide layout (wall-chat-mirror): a big left column for the mirrored chat, an
   // equal right column for the visuals. Named `chat-wide`, NOT `mirror`, on purpose — a
@@ -588,84 +591,50 @@ export const DEFAULT_LAYOUTS: WallLayout[] = [
 ];
 
 /**
- * Two boxes, not four slots: text on the left third, presentation on the right two
- * thirds. The presentation box takes both the graph and the chart category —
- * legal, and the point of the change, because the renderer follows the event's
- * payload rather than the box's subscription.
+ * One window: the wall. The operator's internal view is the Claude Code session
+ * itself, which is open anyway; only one window can ever be shared ("Meet can't
+ * share two"), and the field backlog records the operator asking for exactly this
+ * shape. Everything the private hint box used to display lives in the terminal,
+ * where the copilot already speaks — alerts included, which is why no wall box
+ * subscribes to `riasztás`/`súgás` any more.
  *
- * The private view (`/`) gets a hint text box; the public wall (`/wall`) gets a
- * NARRATION text box plus the presentation. The public text box was pulled once —
- * it only makes sense with public-zone redaction, which an adversarial pass had
- * found leaky — and returns here now that the `public-redaction` capability lands
- * with it: every `both`/`public` event the narration box emits passes through the
- * server-side redactor before any public client sees it (box-policy: "A public
- * narration box narrates processed output").
+ * The public/private MECHANISM is untouched: zones, audience, redaction, per-zone
+ * accumulation, and staging all keep working (and stay tested with two-window
+ * fixtures). A project that wants its own private view declares `wall.windows` —
+ * the override is wholesale (an existing, deliberate rule), so the default here
+ * never fights a project's explicit shape.
  *
- * Both text boxes carry a `policy`, and they differ in *mandate*, not just zone
- * (design D5): the private one checks and surfaces contradictions; the public one
- * narrates *processed* output — condensed, filtered, redaction-safe — never the raw
- * transcript, preserving the "wall shows only processed output" invariant above.
+ * `/wall` stays the route: the shared tab is the share boundary (docs/research/
+ * monitor-fal-latency.md), and `/` redirects here rather than serving a page that
+ * could not resolve a window (wall-server: "The root path reaches the wall").
  */
 export const DEFAULT_WINDOWS: WallWindow[] = [
-  {
-    name: "én",
-    route: "/",
-    zones: ["private", "both"],
-    // Who is watching, stated — not inferred from the zone list (wall-public-surface D1/D2).
-    // This is the operator's own screen: no redaction, private events delivered. It is
-    // declared rather than left to the default precisely because the default is now the
-    // protected reading; an undeclared window would be treated as a public wall.
-    audience: "operator",
-    layout: "private-staging",
-    boxes: {
-      szöveg: {
-        behavior: "scroll",
-        cats: ["riasztás", "súgás", "narráció", "tükör"],
-        policy: {
-          instructions:
-            "Ez a privát súgódoboz. Ellenőrizd, amit a beszélő mond, és hozd felszínre, amit nem tud, ÉS amit mindjárt tudnia kell: ellentmondás a rögzített döntésekkel, releváns kontextus, rögzítésre érdemes új döntés — és egy `silence`-ablakban egy-két lépéssel előre, merre tart a beszélgetés. A `narráció`-sorok folyamatos, tartalmi kísérőszöveget adnak arról, ami épp zajlik — az alertektől külön csatorna.",
-        },
-      },
-      prezentáció: {
-        behavior: "latest",
-        cats: ["architektúra", "metrika"],
-        pacing: { minDwellMs: 8000, crossFadeMs: 400 },
-      },
-      staging: {
-        behavior: "latest",
-        cats: ["előrejelzés"],
-        pacing: { minDwellMs: 4000, crossFadeMs: 400 },
-        policy: {
-          // The predictive mandate lives in this box's policy (config, not `src/`):
-          // prepare ahead, privately. Promotion to the public wall is a separate,
-          // explicit gate — "prepared, not published" (predictive-staging D1/D5).
-          instructions:
-            "Ez a privát staging-doboz. A `silence`-ablakban rajzold ELŐRE a valószínű következő vizuált ide, `zone:\"private\"`, `staged:true` — ez felkészülés, nem publikálás. A publikus falra csak explicit promote emeli, ha a beszélgetés tényleg odaér. Egy fel nem használt jóslat elévül; ne üljön itt zajként.",
-        },
-      },
-    },
-  },
   {
     name: "fal",
     route: "/wall",
     zones: ["public", "both"],
     // The shared screen. Redaction on, private events never delivered — and now that is
     // what the window SAYS, so widening `zones` to show more can no longer switch it off.
+    // Declared rather than left to the default because the default is the protected
+    // reading (wall-public-surface D1/D2) — here the declaration and the default agree.
     audience: "public",
-    // The three-region layout lands on the PUBLIC wall (wall-three-region-layout): this is
-    // where the operator wants the tasks pinned on the shared screen, and unlike the
-    // private view there is no staging lane to give up for it. The private view keeps
-    // `private-staging` and can switch at runtime with `wall-layout / három-régió` — the
-    // layout is geometry, so the switch costs nothing but the staging lane.
+    // The operator's target arrangement (wall-three-region-layout): the message stream
+    // down the left, the drawable canvas top-right, the pinned reference under it.
+    // Runtime switches (`wall-layout`) remain available; `private-staging` stays in
+    // DEFAULT_LAYOUTS for projects that declare their own private view.
     layout: "három-régió",
     boxes: {
       szöveg: {
+        // The ONE narration lane: narration is emitted `zone:"both"` and arrives here
+        // through the ingest-funnel redactor (live-narration). There is no private
+        // narration copy any more; the check-and-surface job the old private hint box
+        // owned happens in the terminal, where the copilot speaks.
         behavior: "scroll",
         cats: ["narráció", "tükör"],
         policy: {
-          // Mandate, not zone, is what distinguishes this box from the private one
-          // (box-policy). Its output is *processed* — condensed and filtered — and it
-          // relies on the server-side redactor for safety, not on being careful.
+          // Mandate, not zone, decides what is worth emitting (box-policy). Its output
+          // is *processed* — condensed and filtered — and it relies on the server-side
+          // redactor for safety, not on being careful.
           engagement: "reactive",
           instructions:
             "Ez a nyilvános narráló doboz — élő közönség láthatja. Foglald össze tömören, közönség-barátul, amiről szó van; ne a nyers átiratot közvetítsd. Belső részletet SOHA ne írj ki nyersen: jelöld `[belső]`-vel (a szerver kitakarja), vagy hagyd ki. Kétség esetén hagyd ki.",
@@ -674,8 +643,9 @@ export const DEFAULT_WINDOWS: WallWindow[] = [
       },
       prezentáció: {
         // Also subscribes to `előrejelzés`: a staged prediction is private and never
-        // reaches here on its own, but a PROMOTED one (lifted to a public zone) surfaces
-        // in this public presentation box — the promote target (predictive-staging D3).
+        // reaches here on its own — with no private window it displays NOWHERE until
+        // promoted — but a PROMOTED one (lifted to a public zone) surfaces in this
+        // presentation box: the promote target (predictive-staging D3).
         behavior: "latest",
         cats: ["architektúra", "metrika", "előrejelzés"],
         pacing: { minDwellMs: 8000, crossFadeMs: 400 },
@@ -737,6 +707,11 @@ export const DEFAULT_DRAWING_CONVENTIONS: string[] = [
   "People, side threads, and scheduling are not architecture. Leave them out of the graph.",
   "Redraw when the understanding changed, not when new words arrived. An unchanged picture is a correct picture.",
   "A number is a chart only when it is comparable to another number. A single figure belongs in text.",
+  // The predictive-staging mandate (predictive-staging: "box policy, not engine code" —
+  // its config home since single-wall-default, when the private staging box it used to
+  // live in left the shipped default). Relocating it here is what keeps preparation alive:
+  // losing the box must not lose the mandate.
+  "Prepare ahead: during a `silence` window, draw the LIKELY NEXT visual for where the conversation is heading, as `zone:\"private\"`, `staged:true`, with a `visual` id. A staged draw displays nowhere until you promote it, so preparing costs the audience nothing and is never wasted — check `wall-staged` for what you have prepared. An unpromoted prediction expiring is the correct outcome for a wrong guess.",
   "Promote a staged prediction when the conversation actually reaches what it anticipated — never on a timer, and never because it has been waiting. A guess that expires unused is the right ending for a guess that was wrong; publishing an unspoken one is the failure.",
 ];
 

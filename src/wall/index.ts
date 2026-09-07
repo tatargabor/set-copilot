@@ -5,7 +5,9 @@
  * config windows, and attach event sources. Two sources run concurrently to
  * prove the producer-agnostic seam: the scripted fake-feed (in-process) and a
  * JSONL tailer over the runtime-dir events file (the canonical log a real
- * out-of-process producer appends to). Prints each window's name + URL.
+ * out-of-process producer appends to). Prints each resolved window's name + URL —
+ * one line for the shipped default (the single public wall, single-wall-default),
+ * more if a project declares several.
  *
  * The wall owns a small set of runtime-dir files, mirroring capture's PID
  * discipline: `wall.pid` (so `wall-stop` finds exactly this process) and

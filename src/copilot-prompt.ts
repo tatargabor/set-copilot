@@ -167,14 +167,14 @@ function renderNarration(narration: CopilotConfig["copilot"]["narration"]): stri
     rich: "Track the thread closely — name the topic, the decision forming, and the knowledge-base tie when there is one.",
   };
   return [
-    "## Narration — the live commentary lane (private)",
+    "## Narration — the live commentary lane (the wall)",
     "",
-    "A channel of its own, separate from the alert categories above and from the engagement rule: a running, **substantive** commentary of what is being discussed, written into the private `narráció` box. Emit it **directly** with `wall-emit` (`zone:\"private\"`) — no fork; one line has nothing to compose.",
+    "A channel of its own, separate from the alert categories above and from the engagement rule: a running, **substantive** commentary of what is being discussed, written into the wall's `narráció` box. Emit it **directly** with `wall-emit` (`zone:\"both\"`) — no fork; one line has nothing to compose.",
     "",
     "- **Cadence — regular, not per-token, not per-alert.** At most ONE line per reaction batch, plus one on each `silence` window. Never a line per transcript token, and never wait for an alert to fire. The box is `scroll`, so lines accumulate — you are keeping a live log, not replacing a headline.",
     "- **Substance only — NO FILLER, EVER.** Every line says something: the topic under discussion, a decision being formed, or how it ties to the knowledge base (name the source when you can). NEVER \"I'm listening\" / \"waiting\" / \"still here\", and never a bare restatement of the raw transcript. If the latest batch holds nothing you can substantively summarize or relate, emit NOTHING — the box keeps its previous line. Silence is correct; filler is not.",
     `- **Verbosity — ${narration.verbosity}.** ${detail[narration.verbosity]} At most **${narration.maxLines}** line(s) per emission.`,
-    "- **Private by default.** Narration is `zone:\"private\"`; it never reaches a public wall on its own. Promoting it to a public audience is a separate, redaction-gated decision, not something this channel does autonomously.",
+    "- **Public-safe, redaction-backed.** The narration line is `zone:\"both\"`: the server redacts it at ingest before any client sees it — that enforcement, not caution, is what makes a wall lane safe. Do your half anyway: internal detail is marked `[belső]` (the redactor scrubs from the marker) or left out entirely, never the raw transcript. When in doubt, leave it out.",
     "",
   ];
 }
@@ -262,7 +262,7 @@ export function renderDrawingContract(categories: Category[], conventions: strin
     // Taught here, not left implied. The contract described staging and said only a
     // promotion lifts a visual public, then documented every payload shape EXCEPT that
     // one — and across four measured runs every prediction expired unpromoted.
-    "**Promoting a prediction.** A visual you drew ahead into staging reaches the public wall only by this command — and it names the visual, so a staged prediction MUST carry a `visual` id:",
+    "**Promoting a prediction.** Draw early — a staged draw stays off the wall entirely until you promote it (with one public wall there is no private staging view; `wall-staged` is how you see what you have prepared). The promotion names the visual, so a staged prediction MUST carry a `visual` id:",
     "",
     "```json",
     '{"kind":"promote","category":"<staged-cat>","visual":"<id>","zone":"public"}',
@@ -276,7 +276,7 @@ export function renderDrawingContract(categories: Category[], conventions: strin
     "npx set-copilot wall-staged",
     "```",
     "",
-    "**Public zone & internal content.** Anything `public` or `both` can reach a wall a live audience sees. Before it does, the server runs public-zone redaction over the whole payload. To keep an internal detail off the public wall, either use `zone:\"private\"` (the only reliable guarantee), or mark the sensitive span **`[belső]`** — the server scrubs from the marker to the end of that string, or withholds the event if the marker lands in an `image.src`/`webpage.url`. Redaction is a backstop, not a license: when in doubt, mark it `[belső]` or leave it out. A redaction failure withholds the event from the public zone, never leaks it.",
+    "**Public zone & internal content.** Anything `public` or `both` can reach a wall a live audience sees. Before it does, the server runs public-zone redaction over the whole payload. To keep an internal detail off the public wall, either use `zone:\"private\"` — with one wall that means *prepared, not shown*: no client displays it until an explicit promote lifts it — or mark the sensitive span **`[belső]`**; the server scrubs from the marker to the end of that string, or withholds the event if the marker lands in an `image.src`/`webpage.url`. Redaction is a backstop, not a license: when in doubt, mark it `[belső]` or leave it out. A redaction failure withholds the event from the public zone, never leaks it.",
     "",
   );
 
@@ -302,6 +302,13 @@ export function renderAlerts(alerts: AlertCategory[], opts?: Partial<CopilotProm
     lines.push(`  Speak up when: ${a.when}`);
     lines.push("");
   }
+  // single-wall-default: no wall box subscribes to the alert categories any more. The
+  // alert's voice is this chat line (plus the notification) — saying so here stops the
+  // producer from emitting alert text at a wall that will not show it.
+  lines.push(
+    "Alerts are **chat-only**: the wall carries narration, the mirror, visuals, and the pinned reference — not the alert taxonomy. An alert goes out as this chat line (and the notification, where wired), never as a `wall-emit`.",
+    "",
+  );
 
   const notifiable = sorted.filter((a) => a.notify);
   if (notifiable.length) {
