@@ -102,10 +102,10 @@ It contains: `decisions`, `deferred`, `cards` (per-entity quirks), `domainFaq`, 
 
 #### Phase 2: Start Capture
 
-ONE Bash call with `run_in_background: true` — the capture plays the rising tone by itself when the mic is live, and self-stops after 2 hours (no separate timer or beep step):
+ONE Bash call with `run_in_background: true` — the capture plays the rising tone by itself when the mic is live, and self-stops after 6 hours (no separate timer or beep step):
 
 ```bash
-SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --max-minutes 120
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --max-minutes 360
 ```
 
 `SET_COPILOT_DIR` scopes the transcript and the PID file to this Claude session and this
