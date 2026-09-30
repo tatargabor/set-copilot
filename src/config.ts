@@ -4,7 +4,7 @@ import { resolve, join } from "node:path";
 
 import type { FastLaneConfig } from "./fast-lane.js";
 import type { AlertCategory, KeywordPattern } from "./knowledge/types.js";
-import type { WallConfig, Category, WallLayout, WallWindow, RedactionConfig } from "./wall/types.js";
+import type { WallConfig, Category, WallLayout, WallWindow, RedactionConfig, WallPresentation } from "./wall/types.js";
 import { compileRedactor } from "./wall/redaction.js";
 
 export interface KnowledgeConfig {
@@ -752,6 +752,41 @@ export const DEFAULT_SCROLL_HISTORY = 20;
 /** How long a staged prediction stays promotable before it expires (predictive-staging). */
 export const DEFAULT_STAGING_TTL_MS = 120_000;
 
+/** The original wall look: Hungarian chrome, input visible, no title bar. */
+export const DEFAULT_PRESENTATION: WallPresentation = {
+  locale: "hu",
+  hideInput: false,
+  theme: "default",
+  scale: 1,
+  autoScroll: true,
+};
+
+/** Resolve `wall.presentation` field by field — a bad value falls back, never fails the load. */
+export function resolvePresentation(raw: Partial<WallPresentation> | undefined): WallPresentation {
+  const p = raw && typeof raw === "object" ? raw : {};
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  return {
+    title: text(p.title),
+    subtitle: text(p.subtitle),
+    locale: p.locale === "en" ? "en" : DEFAULT_PRESENTATION.locale,
+    hideInput: p.hideInput === true,
+    theme: p.theme === "studio" ? "studio" : DEFAULT_PRESENTATION.theme,
+    scale:
+      typeof p.scale === "number" && p.scale >= 0.75 && p.scale <= 2 ? p.scale : DEFAULT_PRESENTATION.scale,
+    boxTitles:
+      p.boxTitles && typeof p.boxTitles === "object"
+        ? Object.fromEntries(Object.entries(p.boxTitles).filter(([, v]) => typeof v === "string" && !!v.trim()))
+        : undefined,
+    tickers:
+      p.tickers && typeof p.tickers === "object"
+        ? (Object.fromEntries(
+            Object.entries(p.tickers).filter(([, v]) => v === "marquee" || v === "rotate"),
+          ) as Record<string, "marquee" | "rotate">)
+        : undefined,
+    autoScroll: p.autoScroll !== false,
+  };
+}
+
 export const DEFAULT_WALL: WallConfig = {
   port: 4180,
   categories: DEFAULT_CATEGORIES,
@@ -760,6 +795,7 @@ export const DEFAULT_WALL: WallConfig = {
   staging: { ttlMs: DEFAULT_STAGING_TTL_MS },
   layouts: DEFAULT_LAYOUTS,
   windows: DEFAULT_WINDOWS,
+  presentation: DEFAULT_PRESENTATION,
 };
 
 /**
@@ -1244,6 +1280,7 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         ? [...wall.layouts, ...DEFAULT_WALL.layouts.filter((d) => !wall.layouts!.some((l) => l.id === d.id))]
         : DEFAULT_WALL.layouts,
       windows: Array.isArray(wall.windows) ? wall.windows : DEFAULT_WALL.windows,
+      presentation: resolvePresentation(wall.presentation),
     },
     transcript: {
       speakers:

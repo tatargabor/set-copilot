@@ -29,7 +29,7 @@ import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
   type Audience, type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Heartbeat, type LayoutSwitch, type Pacing,
   type Pending, type Promote, type RedactionConfig, type ResolvedWindow, type ShowCommand, type StageExpired,
-  type WallLayout, type WireMessage, type Zone,
+  type WallLayout, type WallPresentation, type WireMessage, type Zone,
   isHeartbeat, isLayoutSwitch, isPending, isPromote, isShowCommand, isStageExpired, reachesPrivate, reachesPublic,
 } from "./types.js";
 
@@ -130,6 +130,8 @@ interface ZoneAccum {
   redacted: boolean;
   /** At least one delta fed this slice (an empty slice is not replayed). */
   present: boolean;
+  /** The visual's human name (wall-presentation tabs), as it reached this zone. */
+  title?: string;
 }
 
 /** The server's running accumulation of one visual, split by zone. */
@@ -194,6 +196,8 @@ export interface WallServerOptions {
   redaction?: RedactionConfig;
   /** Recent lines per `scroll` category kept for connect-time replay (default 20). */
   scrollHistory?: number;
+  /** Chrome-only presentation settings, handed to the client in the bootstrap (wall-presentation). */
+  presentation?: WallPresentation;
   /**
    * The runtime dir this wall serves (wall-liveness D1). Enables the server-derived
    * heartbeat: the capture PID lives at `<runtimeDir>/capture.pid`, checked exactly as
@@ -551,6 +555,7 @@ export class WallServer {
       zone,
       visual: p.visual,
       graph: { op: "reset", nodes: [...g.private.nodes.values()], edges: g.private.edges },
+      ...(g.private.title ? { title: g.private.title } : {}),
     });
   }
 
@@ -766,8 +771,14 @@ export class WallServer {
       if (!byVisual) this.graphs.set(priv.category, (byVisual = new Map()));
       let g = byVisual.get(priv.visual);
       if (!g) byVisual.set(priv.visual, (g = { private: emptyAccum(), public: emptyAccum() }));
-      if (reachesPrivate(priv.zone)) applyDelta(g.private, priv.graph, variants.redacted);
-      if (pub?.graph && reachesPublic(pub.zone)) applyDelta(g.public, pub.graph, false);
+      if (reachesPrivate(priv.zone)) {
+        applyDelta(g.private, priv.graph, variants.redacted);
+        if (priv.title) g.private.title = priv.title;
+      }
+      if (pub?.graph && reachesPublic(pub.zone)) {
+        applyDelta(g.public, pub.graph, false);
+        if (pub.title) g.public.title = pub.title; // the scrubbed copy, never the original
+      }
       return; // graphs replay through the accumulated-visual path, not `latest`
     }
 
@@ -976,9 +987,24 @@ export class WallServer {
     }
 
     // Current graph per paced category: the shown visual's accumulated slice as one add.
+    // The category's OTHER visuals go first, unshown, so a reloading client rebuilds its
+    // canvas tabs (wall-presentation) in arrival order; the same zone slice and the same
+    // id guard apply to each, so nothing reaches a public client that live delivery would
+    // not have sent it.
     for (const [cat, canvas] of this.canvases) {
       const shown = canvas.current?.id;
       if (!shown) continue;
+      for (const [vid, other] of this.graphs.get(cat) ?? []) {
+        if (vid === shown) continue;
+        const oacc = isPub ? other.public : other.private;
+        if (!oacc.present || (isPub && this.idMatchesRedaction(vid))) continue;
+        const oev: DisplayEvent = {
+          category: cat, zone: isPub ? "public" : "private", visual: vid, priority: "immediate",
+          graph: { op: "add", nodes: [...oacc.nodes.values()], edges: oacc.edges },
+        };
+        if (oacc.title) oev.title = oacc.title;
+        if (reaches(oev)) client.res.write(`data: ${JSON.stringify(oev)}\n\n`);
+      }
       const g = this.graphs.get(cat)?.get(shown);
       if (!g) continue;
       const acc = isPub ? g.public : g.private;
@@ -996,6 +1022,7 @@ export class WallServer {
         category: cat, zone, visual: shown, priority: "immediate",
         graph: { op: "add", nodes: [...acc.nodes.values()], edges: acc.edges },
       };
+      if (acc.title) ev.title = acc.title;
       if (!isPub && acc.redacted) ev.redaction = "redacted"; // private-view marker
       if (reaches(ev)) {
         client.res.write(`data: ${JSON.stringify(ev)}\n\n`);
@@ -1107,6 +1134,7 @@ export class WallServer {
         window: publicWindowShape(shaped),
         categories: this.opts.registry.list(),
         heartbeatMs,
+        presentation: this.opts.presentation ?? null,
       });
     }
     if (path === "/api/staged") {

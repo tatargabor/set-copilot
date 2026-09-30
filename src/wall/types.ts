@@ -138,6 +138,8 @@ export interface DisplayEvent {
   priority?: "immediate";
   /** Groups graph deltas: same id → same visual; a new id via `op:"reset"` = topic boundary. */
   visual?: string;
+  /** Human name of the visual, shown on the canvas tab strip (wall-presentation). */
+  title?: string;
   /** Graph payload. */
   graph?: GraphDelta;
   /** Chart payload. */
@@ -527,4 +529,35 @@ export interface WallConfig {
   layouts: WallLayout[];
   /** The views. `/` and `/wall` are defaults; a new window is a new entry, no code. */
   windows: WallWindow[];
+  /**
+   * How the wall presents itself on a shared screen (wall-presentation). Purely cosmetic
+   * and client-side: it never changes what content reaches which zone — redaction and
+   * `zone` stay the only content controls.
+   */
+  presentation: WallPresentation;
+}
+
+/** Chrome-only settings for a wall shown to an audience. */
+export interface WallPresentation {
+  /** Title bar text; absent → no title bar (the original look). */
+  title?: string;
+  /** Smaller line next to the title. */
+  subtitle?: string;
+  /** Language of the wall's own chrome (strip labels, buttons). Content is untouched. */
+  locale: "hu" | "en";
+  /** Hide the operator input box — on a shared screen, typing there is visible. */
+  hideInput: boolean;
+  /** `default` = the dense operator dashboard; `studio` = the presentation look. */
+  theme: "default" | "studio";
+  /** Type scale multiplier for screen sharing (0.75–2). */
+  scale: number;
+  /** Optional heading per box position, e.g. `{ "kitűzött": "Decisions · Open questions" }`. */
+  boxTitles?: Record<string, string>;
+  /** Box positions shown as a band: `marquee` scrolls the items, `rotate` cross-fades them. */
+  tickers?: Record<string, "marquee" | "rotate">;
+  /**
+   * Ping-pong auto-scroll for `latest` text boxes whose content overflows (agenda, pinned
+   * record). Default on; each box also gets a viewer-side toggle.
+   */
+  autoScroll: boolean;
 }

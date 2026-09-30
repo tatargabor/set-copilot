@@ -20,6 +20,63 @@ let mountedFingerprint = null;
 /** The heartbeat interval the SERVER advertises; 0 means this wall sends none. */
 let heartbeatIntervalMs = 0;
 
+// ---- presentation (wall-presentation) ----
+//
+// Chrome only: the title bar, the language of the wall's OWN labels, the input box's
+// presence, the theme and the type scale. It never touches content — what reaches the
+// wall is still decided by zones and the server-side redactor, nothing here.
+let presentation = { locale: "hu", hideInput: false, theme: "default", scale: 1 };
+
+const STRINGS = {
+  hu: {
+    me: "én", others: "mások", reset: "⤢ arányok alaphelyzetbe", placeholder: "Üzenet a copilotnak…",
+    send: "Küldés", sent: "✓ elküldve", failed: "✗ nem sikerült", ago: "óta", sec: "mp", min: "perc",
+    chan: { active: "beszél", quiet: "csendben", absent: "nincs csatorna", stopped: "leállt", unknown: "nem tudni" },
+    conn: null, // connectionState's own (Hungarian) labels
+  },
+  en: {
+    me: "us", others: "them", reset: "⤢ reset layout", placeholder: "Message to the copilot…",
+    send: "Send", sent: "✓ sent", failed: "✗ failed", ago: "ago", sec: "s", min: "min",
+    chan: { active: "speaking", quiet: "quiet", absent: "no channel", stopped: "stopped", unknown: "unknown" },
+    conn: { listening: "● Live", quiet: "● Live · listening", dead: "⚠ Capture stopped", disconnected: "⛔ Reconnecting…" },
+  },
+};
+const tr = () => STRINGS[presentation.locale] ?? STRINGS.hu;
+
+function applyPresentation(p) {
+  presentation = { ...presentation, ...(p ?? {}) };
+  const root = document.documentElement;
+  root.lang = presentation.locale;
+  root.dataset.theme = presentation.theme;
+  root.style.setProperty("--scale", String(presentation.scale ?? 1));
+  let bar = document.getElementById("title-bar");
+  if (presentation.title) {
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "title-bar";
+      bar.className = "title-bar";
+      document.body.insertBefore(bar, document.body.firstChild);
+    }
+    bar.replaceChildren();
+    const mark = document.createElement("span");
+    mark.className = "title-mark";
+    mark.setAttribute("aria-hidden", "true");
+    const title = document.createElement("span");
+    title.className = "title-text";
+    title.textContent = presentation.title;
+    bar.append(mark, title);
+    if (presentation.subtitle) {
+      const sub = document.createElement("span");
+      sub.className = "title-sub";
+      sub.textContent = presentation.subtitle;
+      bar.appendChild(sub);
+    }
+  } else if (bar) {
+    bar.remove();
+  }
+  stripParts = null; // labels and the input box depend on the presentation: rebuild the strip
+}
+
 /**
  * Fetch the window definition and mount it — but only re-derive when it actually changed.
  *
@@ -44,7 +101,8 @@ async function bootstrapAndMount() {
   heartbeatIntervalMs = payload.heartbeatMs ?? 0;
   registry.clear();
   for (const c of payload.categories) registry.set(c.id, c);
-  document.title = `set-copilot · ${payload.window.name}`;
+  applyPresentation(payload.presentation);
+  document.title = presentation.title ?? `set-copilot · ${payload.window.name}`;
   mountGrid(payload.window);
   return true;
 }
@@ -72,11 +130,19 @@ function mountGrid(win) {
     el.className = `slot slot-${box.behavior}${box.pacing ? " slot-paced" : ""}`;
     el.style.gridArea = box.position;
     el.dataset.area = box.position;
+    const boxTitle = presentation.boxTitles?.[box.position];
+    if (boxTitle) el.dataset.title = boxTitle;
     root.appendChild(el);
     // Renderers are built on first use, not from the box's subscriptions: a
     // presentation box may hold a graph now and a chart next, and which one it
     // gets is not knowable at mount time.
     boxEls.set(box.position, { el, box, graph: null, chart: null, panes: new Map(), shown: null, shownAt: 0, pending: null });
+    // Reference boxes (agenda, pinned record) hold a block, not a stream: when it overflows,
+    // it scrolls itself so nobody has to reach for the shared screen.
+    if (box.behavior === "latest" && !box.pacing && !presentation.tickers?.[box.position]) {
+      attachAutoScroll(el, box.position);
+    }
+    if (box.pacing) attachMaximize(el);
   }
   // After the boxes exist: a row with no declared size takes it from the box occupying it,
   // so the template can only be derived once they are known.
@@ -365,7 +431,8 @@ function connect() {
  */
 function onFullReplay() {
   for (const entry of boxEls.values()) {
-    entry.el.replaceChildren();
+    // The box's own chrome (full-screen and auto-scroll toggles) is not content: keep it.
+    entry.el.replaceChildren(...entry.el.querySelectorAll(":scope > .maximize-toggle, :scope > .autoscroll-toggle"));
     entry.graph = null;
     entry.chart = null;
     entry.panes = new Map();
@@ -391,9 +458,9 @@ let statusEl = null;
 function humanAge(ms) {
   if (ms == null) return "";
   const s = Math.round(ms / 1000);
-  if (s < 60) return `${s} mp`;
+  if (s < 60) return `${s} ${tr().sec}`;
   const m = Math.round(s / 60);
-  return `${m} perc`;
+  return `${m} ${tr().min}`;
 }
 
 /** The last heartbeat received, and WHEN — its arrival time is the transport evidence. */
@@ -423,10 +490,8 @@ function onHeartbeat(hb) {
  */
 let stripParts = null;
 
-const CHANNEL_LABELS = {
-  mic: { icon: "🎙", name: "én" },
-  system: { icon: "🔊", name: "mások" },
-};
+const CHANNEL_ICONS = { mic: "🎙", system: "🔊" };
+const channelName = (key) => (key === "mic" ? tr().me : tr().others);
 
 function ensureStrip() {
   if (!statusEl) statusEl = document.getElementById("status-strip");
@@ -446,12 +511,12 @@ function ensureStrip() {
     c.className = `chan chan-${key}`;
     const icon = document.createElement("span");
     icon.className = "chan-icon";
-    icon.textContent = CHANNEL_LABELS[key].icon;
+    icon.textContent = CHANNEL_ICONS[key];
     const bar = document.createElement("span");
     bar.className = "chan-bar";
     const name = document.createElement("span");
     name.className = "chan-name";
-    name.textContent = CHANNEL_LABELS[key].name;
+    name.textContent = channelName(key);
     c.append(icon, name, bar);
     group.appendChild(c);
     chans[key] = c;
@@ -462,13 +527,14 @@ function ensureStrip() {
   reset.type = "button";
   reset.id = "viewport-reset";
   reset.className = "viewport-reset";
-  reset.textContent = "⤢ arányok alaphelyzetbe";
+  reset.textContent = tr().reset;
   reset.hidden = true;
   reset.addEventListener("click", resetViewport);
   statusEl.appendChild(reset);
 
   // The operator's keyboard into the session (wall-input): the strip is the one piece of
   // furniture guaranteed in every layout, same reasoning as the reset button above.
+  if (!presentation.hideInput) {
   const form = document.createElement("form");
   form.id = "wall-input";
   form.className = "wall-input";
@@ -476,17 +542,18 @@ function ensureStrip() {
   const msg = document.createElement("input");
   msg.type = "text";
   msg.maxLength = 400;
-  msg.placeholder = "Üzenet a copilotnak…";
-  msg.setAttribute("aria-label", "Üzenet a copilotnak");
+  msg.placeholder = tr().placeholder;
+  msg.setAttribute("aria-label", tr().placeholder);
   const send = document.createElement("button");
   send.type = "submit";
-  send.textContent = "Küldés";
+  send.textContent = tr().send;
   form.append(msg, send);
   form.addEventListener("submit", (ev) => {
     ev.preventDefault();
     sendWallInput(msg);
   });
   statusEl.appendChild(form);
+  }
 
   stripParts = { label, chans };
   updateResetAffordance();
@@ -526,18 +593,16 @@ async function sendWallInput(msg) {
     });
     if (res.status === 204) {
       msg.value = "";
-      flashStripNote("✓ elküldve");
+      flashStripNote(tr().sent);
       return;
     }
-    flashStripNote("✗ nem sikerült");
+    flashStripNote(tr().failed);
   } catch {
-    flashStripNote("✗ nem sikerült");
+    flashStripNote(tr().failed);
   }
 }
 
-const CHANNEL_STATE_TEXT = {
-  active: "beszél", quiet: "csendben", absent: "nincs csatorna", stopped: "leállt", unknown: "nem tudni",
-};
+const channelStateText = (state) => tr().chan[state] ?? state;
 
 /**
  * Paint the status strip from the transport's evidence plus the last heartbeat's contents.
@@ -562,9 +627,10 @@ function refreshStatus() {
   statusEl.classList.remove("status-listening", "status-quiet", "status-dead", "status-disconnected");
   statusEl.classList.add(`status-${st.state}`);
   const age = lastHb ? lastHb.lastHeardMsAgo : null;
+  const label = tr().conn?.[st.state] ?? st.label;
   parts.label.textContent = st.state === "quiet" && age != null
-    ? `${st.label} · ${humanAge(age)} óta`
-    : st.label;
+    ? `${label} · ${humanAge(age)} ${tr().ago}`
+    : label;
 
   // Per-channel indicators (D6): a shape and a colour, not a sentence — the strip is read
   // at wall distance, where "which channel is live" has to survive not being read at all.
@@ -573,10 +639,10 @@ function refreshStatus() {
     const el = parts.chans[key];
     const s = chans[key];
     el.className = `chan chan-${key} chan-${s.state}`;
-    const name = CHANNEL_LABELS[key].name;
+    const name = channelName(key);
     el.title = s.msAgo != null && s.state === "quiet"
-      ? `${name}: ${CHANNEL_STATE_TEXT[s.state]} (${humanAge(s.msAgo)} óta)`
-      : `${name}: ${CHANNEL_STATE_TEXT[s.state]}`;
+      ? `${name}: ${channelStateText(s.state)} (${humanAge(s.msAgo)} ${tr().ago})`
+      : `${name}: ${channelStateText(s.state)}`;
   }
 }
 
@@ -683,7 +749,10 @@ function applyToBox(entry, render, cat, ev) {
 
   if (render === "text") {
     show(entry, "text");
-    renderText(paneFor(entry, "text"), entry.box, cat, ev);
+    const pane = paneFor(entry, "text");
+    renderText(pane, entry.box, cat, ev);
+    const tickerMode = presentation.tickers?.[entry.box.position];
+    if (tickerMode) decorateTicker(pane, tickerMode);
     return;
   }
 
@@ -805,6 +874,166 @@ function markRedaction(entry, ev) {
     : "A publikus falon ez az esemény kitakarva jelent meg.";
 }
 
+// ---- full-screen canvas (wall-presentation) ----
+//
+// The canvas can take the whole wall when a drawing is the only thing worth looking at, and
+// hand the space back just as easily: a button in its corner, F to toggle, Esc to return.
+// Viewer-side only — the other boxes keep receiving content underneath.
+let maximizedEl = null;
+
+function setMaximized(el, on) {
+  if (maximizedEl && maximizedEl !== el) maximizedEl.classList.remove("slot-maximized");
+  el.classList.toggle("slot-maximized", on);
+  maximizedEl = on ? el : null;
+  const btn = el.querySelector(".maximize-toggle");
+  if (btn) {
+    btn.textContent = on ? "✕ Back" : "⛶ Full screen";
+    btn.title = on ? "Back to the planning view (Esc)" : "Show the canvas full screen (F)";
+  }
+}
+
+function attachMaximize(el) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "maximize-toggle";
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setMaximized(el, !el.classList.contains("slot-maximized"));
+  });
+  el.appendChild(btn);
+  setMaximized(el, false);
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "Escape" && maximizedEl) setMaximized(maximizedEl, false);
+  else if (e.key === "f" || e.key === "F") {
+    const canvas = maximizedEl ?? document.querySelector(".slot-paced");
+    if (canvas) setMaximized(canvas, !canvas.classList.contains("slot-maximized"));
+  }
+});
+
+// ---- auto-scroll (wall-presentation) ----
+//
+// Ping-pong: rest at the top, glide down, rest at the bottom, glide back. It only moves a
+// box whose content is taller than the box, it stops while the pointer is over the box (the
+// viewer is reading), and every box gets its own on/off toggle, remembered per viewer.
+// Default comes from `presentation.autoScroll` (on unless a project turns it off).
+const AUTO_SCROLL_PX_S = 22;
+const AUTO_SCROLL_REST_MS = 3500;
+
+function attachAutoScroll(el, key) {
+  const storeKey = `set-copilot:autoscroll:${route}:${key}`;
+  let on = presentation.autoScroll !== false;
+  try {
+    const saved = localStorage.getItem(storeKey);
+    if (saved != null) on = saved === "1";
+  } catch { /* storage unavailable — the default stands */ }
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "autoscroll-toggle";
+  const paint = () => {
+    btn.classList.toggle("on", on);
+    btn.textContent = on ? "⇅ auto" : "⇅ off";
+    btn.title = on ? "Auto-scroll on — click to stop" : "Auto-scroll off — click to start";
+  };
+  paint();
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    on = !on;
+    try { localStorage.setItem(storeKey, on ? "1" : "0"); } catch { /* not fatal */ }
+    restUntil = performance.now() + 600;
+    pos = el.scrollTop;
+    paint();
+  });
+  el.appendChild(btn);
+
+  let dir = 1;
+  let pos = 0;
+  let hovering = false;
+  let restUntil = performance.now() + AUTO_SCROLL_REST_MS;
+  let last = performance.now();
+  el.addEventListener("mouseenter", () => { hovering = true; });
+  el.addEventListener("mouseleave", () => {
+    hovering = false;
+    pos = el.scrollTop;
+    restUntil = performance.now() + AUTO_SCROLL_REST_MS;
+  });
+
+  function tick(now) {
+    if (!el.isConnected) return; // the grid was remounted — this box is gone
+    const dt = Math.min(now - last, 100);
+    last = now;
+    const max = el.scrollHeight - el.clientHeight;
+    const overflowing = max > 4;
+    btn.hidden = !overflowing;
+    if (on && overflowing && !hovering && now >= restUntil) {
+      pos = Math.min(max, Math.max(0, pos + dir * AUTO_SCROLL_PX_S * (dt / 1000)));
+      if (pos >= max) { dir = -1; restUntil = now + AUTO_SCROLL_REST_MS; }
+      else if (pos <= 0) { dir = 1; restUntil = now + AUTO_SCROLL_REST_MS; }
+      el.scrollTop = pos;
+    } else if (!on || hovering) {
+      pos = el.scrollTop;
+    }
+    // Keep the toggle pinned to the box's visible corner while its content moves.
+    btn.style.transform = `translateY(${el.scrollTop}px)`;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+// ---- ticker bands (wall-presentation) ----
+//
+// A box named in `presentation.tickers` shows its latest text as a band instead of a
+// block: each list item (or paragraph) becomes one ticker item. `marquee` scrolls them
+// continuously; `rotate` shows one at a time and cross-fades to the next. The content is
+// still an ordinary `latest` text event — the band is only how this viewer displays it,
+// so redaction and zones apply exactly as for any other box.
+const TICKER_SPEED_PX_S = 70;
+const ROTATE_MS = 6000;
+
+function decorateTicker(pane, mode) {
+  clearInterval(pane._tickerTimer);
+  const items = [...pane.querySelectorAll(".txt li, .txt .p, .txt .hd")]
+    .filter((n) => !n.querySelector("li") && n.textContent.trim());
+  if (!items.length) return;
+  const view = document.createElement("div");
+  view.className = `ticker-view ticker-${mode}`;
+  // Items are copies of the nodes the text renderer already built — never re-parsed markup.
+  const makeItem = (src) => {
+    const it = document.createElement("span");
+    it.className = "ticker-item";
+    for (const child of src.childNodes) it.appendChild(child.cloneNode(true));
+    return it;
+  };
+  if (mode === "rotate") {
+    const rotor = items.map(makeItem);
+    rotor.forEach((it, i) => it.classList.toggle("on", i === 0));
+    view.append(...rotor);
+    let i = 0;
+    if (rotor.length > 1) {
+      pane._tickerTimer = setInterval(() => {
+        rotor[i].classList.remove("on");
+        i = (i + 1) % rotor.length;
+        rotor[i].classList.add("on");
+      }, ROTATE_MS);
+    }
+  } else {
+    // Two copies of the run, scrolled by exactly one copy's width: a seamless loop.
+    const track = document.createElement("div");
+    track.className = "ticker-track";
+    for (let copy = 0; copy < 2; copy++) for (const src of items) track.appendChild(makeItem(src));
+    view.appendChild(track);
+    requestAnimationFrame(() => {
+      const half = track.scrollWidth / 2;
+      track.style.setProperty("--ticker-duration", `${Math.max(12, half / TICKER_SPEED_PX_S)}s`);
+    });
+  }
+  pane.replaceChildren(view);
+}
+
 function renderText(el, box, cat, ev) {
   const line = document.createElement("div");
   line.className = "line";
@@ -910,8 +1139,23 @@ function buildWebpage(spec) {
  * is a topic change, and inheriting a scale chosen for the previous diagram into the next
  * one is the case that feels broken.
  */
+let activeGraphKeys = null;
+document.addEventListener("keydown", (e) => {
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  activeGraphKeys?.(e.key);
+});
+
 function makeGraphSlot(el) {
   const visuals = new Map(); // visual id → { nodes:Map, edges:[] }
+  // Tabs (wall-presentation): every visual this box has received, in arrival order. By
+  // default the box FOLLOWS the server's pick (the director's show command); a click or
+  // ←/→ takes manual control, and "Auto" (or A) hands it back.
+  const order = [];
+  const titles = new Map();
+  let follow = true;
+  let serverPick = null;
+  let tabsEl = null;
   const fitModes = new Map(); // visual id → "auto" | "manual"
   let shown = null;
   let cy = null;
@@ -926,6 +1170,8 @@ function makeGraphSlot(el) {
    * grab it again.
    */
   let quietUntil = 0;
+  let userGestureAt = 0;
+  let lastDrawn = null;
 
   /**
    * The graph's palette, read from the same CSS variables everything else uses.
@@ -939,10 +1185,18 @@ function makeGraphSlot(el) {
     const cs = getComputedStyle(document.documentElement);
     const v = (name, fallback) => (cs.getPropertyValue(name) || "").trim() || fallback;
     return {
-      node: v("--line", "#22304a"),
+      node: v("--graph-node", v("--line", "#22304a")),
       border: v("--accent", "#4f8cff"),
       ink: v("--text", "#e7ecf5"),
       edge: v("--muted", "#8aa0c0"),
+      // Node tones (wall-presentation): a node may carry `tone` to say which side it
+      // belongs to — e.g. who builds a work package — without a per-node colour.
+      primary: v("--tone-primary", "#4f8cff"),
+      secondary: v("--tone-secondary", "#35c7a5"),
+      shared: v("--tone-shared", "#c08cff"),
+      open: v("--tone-open", "#e0b04f"),
+      done: v("--ok", "#4fd08a"),
+      group: v("--graph-group", "#141a28"),
     };
   }
 
@@ -951,8 +1205,19 @@ function makeGraphSlot(el) {
     return [
       // width/height "label" + padding size the box to its text, so labels
       // like "transcript.jsonl" never overflow the box.
-      { selector: "node", style: { label: "data(label)", "background-color": c.node, "border-color": c.border, "border-width": 1.5, color: c.ink, "font-size": 12, "text-valign": "center", "text-halign": "center", width: "label", height: "label", padding: "10px", shape: "round-rectangle", "text-wrap": "wrap", "text-max-width": "140px" } },
+      { selector: "node", style: { label: "data(label)", "background-color": c.node, "border-color": c.border, "border-width": 1.5, color: c.ink, "font-size": 13, "text-valign": "center", "text-halign": "center", width: "label", height: "label", padding: "9px", shape: "round-rectangle", "text-wrap": "wrap", "text-max-width": "140px" } },
       { selector: "edge", style: { width: 2, "line-color": c.edge, "target-arrow-color": c.edge, "target-arrow-shape": "triangle", "curve-style": "bezier" } },
+      // A layout-only edge (`invisible: true`) shapes the arrangement — e.g. stacks a group's
+      // members into a column — without drawing anything.
+      { selector: "edge[?invisible]", style: { opacity: 0, "target-arrow-shape": "none" } },
+      { selector: "edge[label]", style: { label: "data(label)", "font-size": 10, color: c.edge, "text-background-color": c.group, "text-background-opacity": 1, "text-background-padding": "2px" } },
+      // A node with `parent` sits inside a group box (Cytoscape compound nodes).
+      { selector: ":parent", style: { "background-color": c.group, "background-opacity": 0.6, "border-color": c.edge, "border-width": 1, "border-style": "dashed", "text-valign": "top", "text-halign": "center", "font-size": 12, "font-weight": 600, color: c.ink, padding: "14px", shape: "round-rectangle" } },
+      { selector: 'node[tone = "primary"]', style: { "border-color": c.primary, "border-width": 2, "background-color": c.primary, "background-opacity": 0.22 } },
+      { selector: 'node[tone = "secondary"]', style: { "border-color": c.secondary, "border-width": 2, "background-color": c.secondary, "background-opacity": 0.22 } },
+      { selector: 'node[tone = "shared"]', style: { "border-color": c.shared, "border-width": 2, "background-color": c.shared, "background-opacity": 0.22 } },
+      { selector: 'node[tone = "open"]', style: { "border-color": c.open, "border-width": 2, "border-style": "dashed", "background-color": c.open, "background-opacity": 0.12 } },
+      { selector: 'node[tone = "done"]', style: { "border-color": c.done, "border-width": 2, "background-color": c.done, "background-opacity": 0.2 } },
     ];
   }
 
@@ -965,7 +1230,14 @@ function makeGraphSlot(el) {
       ?.addEventListener?.("change", () => { try { cy.style(graphStyle()); } catch { /* not fatal */ } });
     // The viewer's own wheel/drag is what switches to manual. Cytoscape fires the same
     // event for our programmatic fits, hence the flag rather than a listener we detach.
-    cy.on("zoom pan", () => { if (Date.now() >= quietUntil && shown) setMode(shown, "manual"); });
+    // Only a real gesture counts: a zoom/pan within a moment of the viewer's own wheel or
+    // pointer input. Timing alone (quietUntil) misread the tail of long animated layouts as
+    // the viewer taking control, leaving a freshly drawn graph small and un-fitted.
+    el.addEventListener("wheel", () => { userGestureAt = Date.now(); }, { passive: true, capture: true });
+    el.addEventListener("pointerdown", () => { userGestureAt = Date.now(); }, { capture: true });
+    cy.on("zoom pan", () => {
+      if (Date.now() >= quietUntil && Date.now() - userGestureAt < 1500 && shown) setMode(shown, "manual");
+    });
     // A region that changed size (a splitter drag, a window resize) needs the canvas
     // remeasured — and re-fitted, but only while fitting is still ours to do.
     if (typeof ResizeObserver === "function") {
@@ -1004,14 +1276,34 @@ function makeGraphSlot(el) {
     const auto = isAuto(id);
     const keep = auto ? null : { zoom: cy.zoom(), pan: { ...cy.pan() } };
     cy.elements().remove();
+    // A node carrying numeric `x`/`y` is placed exactly (preset layout): a board or a
+    // matrix — e.g. work packages in ordered columns — needs positions, not a flow layout.
+    const at = (n) => (typeof n.x === "number" && typeof n.y === "number" ? { position: { x: n.x, y: n.y } } : {});
+    const placed = [...v.nodes.values()].some((n) => at(n).position);
     cy.add([
-      ...[...v.nodes.values()].map((n) => ({ group: "nodes", data: n })),
+      ...[...v.nodes.values()].map((n) => ({ group: "nodes", data: n, ...at(n) })),
       ...v.edges.map((e) => ({ group: "edges", data: { id: `${e.source}->${e.target}`, ...e } })),
     ]);
     // A-path (design D4): relayout the whole graph animated, so we can see whether
     // a small demo graph jitters before committing to scoped B-path layout.
     drive(() => {
-      cy.layout({ name: window.cytoscapeDagre ? "dagre" : "breadthfirst", animate: true, animationDuration: LAYOUT_MS, fit: auto, padding: 20 }).run();
+      if (placed) {
+        // Positions are given: nothing to animate, and fitting at once means the first
+        // frame the audience sees is already the whole board.
+        cy.layout({ name: "preset", animate: false, fit: auto, padding: 24 }).run();
+        if (auto) cy.fit(undefined, 24);
+      } else {
+        // A visual appearing for the first time is laid out in place — animating it from a
+        // pile at the origin reads as a glitch on a shared screen. Growth of the visual
+        // already on screen still animates, which is where motion carries meaning.
+        const fresh = lastDrawn !== id;
+        // Flow direction follows the box: a wide canvas reads left-to-right, a tall one
+        // top-down — otherwise a flow drawn against the grain is fitted down to a sliver.
+        const rankDir = el.clientWidth / Math.max(1, el.clientHeight) > 1.6 ? "LR" : "TB";
+        cy.layout({ name: window.cytoscapeDagre ? "dagre" : "breadthfirst", rankDir, nodeSep: 24, rankSep: 56, animate: !fresh, animationDuration: LAYOUT_MS, fit: auto, padding: 20 }).run();
+        if (fresh && auto) cy.fit(undefined, 20);
+      }
+      lastDrawn = id;
       // A layout re-positions nodes even with `fit: false`, which shifts what the viewer's
       // scale was framing. Restoring their zoom/pan is what "the viewer wins" means in
       // practice: new content appears, the view does not jump.
@@ -1057,6 +1349,63 @@ function makeGraphSlot(el) {
     return controls;
   }
 
+  function showVisual(id) {
+    if (id === shown || !visuals.has(id)) { if (visuals.has(id)) shown = id; renderTabs(); return; }
+    shown = id;
+    el.classList.add("fade");
+    draw(id);
+    setTimeout(() => el.classList.remove("fade"), 400);
+    renderTabs();
+  }
+
+  function pick(id) {
+    follow = false;
+    showVisual(id);
+  }
+
+  function resumeFollow() {
+    follow = true;
+    if (serverPick) showVisual(serverPick);
+    else renderTabs();
+  }
+
+  function step(delta) {
+    if (!order.length) return;
+    const i = Math.max(0, order.indexOf(shown));
+    pick(order[(i + delta + order.length) % order.length]);
+  }
+
+  function renderTabs() {
+    if (order.length < 2) { tabsEl?.remove(); tabsEl = null; return; }
+    if (!tabsEl) {
+      tabsEl = document.createElement("div");
+      tabsEl.className = "graph-tabs";
+      el.appendChild(tabsEl);
+    }
+    tabsEl.replaceChildren();
+    const chip = (label, cls, onClick, title) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `graph-tab ${cls}`;
+      b.textContent = label;
+      if (title) b.title = title;
+      b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+      tabsEl.appendChild(b);
+    };
+    chip("Auto", follow ? "graph-tab-auto on" : "graph-tab-auto", resumeFollow, "Follow the conversation (A)");
+    for (const id of order) {
+      const cls = [id === shown ? "on" : "", !follow && id === serverPick && id !== shown ? "fresh" : ""].join(" ");
+      chip(titles.get(id) ?? id, cls, () => pick(id), "Show this visual (← →)");
+    }
+  }
+
+  // One keyboard owner: the most recently created graph box. ←/→ page, A resumes following.
+  activeGraphKeys = (key) => {
+    if (key === "ArrowRight") step(1);
+    else if (key === "ArrowLeft") step(-1);
+    else if (key === "a" || key === "A") resumeFollow();
+  };
+
   function updateControls() {
     const c = ensureControls();
     c.classList.toggle("manual", !!shown && !isAuto(shown));
@@ -1065,6 +1414,9 @@ function makeGraphSlot(el) {
   return {
     apply(ev) {
       if (!ev.visual || !ev.graph) return;
+      if (!titles.has(ev.visual)) order.push(ev.visual);
+      titles.set(ev.visual, ev.title || titles.get(ev.visual) || ev.visual);
+      renderTabs();
       if (ev.graph.op === "reset" || !visuals.has(ev.visual)) {
         visuals.set(ev.visual, { nodes: new Map(), edges: [] });
         // A reset is a new topic: it starts fitted, never inheriting the previous scale.
@@ -1075,12 +1427,11 @@ function makeGraphSlot(el) {
       for (const e of ev.graph.edges ?? []) v.edges.push(e);
       if (ev.visual === shown) draw(shown); // live append to the shown visual
     },
+    /** The server's pick. Obeyed while following; otherwise only marked on its tab. */
     show(id) {
-      if (id === shown || !visuals.has(id)) { if (visuals.has(id)) shown = id; return; }
-      shown = id;
-      el.classList.add("fade");
-      draw(id);
-      setTimeout(() => el.classList.remove("fade"), 400);
+      serverPick = id;
+      if (follow) showVisual(id);
+      else renderTabs();
     },
     /** Called when the box's region changed size — re-fits only while automatic. */
     refit,

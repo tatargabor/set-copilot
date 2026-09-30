@@ -188,6 +188,9 @@ export function normalizeEvent(raw: unknown, opts: NormalizeOptions = {}): Norma
   if (o.speaker === "mic" || o.speaker === "system") event.speaker = o.speaker;
   if (o.priority === "immediate") event.priority = "immediate";
   if (typeof o.visual === "string") event.visual = o.visual;
+  // A short human name for the visual (wall-presentation): the canvas tab strip shows it.
+  // Producer text like any other string leaf, so the redactor scrubs it on the way out.
+  if (typeof o.title === "string" && o.title.trim()) event.title = o.title.trim().slice(0, 80);
   if (o.staged === true) event.staged = true; // predictive-staging marker (server-tracked)
   switch (payload) {
     case "text": event.text = o.text as string; break;

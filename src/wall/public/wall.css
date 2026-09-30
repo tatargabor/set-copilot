@@ -531,3 +531,389 @@ body.dragging-row, body.dragging-row * { cursor: row-resize !important; user-sel
   border-color: color-mix(in srgb, var(--muted) 45%, transparent);
 }
 .slot.stage-dim { opacity: 0.5; }
+
+/* ======================================================================================
+   Presentation (wall-presentation): the title bar, box headings and the `studio` theme.
+   Chrome only — nothing here decides what content reaches the wall.
+
+   `studio` is the look for a wall that is SHARED with an audience: calmer and roomier
+   than the operator dashboard, dark in any OS theme (a shared screen does not follow the
+   viewer's preference), with a single restrained accent gradient. The gradient is spent
+   in exactly three places — the brand mark, the agenda rail's hairline, the current
+   agenda item — so it reads as an accent and not as decoration.
+   ====================================================================================== */
+
+:root[data-theme="studio"] {
+  --scale: 1;
+  --bg: #07090f;
+  --panel: rgba(255, 255, 255, 0.035);
+  --panel-solid: #0d111b;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: #eef1f8;
+  --muted: #8b93a7;
+  --accent: #8b7bff;
+  --accent-2: #3ed6f0;
+  --alert: #ff7a85;
+  --ok: #3ee0a1;
+  --grad: linear-gradient(120deg, var(--accent) 0%, var(--accent-2) 100%);
+  /* Cytoscape paints to a canvas: solid colours only, no rgba panels. */
+  --graph-node: #151b2a;
+  --graph-group: #0b0f18;
+  --tone-primary: #8b7bff;
+  --tone-secondary: #3ed6f0;
+  --tone-shared: #e38bff;
+  --tone-open: #f2c14e;
+
+  --gap: calc(12px * var(--scale));
+  --box-pad: calc(14px * var(--scale)) calc(18px * var(--scale));
+  --radius: 16px;
+  --font: calc(16px * var(--scale));
+  --font-sm: calc(13px * var(--scale));
+  --strip-pad: calc(4px * var(--scale)) calc(16px * var(--scale));
+  color-scheme: dark;
+}
+
+:root[data-theme="studio"] body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  letter-spacing: -0.005em;
+  line-height: 1.5;
+  background:
+    radial-gradient(1100px 620px at 8% -12%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%),
+    radial-gradient(900px 560px at 108% 112%, color-mix(in srgb, var(--accent-2) 11%, transparent), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+/* Title bar: brand mark, title, subtitle. The strip below carries liveness. */
+:root[data-theme="studio"] .title-bar,
+.title-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: calc(12px * var(--scale, 1));
+  padding: calc(14px * var(--scale, 1)) calc(20px * var(--scale, 1)) calc(4px * var(--scale, 1));
+}
+.title-bar .title-mark {
+  align-self: center;
+  width: calc(12px * var(--scale, 1));
+  height: calc(12px * var(--scale, 1));
+  border-radius: 50%;
+  background: var(--grad, var(--accent));
+  box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 55%, transparent);
+  animation: mark-breathe 5s ease-in-out infinite;
+}
+@keyframes mark-breathe { 50% { box-shadow: 0 0 28px color-mix(in srgb, var(--accent-2, var(--accent)) 60%, transparent); } }
+.title-bar .title-text {
+  font-size: calc(20px * var(--scale, 1));
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.title-bar .title-sub {
+  font-size: calc(14px * var(--scale, 1));
+  color: var(--muted);
+}
+
+/* Status strip: quiet furniture under the title, no box. */
+:root[data-theme="studio"] .status-strip {
+  background: transparent;
+  border: 0;
+  padding-left: calc(20px * var(--scale));
+  padding-right: calc(20px * var(--scale));
+  gap: 14px;
+}
+:root[data-theme="studio"] .status-strip.status-listening .status-label { color: var(--ok); font-weight: 600; }
+:root[data-theme="studio"] .status-strip.status-dead,
+:root[data-theme="studio"] .status-strip.status-disconnected {
+  background: color-mix(in srgb, var(--alert) 12%, transparent);
+  border-radius: 999px;
+}
+:root[data-theme="studio"] .chan-name { font-size: calc(11px * var(--scale)); }
+:root[data-theme="studio"] .chan-bar { width: 26px; height: 4px; }
+:root[data-theme="studio"] .chan-active .chan-bar { background: var(--grad); }
+
+:root[data-theme="studio"] #wall { padding: var(--gap) calc(16px * var(--scale)) calc(16px * var(--scale)); }
+
+/* Resize handles stay usable but invisible until hovered: on a shared screen a hairline
+   crossing a spanning box reads as a rendering fault. */
+:root[data-theme="studio"] .splitter::after { background: transparent; }
+:root[data-theme="studio"] .splitter:hover::after { background: var(--accent); }
+
+/* Category icons are operator furniture; the box headings carry the meaning here. */
+:root[data-theme="studio"] .line .icon { display: none; }
+
+/* Glass panels.
+:root[data-theme="studio"] .slot {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 10px 30px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(14px);
+}
+
+/* Box headings, from `presentation.boxTitles` (data-title). Small caps-like label with a
+   dot — a heading, not a banner. */
+.slot[data-title]::before {
+  content: attr(data-title);
+  display: block;
+  font-size: calc(11.5px * var(--scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: calc(8px * var(--scale, 1));
+}
+.slot-scroll[data-title]::before {
+  position: sticky;
+  top: calc(-14px * var(--scale, 1));
+  z-index: 2;
+  padding: 2px 0 6px;
+  background: linear-gradient(var(--panel-solid, var(--panel)) 70%, transparent);
+}
+.slot-paced[data-title]::before {
+  position: absolute;
+  top: calc(12px * var(--scale, 1));
+  left: calc(16px * var(--scale, 1));
+  z-index: 2;
+  margin: 0;
+  pointer-events: none;
+}
+.slot-latest[data-title]:not(.slot-paced) { flex-direction: column; align-items: stretch; justify-content: flex-start; }
+
+/* Text rhythm: roomier than the operator dashboard. */
+:root[data-theme="studio"] .line { padding: calc(6px * var(--scale)) 0; border-bottom-color: var(--line); gap: 10px; }
+:root[data-theme="studio"] .line .time { font-size: calc(12px * var(--scale)); }
+:root[data-theme="studio"] .slot-latest:not(.slot-paced) .line { font-size: calc(18px * var(--scale)); }
+:root[data-theme="studio"] .line .txt table.tbl th,
+:root[data-theme="studio"] .line .txt table.tbl td { border-bottom-color: var(--line); padding-right: 14px; }
+
+/* The pinned working record: a faint accent wash, no gradient. */
+:root[data-theme="studio"] .slot[data-area="kitűzött"] {
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+}
+:root[data-theme="studio"] .slot[data-area="kitűzött"] .line { font-size: calc(16.5px * var(--scale)); }
+:root[data-theme="studio"] .slot[data-area="kitűzött"] .line .txt .hd {
+  font-size: calc(12px * var(--scale));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* The agenda rail (planning view): where the meeting stands. Gradient hairline; the
+   current item (the one bold line) picks up the gradient as text. */
+.slot[data-area="agenda"] { align-items: stretch; }
+.slot[data-area="agenda"] .line { border: 0; font-size: calc(17px * var(--scale, 1)); align-items: flex-start; }
+.slot[data-area="agenda"] .line .time { display: none; }
+.slot[data-area="agenda"] .line .icon { display: none; }
+.slot[data-area="agenda"] .line .txt .p { line-height: 1.55; }
+.slot[data-area="agenda"] .line .txt .p + .p { margin-top: calc(10px * var(--scale, 1)); }
+.slot[data-area="agenda"] .line .txt li { padding: 4px 0; }
+.slot[data-area="agenda"] .line .txt .hd {
+  font-size: calc(12px * var(--scale, 1));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+:root[data-theme="studio"] .slot[data-area="agenda"] {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--panel-solid), var(--panel-solid)) padding-box,
+    linear-gradient(160deg, color-mix(in srgb, var(--accent) 70%, transparent), color-mix(in srgb, var(--accent-2) 35%, transparent) 55%, var(--line)) border-box;
+}
+:root[data-theme="studio"] .slot[data-area="agenda"] .line .txt strong {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 700;
+}
+:root[data-theme="studio"] .slot[data-area="agenda"] .line .txt code.ic {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+
+/* Pending marker and graph controls follow the theme. */
+:root[data-theme="studio"] .pending-overlay {
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-solid));
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 999px;
+}
+:root[data-theme="studio"] .graph-btn { background: var(--panel-solid); }
+
+@media (prefers-reduced-motion: reduce) {
+  .title-bar .title-mark { animation: none; }
+}
+
+/* Ticker bands (presentation.tickers): a thin full-width box whose latest text is shown as
+   a scrolling (`marquee`) or cross-fading (`rotate`) line. Its heading becomes a pill on
+   the left instead of a label above. */
+.slot:has(.ticker-view) {
+  display: flex;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: calc(14px * var(--scale, 1));
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+.slot:has(.ticker-view)[data-title]::before {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  position: static;
+}
+.slot:has(.ticker-view) > .pane { flex: 1 1 auto; min-width: 0; height: 100%; display: flex; align-items: center; }
+.ticker-view {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  font-size: calc(16px * var(--scale, 1));
+}
+.ticker-marquee {
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 3%, #000 97%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 3%, #000 97%, transparent 100%);
+}
+.ticker-track {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: ticker-scroll var(--ticker-duration, 40s) linear infinite;
+}
+.ticker-track .ticker-item { padding-right: calc(28px * var(--scale, 1)); }
+.ticker-track .ticker-item::after {
+  content: "◆";
+  margin-left: calc(28px * var(--scale, 1));
+  font-size: 0.6em;
+  vertical-align: 0.2em;
+  color: var(--accent);
+  opacity: 0.7;
+}
+@keyframes ticker-scroll { to { transform: translateX(-50%); } }
+.ticker-rotate .ticker-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 600ms ease, transform 600ms ease;
+}
+.ticker-rotate .ticker-item.on { opacity: 1; transform: none; }
+.ticker-item strong { font-weight: 650; }
+:root[data-theme="studio"] .ticker-item strong {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track { animation: none; }
+  .ticker-rotate .ticker-item { transition: none; }
+}
+
+/* Auto-scroll toggle: a quiet chip in the box's top-right corner, only on a box whose
+   content overflows. Present but not loud — the audience should not read it as content. */
+.autoscroll-toggle {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 3;
+  font: inherit;
+  font-size: calc(11px * var(--scale, 1));
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-solid, var(--panel)) 85%, transparent);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 150ms ease;
+}
+.slot:hover .autoscroll-toggle { opacity: 1; }
+.autoscroll-toggle.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.autoscroll-toggle[hidden] { display: none; }
+
+/* A titled canvas keeps its drawing clear of the heading. */
+.slot-paced[data-title] > .pane { height: calc(100% - 34px * var(--scale, 1)); margin-top: calc(34px * var(--scale, 1)); }
+
+/* Canvas tabs (wall-presentation): one chip per visual the box has received. "Auto" follows
+   the conversation; a chosen tab pins the view; a tab with a dot is what the conversation
+   moved to while the view was pinned. Sits in the heading row, right of the box title. */
+.graph-tabs {
+  position: absolute;
+  top: calc(-31px * var(--scale, 1));
+  left: calc(96px * var(--scale, 1));
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.graph-tab {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: calc(12px * var(--scale, 1));
+  line-height: 1;
+  padding: 5px 11px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.graph-tab:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.graph-tab.on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.graph-tab-auto.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.graph-tab.fresh::after { content: " •"; color: var(--accent-2, var(--accent)); }
+
+/* Full-screen canvas: the box lifts over the whole grid; the grid underneath keeps living.
+   Cytoscape re-fits through the box's ResizeObserver. */
+.slot.slot-maximized {
+  position: absolute;
+  /* An absolutely positioned grid item is laid out against its OWN grid area unless its
+     placement is auto — only then does it cover the whole grid container. The area is set
+     inline by wall.js, hence the !important. */
+  grid-area: auto !important;
+  inset: var(--gap);
+  z-index: 20;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+:root[data-theme="studio"] .slot.slot-maximized { background: var(--panel-solid, var(--panel)); }
+.maximize-toggle {
+  position: absolute;
+  top: calc(8px * var(--scale, 1));
+  right: calc(10px * var(--scale, 1));
+  z-index: 4;
+  font: inherit;
+  font-size: calc(12px * var(--scale, 1));
+  line-height: 1;
+  padding: 5px 11px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-solid, var(--panel)) 85%, transparent);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.maximize-toggle:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.slot-maximized .maximize-toggle { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+/* The tab strip must stop short of the button. */
+.slot-paced .graph-tabs { right: calc(130px * var(--scale, 1)); }
