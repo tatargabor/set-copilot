@@ -1,15 +1,6 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "SET_AGENT_NAME=set-copilot SET_AGENT_ROOM=set-copilot ~/.nvm/versions/node/v22.22.0/bin/node ~/code2/set-agent-comm/hooks/session-start.mjs"
-          }
-        ]
-      }
-    ],
+    "SessionStart": [],
     "UserPromptSubmit": [
       {
         "matcher": "",
@@ -56,14 +47,6 @@
             "type": "command",
             "command": "set-hook-stop",
             "timeout": 5
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "SET_AGENT_NAME=set-copilot SET_AGENT_ROOM=set-copilot ~/.nvm/versions/node/v22.22.0/bin/node ~/code2/set-agent-comm/hooks/stop.mjs"
           }
         ]
       }

@@ -389,7 +389,12 @@ function loadDotEnvFile(envPath: string): void {
     ) {
       value = value.slice(1, -1);
     }
-    if (!process.env[key]) process.env[key] = value;
+    // `=== undefined`, not `!`: an empty value is a real value now that
+    // `MIC_SOURCE=` means "no device, use the system default". With a falsy
+    // test, the project `.env`'s deliberate empty would be overwritten by the
+    // user-level one loaded after it — inverting the documented precedence for
+    // exactly the setting that needs it most.
+    if (process.env[key] === undefined) process.env[key] = value;
   }
 }
 
@@ -1109,8 +1114,17 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       model: process.env.WHISPER_MODEL || fileCfg.whisper?.model || join(userConfigDir(), "models", "ggml-small.en.bin"),
     },
     audio: {
-      micSource: process.env.MIC_SOURCE || audio.micSource || DEFAULTS.audio.micSource,
-      monitorSource: process.env.MONITOR_SOURCE || audio.monitorSource || DEFAULTS.audio.monitorSource,
+      // `??`, not `||`, on the env var: a device env var that is SET BUT EMPTY
+      // means "use the system default", and that is the only way to say it when
+      // the project config pins a device. A committed `micSource` is
+      // machine-specific by nature — a Linux `alsa_input.usb-…` name resolves to
+      // nothing on macOS, where it yields a clean 0-byte capture and no error —
+      // and the project config outranks the user-level one, so a per-machine
+      // override has nowhere else to live. With `||`, MIC_SOURCE="" fell through
+      // to the very value it was set to escape. (An empty value in a config
+      // FILE is different: `mergeAudio` reads it as "never filled in".)
+      micSource: process.env.MIC_SOURCE ?? (audio.micSource || DEFAULTS.audio.micSource),
+      monitorSource: process.env.MONITOR_SOURCE ?? (audio.monitorSource || DEFAULTS.audio.monitorSource),
       sampleRate: audio.sampleRate ?? DEFAULTS.audio.sampleRate,
       toneStart: audio.toneStart || DEFAULTS.audio.toneStart,
       toneEnd: audio.toneEnd || DEFAULTS.audio.toneEnd,

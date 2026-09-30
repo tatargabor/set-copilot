@@ -42,6 +42,7 @@ import {
   digestMarkdownPath, type CopilotConfig,
 } from "./config.js";
 import { capturePidPath, captureAlive } from "./runtime-dir.js";
+import { reportPreflight, runConfigPreflight } from "./config-preflight.js";
 import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runDictationHandoverCommand, runHandoverCommand } from "./handover.js";
 import {
   applySkillInstall, destLinkTarget, inspectDest, planSkillInstall, resolveInstallMode, skillNames,
@@ -60,6 +61,19 @@ const PKG_ROOT = resolve(__dirname, "..");
 
 async function main(): Promise<void> {
   const [cmd, ...args] = process.argv.slice(2);
+
+  // Config preflight, before any command that reads config: validate the JSON and
+  // apply pending schema migrations. This is the whole point of versioning the
+  // config — an upgrade that changes what a key means can come and fix the file
+  // rather than wait for a user to notice a failure that never prints anything.
+  //
+  // `init` is exempt because it CREATES these files, and `help` reads none. `doctor`
+  // sees the fatal but keeps going: being unable to load the config is precisely
+  // what someone runs doctor to find out, and it reports parse errors per file.
+  if (cmd && cmd !== "init" && cmd !== "help") {
+    if (!reportPreflight(runConfigPreflight()) && cmd !== "doctor") process.exit(1);
+  }
+
   switch (cmd) {
     case "init": return cmdInit(args.includes("--global"), args.includes("--copy"));
     case "capture": {
