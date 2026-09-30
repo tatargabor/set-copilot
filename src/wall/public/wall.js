@@ -1213,6 +1213,7 @@ function makeGraphSlot(el) {
       { selector: "edge[label]", style: { label: "data(label)", "font-size": 10, color: c.edge, "text-background-color": c.group, "text-background-opacity": 1, "text-background-padding": "2px" } },
       // A node with `parent` sits inside a group box (Cytoscape compound nodes).
       { selector: ":parent", style: { "background-color": c.group, "background-opacity": 0.6, "border-color": c.edge, "border-width": 1, "border-style": "dashed", "text-valign": "top", "text-halign": "center", "font-size": 12, "font-weight": 600, color: c.ink, padding: "14px", shape: "round-rectangle" } },
+      { selector: "node[image]", style: { label: "", shape: "rectangle", "background-image": "data(image)", "background-fit": "contain", "background-opacity": 0, "border-width": 0, width: "data(w)", height: "data(h)", padding: "0px" } },
       { selector: 'node[tone = "primary"]', style: { "border-color": c.primary, "border-width": 2, "background-color": c.primary, "background-opacity": 0.22 } },
       { selector: 'node[tone = "secondary"]', style: { "border-color": c.secondary, "border-width": 2, "background-color": c.secondary, "background-opacity": 0.22 } },
       { selector: 'node[tone = "shared"]', style: { "border-color": c.shared, "border-width": 2, "background-color": c.shared, "background-opacity": 0.22 } },
@@ -1279,9 +1280,15 @@ function makeGraphSlot(el) {
     // A node carrying numeric `x`/`y` is placed exactly (preset layout): a board or a
     // matrix — e.g. work packages in ordered columns — needs positions, not a flow layout.
     const at = (n) => (typeof n.x === "number" && typeof n.y === "number" ? { position: { x: n.x, y: n.y } } : {});
+    // A node carrying `image` is a picture — e.g. a figure from a client document shown as
+    // it is. A local path goes through /media, which confines it server-side, exactly as
+    // an image event does; the node then gets the tabs, follow and full-screen of any graph.
+    const media = (n) => (typeof n.image === "string" && n.image
+      ? { ...n, image: isHttp(n.image) ? n.image : `/media?src=${encodeURIComponent(n.image)}` }
+      : n);
     const placed = [...v.nodes.values()].some((n) => at(n).position);
     cy.add([
-      ...[...v.nodes.values()].map((n) => ({ group: "nodes", data: n, ...at(n) })),
+      ...[...v.nodes.values()].map((n) => ({ group: "nodes", data: media(n), ...at(n) })),
       ...v.edges.map((e) => ({ group: "edges", data: { id: `${e.source}->${e.target}`, ...e } })),
     ]);
     // A-path (design D4): relayout the whole graph animated, so we can see whether
