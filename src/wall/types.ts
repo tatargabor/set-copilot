@@ -535,6 +535,25 @@ export interface WallConfig {
    * `zone` stay the only content controls.
    */
   presentation: WallPresentation;
+  /**
+   * The live transcript page (wall-transcript): what was said, by whom, as it is
+   * transcribed — no copilot in between. Off unless a route is configured.
+   */
+  transcriptPage: TranscriptPage;
+}
+
+/** A plain page showing the running capture's transcript, speaker by speaker. */
+export interface TranscriptPage {
+  /** Route the page is served at (e.g. "/transcript"); null → no page. */
+  route: string | null;
+  /** Heading on the page. */
+  title: string;
+  /**
+   * Run every line through the wall's redaction taxonomy before it leaves the server.
+   * Default true: the page may be shown on a shared screen, and the patterns that keep
+   * internal figures off the wall should keep them off here too.
+   */
+  redact: boolean;
 }
 
 /** Chrome-only settings for a wall shown to an audience. */

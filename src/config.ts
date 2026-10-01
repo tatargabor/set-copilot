@@ -796,6 +796,7 @@ export const DEFAULT_WALL: WallConfig = {
   layouts: DEFAULT_LAYOUTS,
   windows: DEFAULT_WINDOWS,
   presentation: DEFAULT_PRESENTATION,
+  transcriptPage: { route: null, title: "Live transcript", redact: true },
 };
 
 /**
@@ -1281,6 +1282,18 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         : DEFAULT_WALL.layouts,
       windows: Array.isArray(wall.windows) ? wall.windows : DEFAULT_WALL.windows,
       presentation: resolvePresentation(wall.presentation),
+      transcriptPage: {
+        route:
+          typeof wall.transcriptPage?.route === "string" && wall.transcriptPage.route.startsWith("/")
+            ? wall.transcriptPage.route
+            : DEFAULT_WALL.transcriptPage.route,
+        title:
+          typeof wall.transcriptPage?.title === "string" && wall.transcriptPage.title.trim()
+            ? wall.transcriptPage.title.trim()
+            : DEFAULT_WALL.transcriptPage.title,
+        // Only an explicit `false` turns redaction off; anything else keeps the safe default.
+        redact: wall.transcriptPage?.redact !== false,
+      },
     },
     transcript: {
       speakers:

@@ -29,7 +29,7 @@ import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
   type Audience, type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Heartbeat, type LayoutSwitch, type Pacing,
   type Pending, type Promote, type RedactionConfig, type ResolvedWindow, type ShowCommand, type StageExpired,
-  type WallLayout, type WallPresentation, type WireMessage, type Zone,
+  type TranscriptPage, type WallLayout, type WallPresentation, type WireMessage, type Zone,
   isHeartbeat, isLayoutSwitch, isPending, isPromote, isShowCommand, isStageExpired, reachesPrivate, reachesPublic,
 } from "./types.js";
 
@@ -219,6 +219,12 @@ export interface WallServerOptions {
    * behavior, never a leak of anything.
    */
   dictationPath?: string;
+  /**
+   * The live transcript page (wall-transcript). Served only when `route` is set. Lines
+   * come from the transcript the running capture writes (`activeTranscript`), labelled
+   * by `speakers` (channel → display name, the same map the stitched transcript uses).
+   */
+  transcriptPage?: TranscriptPage & { speakers: Record<string, string> };
   /** How often the liveness heartbeat is broadcast. Default 1000 ms. */
   heartbeatMs?: number;
   /**
@@ -234,6 +240,20 @@ export interface WallServerOptions {
    * injectable so a test can point the append at a temp file without a runtime dir.
    */
   inputPath?: string;
+}
+
+/** The first read of a transcript page starts this far from the end of a long meeting. */
+const TRANSCRIPT_PAGE_MAX_INITIAL_BYTES = 1_000_000;
+/** One poll never reads more than this; the page asks again for the rest. */
+const TRANSCRIPT_PAGE_MAX_CHUNK_BYTES = 2_000_000;
+
+interface TranscriptPageLine {
+  ts: number;
+  speaker: string;
+  label: string;
+  text: string;
+  cont: boolean;
+  midWord: boolean;
 }
 
 export class WallServer {
@@ -1137,6 +1157,11 @@ export class WallServer {
         presentation: this.opts.presentation ?? null,
       });
     }
+    const tp = this.opts.transcriptPage;
+    if (tp?.route) {
+      if (path === tp.route) return this.serveFile(res, join(this.opts.publicDir, "transcript.html"));
+      if (path === "/api/transcript") return this.handleTranscript(url, res, tp);
+    }
     if (path === "/api/staged") {
       // Read-only (D2): the producer asks what it may promote; nothing here changes state.
       return this.json(res, { staged: this.promotable() });
@@ -1160,6 +1185,90 @@ export class WallServer {
       return;
     }
     this.serveFile(res, join(this.opts.publicDir, "." + path));
+  }
+
+  /**
+   * New transcript lines since a byte offset (wall-transcript).
+   *
+   * Polled, not streamed: the page is a reader of one append-only file, and an offset
+   * cursor makes every request idempotent — a reload, a sleep, a dropped connection all
+   * recover by asking again. `id` names the file (path + inode); when the capture starts
+   * a new one, the id changes and the page starts over instead of reading a stale cursor
+   * into the wrong file. A trailing line without its newline is still being written and
+   * is left for the next poll.
+   */
+  private handleTranscript(url: URL, res: ServerResponse, tp: TranscriptPage & { speakers: Record<string, string> }): void {
+    const file = this.activeTranscript();
+    const empty = { id: null, offset: 0, title: tp.title, lines: [] };
+    if (!file || !existsSync(file)) return this.json(res, empty);
+    let size: number;
+    let id: string;
+    try {
+      const st = statSync(file);
+      size = st.size;
+      id = `${file}:${st.ino}`;
+    } catch {
+      return this.json(res, empty);
+    }
+    let offset = Number(url.searchParams.get("offset") ?? "0");
+    if (!Number.isFinite(offset) || offset < 0 || offset > size || url.searchParams.get("id") !== id) offset = 0;
+    let start = offset;
+    let skipFirst = false;
+    if (start === 0 && size > TRANSCRIPT_PAGE_MAX_INITIAL_BYTES) {
+      start = size - TRANSCRIPT_PAGE_MAX_INITIAL_BYTES;
+      skipFirst = true; // a mid-line start: the first fragment is unparseable
+    }
+    const lines: TranscriptPageLine[] = [];
+    let next = start;
+    if (size > start) {
+      let buf: Buffer;
+      try {
+        const fd = openSync(file, "r");
+        try {
+          buf = Buffer.alloc(Math.min(size - start, TRANSCRIPT_PAGE_MAX_CHUNK_BYTES));
+          readSync(fd, buf, 0, buf.length, start);
+        } finally { closeSync(fd); }
+      } catch (e) {
+        console.warn(`[set-copilot] wall: transcript page could not read ${file}: ${(e as Error).message}`);
+        return this.json(res, { ...empty, id, offset });
+      }
+      const end = buf.lastIndexOf(0x0a);
+      if (end >= 0) {
+        next = start + end + 1;
+        const raw = buf.subarray(0, end).toString("utf-8").split("\n");
+        if (skipFirst) raw.shift();
+        for (const l of raw) {
+          const line = this.transcriptPageLine(l, tp);
+          if (line) lines.push(line);
+        }
+      }
+    }
+    return this.json(res, { id, offset: next, title: tp.title, lines });
+  }
+
+  /** One transcript JSONL line → what the page shows, redacted when the page asks for it. */
+  private transcriptPageLine(raw: string, tp: TranscriptPage & { speakers: Record<string, string> }): TranscriptPageLine | null {
+    let o: Record<string, unknown>;
+    try { o = JSON.parse(raw); } catch { return null; }
+    if (!o || typeof o.text !== "string" || o.final === false) return null;
+    let text = o.text;
+    if (tp.redact && this.redactor) {
+      try {
+        text = this.redactor.scrub(text);
+        if (this.redactor.matches(text)) text = this.redactor.replacement;
+      } catch {
+        text = this.redactor.replacement; // fail closed: an unscrubbable line is withheld
+      }
+    }
+    const speaker = typeof o.speaker === "string" ? o.speaker : "";
+    return {
+      ts: typeof o.ts === "number" ? o.ts : 0,
+      speaker,
+      label: tp.speakers[speaker] ?? speaker,
+      text,
+      cont: o.cont === true,
+      midWord: o.midWord === true,
+    };
   }
 
   /**
