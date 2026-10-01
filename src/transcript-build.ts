@@ -100,6 +100,11 @@ export interface StitchStats {
   healed: number;
   /** True when the input's timestamps restarted (a capture rotation was repaired) */
   rotated: boolean;
+  /**
+   * How many times a channel's clock restarted. One per channel is a capture rotation;
+   * more means the clocks cannot be trusted and the output is in recording order.
+   */
+  clockRepairs: number;
 }
 
 export interface StitchResult {
@@ -181,37 +186,63 @@ export function parseLines(text: string): { lines: StitchLine[]; events: StitchE
 }
 
 /**
- * Repair the timeline of a capture that restarted at its duration limit: its timestamps
- * resume from zero, so in one file the second segment appears to jump back to the start
- * of the meeting. Offsets everything after the jump onto the real timeline and reports
- * where the break was.
+ * Repair a timeline whose timestamps restarted part-way through one file.
  *
- * Needed for the existing archive regardless of whether the rotation itself goes away.
+ * Two causes, one symptom. A capture that restarted at its duration limit resumes BOTH
+ * channels from zero. A transcription socket that reconnected restarted ONE channel's
+ * clock (captures recorded before the reconnect fix took each token's time from the
+ * current socket), while the other channel kept counting — measured on a two-hour call:
+ * 155 backward jumps on the mic channel alone, and the stitched transcript squeezed two
+ * hours into four minutes with both channels interleaved out of order.
+ *
+ * So the repair is PER CHANNEL: when a channel's clock jumps back, that channel continues
+ * from the latest point the whole file has reached so far (file order is recording order).
+ * A row without a speaker (a `silence` event) is placed at that point and never moves it:
+ * it carries whichever channel's raw clock produced it, and letting it drive the timeline
+ * stacked every later segment on top of a stale clock (measured: a two-hour call stretched
+ * to seven). The first repair is reported as the break; later ones are counted.
+ *
+ * Needed for the existing archives regardless of whether either cause goes away.
  */
-export function applyRotationOffset<T extends { ts: number; startTs?: number; seq?: number }>(
+export function applyRotationOffset<T extends { ts: number; startTs?: number; seq?: number; speaker?: string }>(
   rows: T[],
-): { rows: T[]; rotationAt: number | null; rotationSeq: number } {
-  let prevMax = 0;
-  let offset = 0;
+): { rows: T[]; rotationAt: number | null; rotationSeq: number; repairs: number; repairsBy: Map<string, number> } {
+  const rawMax = new Map<string, number>();
+  const offset = new Map<string, number>();
+  let maxAdj = 0;
   let rotationAt: number | null = null;
   let rotationSeq = 0;
+  let repairs = 0;
+  const repairsBy = new Map<string, number>();
   const out: T[] = [];
   for (const o of rows) {
-    if (!offset && o.ts < prevMax - ROTATION_GAP_MS) {
-      offset = prevMax;
-      rotationAt = prevMax;
-      // The break belongs to the FIRST row of the new segment: its timestamp ties with
-      // the last row of the old one, so only file order puts the marker between them.
-      rotationSeq = o.seq ?? 0;
+    const key = o.speaker ?? "";
+    if (!key) {
+      out.push({ ...o, ts: maxAdj || o.ts, startTs: o.startTs != null ? maxAdj || o.startTs : undefined });
+      continue;
     }
-    out.push({
-      ...o,
-      ts: o.ts + offset,
-      startTs: o.startTs != null ? o.startTs + offset : undefined,
-    });
-    if (!offset) prevMax = Math.max(prevMax, o.ts);
+    const prevRaw = rawMax.get(key);
+    if (prevRaw != null && o.ts < prevRaw - ROTATION_GAP_MS) {
+      offset.set(key, maxAdj);
+      rawMax.set(key, o.ts);
+      repairs++;
+      repairsBy.set(key, (repairsBy.get(key) ?? 0) + 1);
+      if (rotationAt == null) {
+        rotationAt = maxAdj;
+        // The break belongs to the FIRST row of the new segment: its timestamp ties with
+        // the last row of the old one, so only file order puts the marker between them.
+        rotationSeq = o.seq ?? 0;
+      }
+    } else {
+      rawMax.set(key, Math.max(prevRaw ?? 0, o.ts));
+    }
+    const off = offset.get(key) ?? 0;
+    const row = { ...o, ts: o.ts + off, startTs: o.startTs != null ? o.startTs + off : undefined };
+    maxAdj = Math.max(maxAdj, row.ts);
+    out.push(row);
   }
-  return { rows: out, rotationAt, rotationSeq };
+  for (const o of rows) if (o.speaker && !repairsBy.has(o.speaker)) repairsBy.set(o.speaker, 0);
+  return { rows: out, rotationAt, rotationSeq, repairs, repairsBy };
 }
 
 interface JoinStats {
@@ -612,7 +643,14 @@ export function stitchTranscript(
       _event: e,
     })),
   ].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
-  const { rows: shifted, rotationAt, rotationSeq } = applyRotationOffset(tagged);
+  const repaired = applyRotationOffset(tagged);
+  const { rotationAt, rotationSeq, repairs } = repaired;
+  const channelCount = repaired.repairsBy.size;
+  // A whole-capture rotation restarts every channel once. Anything beyond that is a
+  // clock that cannot be trusted (see applyRotationOffset), so the output falls back to
+  // recording order with times read off the steadiest channel.
+  const unreliable = repairs > Math.max(1, channelCount);
+  const shifted = unreliable ? retime(tagged, repaired.repairsBy) : repaired.rows;
   const lines = shifted.filter((r) => !r._event) as StitchLine[];
   const events = shifted
     .filter((r) => r._event)
@@ -622,19 +660,23 @@ export function stitchTranscript(
   // Whatever channels the recording actually has — mic-only dictation is the common case,
   // and a future third channel needs no change here.
   const speakers = [...new Set(lines.map((l) => l.speaker))].sort();
-  const sentences = markOverlaps(
-    speakers
-      .flatMap((sp) => splitSentences(rebuildChannel(lines, sp, stats, { completeWords, pauseGapMs }), sp))
-      // Speaking order, NOT completion order: with two channels a long utterance
-      // completes after several short ones from the other side.
-      .sort((a, b) => a.startTs - b.startTs || a.speaker.localeCompare(b.speaker)),
-  );
+  const rebuilt = speakers
+    .flatMap((sp) => splitSentences(rebuildChannel(lines, sp, stats, { completeWords, pauseGapMs }), sp));
+  const sentences = unreliable
+    // Recording order; no overlap marks — they would be read off the same broken clocks.
+    ? rebuilt.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
+    : markOverlaps(
+        // Speaking order, NOT completion order: with two channels a long utterance
+        // completes after several short ones from the other side.
+        rebuilt.sort((a, b) => a.startTs - b.startTs || a.speaker.localeCompare(b.speaker)),
+      );
 
   if (!sentences.length) return null;
 
-  const stream = buildStream(sentences, events, { at: rotationAt, seq: rotationSeq });
+  const stream = buildStream(sentences, events, { at: unreliable ? null : rotationAt, seq: rotationSeq });
+  const markdown = renderMarkdown(stream, { speakers: opts.speakers ?? {}, redactions });
   return {
-    markdown: renderMarkdown(stream, { speakers: opts.speakers ?? {}, redactions }),
+    markdown: unreliable ? `${unreliableNote(repairs)}\n\n${markdown}` : markdown,
     jsonl: renderJsonl(stream, { redactions }),
     plain: renderPlain(stream, { redactions }),
     sentences,
@@ -645,8 +687,45 @@ export function stitchTranscript(
       guessed: stats.guessed,
       healed: stats.healed,
       rotated: rotationAt != null,
+      clockRepairs: repairs,
     },
   };
+}
+
+/**
+ * Times for a recording whose clocks cannot be trusted: every row keeps its place in the
+ * file and takes the time the steadiest channel (fewest restarts) had reached by then.
+ * Approximate by construction — the note in the output says so — but monotonic, and on
+ * the measured two-hour call within minutes of the real length, where the per-channel
+ * repair alone stretched it to seven hours.
+ */
+function retime<T extends { ts: number; startTs?: number; seq?: number; speaker?: string }>(
+  rows: T[],
+  repairsBy: Map<string, number>,
+): T[] {
+  let ref = "";
+  let fewest = Infinity;
+  for (const [sp, n] of repairsBy) if (n < fewest) { fewest = n; ref = sp; }
+  // The reference channel's own segments laid end to end: when its raw clock restarts,
+  // it continues from where it had got to — never from another channel's (faster) clock.
+  let clock = rows.find((r) => r.speaker === ref)?.ts ?? 0;
+  let rawPrev: number | null = null;
+  let base = 0;
+  return rows.map((r) => {
+    if (r.speaker === ref) {
+      if (rawPrev != null && r.ts < rawPrev - ROTATION_GAP_MS) base = clock - r.ts;
+      rawPrev = r.ts < (rawPrev ?? 0) - ROTATION_GAP_MS ? r.ts : Math.max(rawPrev ?? r.ts, r.ts);
+      clock = Math.max(clock, base + r.ts);
+    }
+    return { ...r, ts: clock, startTs: r.startTs != null ? clock : undefined };
+  });
+}
+
+function unreliableNote(repairs: number): string {
+  return (
+    `> ⚠ **Timeline repaired.** The transcription clocks restarted ${repairs} times in this ` +
+    "recording (reconnects), so the lines are in RECORDING order and the times are approximate."
+  );
 }
 
 /** Convenience: raw file contents → artifacts. */

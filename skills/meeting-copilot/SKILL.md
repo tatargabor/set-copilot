@@ -102,11 +102,21 @@ It contains: `decisions`, `deferred`, `cards` (per-entity quirks), `domainFaq`, 
 
 #### Phase 2: Start Capture
 
-ONE Bash call with `run_in_background: true` — the capture plays the rising tone by itself when the mic is live, and self-stops after 2 hours (no separate timer or beep step):
+ONE ordinary Bash call (NOT `run_in_background`) — `--detach` starts the capture in its own
+session and returns in about two seconds; the capture plays the rising tone by itself when the
+mic is live, and self-stops after 4 hours (no separate timer or beep step):
 
 ```bash
-SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --max-minutes 120
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --max-minutes 240 --detach
 ```
+
+**Never start the capture (or the wall) as a `run_in_background` command.** The harness kills
+background commands at its time limit — measured on a real client call (2026-10-01): the first
+capture died after 30 minutes, the restarted one at exactly 2 hours, mid-sentence, with the wall,
+and nothing reported it until the transcript ran out. A detached process is not the tool call's
+child: it lives until `stop` / `wall-stop` (they find it by its PID file) or `--max-minutes`.
+Its output goes to `capture.log` in the runtime dir; if it dies during start-up, the command
+exits non-zero and prints the log's tail — report that, do not retry blindly.
 
 `SET_COPILOT_DIR` scopes the transcript and the PID file to this Claude session and this
 project, exactly as `/ds` does for dictation. Without it the capture lands in the shared
@@ -118,19 +128,19 @@ outright ("a capture is already running"). **Keep it byte-identical in Phase 3 a
 
 #### Phase 2b: Start the wall (ONLY if `wall` was in the args)
 
-ONE Bash call with `run_in_background: true`. Derive a per-session port so parallel
-sessions do not fight over one (the wall walks to the next free port anyway if it is
-taken), and start it in the SAME scoped runtime dir, fake-feed off:
+ONE ordinary Bash call (NOT `run_in_background` — see Phase 2), detached. Derive a
+per-session port so parallel sessions do not fight over one (the wall walks to the next free
+port anyway if it is taken), and start it in the SAME scoped runtime dir, fake-feed off:
 
 ```bash
 SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}"
 WALL_PORT=$(( 4180 + $(printf '%s' "${CLAUDE_CODE_SESSION_ID:-shared}" | cksum | cut -d' ' -f1) % 800 ))
-SET_COPILOT_DIR="$SET_COPILOT_DIR" npx set-copilot wall --no-fake-feed --port "$WALL_PORT"
+SET_COPILOT_DIR="$SET_COPILOT_DIR" npx set-copilot wall --no-fake-feed --port "$WALL_PORT" --detach
 ```
 
-The wall writes `wall.pid` + `wall.url` into the runtime dir and keeps the process
-alive. Read the URL back and tell the user (the bound port may differ from `WALL_PORT`
-on fallback), in a **separate, non-background** call:
+The wall writes `wall.pid` + `wall.url` into the runtime dir and keeps running on its own
+(log: `wall.log`). Read the URL back and tell the user (the bound port may differ from
+`WALL_PORT` on fallback), in a **separate** call:
 
 ```bash
 sleep 1; cat "$(SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot path wall-url)"
@@ -169,6 +179,14 @@ while :; do OUT=$(SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-s
 ```
 
 Then tell the user: "🟢 Meeting Copilot active. Watching and analyzing. `/meeting-copilot stop` to finish." and END YOUR TURN — the Monitor notifications drive everything from here.
+
+**Re-arm the Monitor whenever it ends without `capture-dead`.** The harness can end a Monitor at
+its own time limit while the (detached) capture keeps recording — then the transcript keeps
+growing and nobody reads it. When you are told the Monitor stream ended, check
+`npx set-copilot status` (same `SET_COPILOT_DIR`): if the capture is still running, start the
+same Monitor again at once, without asking and without a chat message beyond one line. The
+poll's offset lives in the runtime dir, so nothing said in between is lost — the next batch
+picks up where the last one stopped.
 
 Each notification is one batch of JSONL lines:
 ```json

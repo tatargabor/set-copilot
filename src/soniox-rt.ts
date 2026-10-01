@@ -73,6 +73,13 @@ export class SonioxRtClient extends EventEmitter {
   /** Audio that arrived while the socket was down (bounded — oldest dropped first). */
   private pending: Buffer[] = [];
   private pendingBytes = 0;
+  /**
+   * Where the CURRENT socket's audio starts on this client's timeline, in ms since
+   * `startTime`. Soniox times every token from the start of its own stream, so each
+   * reconnect restarted the clock at zero — measured on a two-hour call: 37 restarts, and a
+   * transcript that could not be put back in order from its timestamps.
+   */
+  private streamBaseMs = 0;
 
   constructor(opts: SonioxRtOptions, speaker: "mic" | "system") {
     super();
@@ -85,6 +92,15 @@ export class SonioxRtClient extends EventEmitter {
   connect(): void {
     if (this.closing) return;
     const url = `wss://stt-rt.soniox.com/transcribe-websocket`;
+    // A replaced socket must be gone, not just forgotten: its late `close` used to schedule
+    // a second reconnect while the new socket was already live, and two streams then fed
+    // the same channel — the old one's tokens still arriving on the old clock.
+    const old = this.ws;
+    if (old) {
+      old.removeAllListeners();
+      old.on("error", () => { /* a socket being discarded may still error; nothing to do */ });
+      try { old.terminate(); } catch { /* already closed */ }
+    }
     const ws = new WebSocket(url);
     this.ws = ws;
     if (this.startTime === 0) this.startTime = Date.now();
@@ -105,6 +121,9 @@ export class SonioxRtClient extends EventEmitter {
       const buffered = this.pendingBytes;
       this.attempt = 0;
       this.downSince = 0;
+      // The first audio this socket receives is the replayed buffer, which was spoken
+      // `pendingBytes` worth of audio before now.
+      this.streamBaseMs = Math.max(0, this.elapsedMs() - this.bytesToMs(this.pendingBytes));
       this.startHeartbeat(ws);
       // Replay what was spoken while we were disconnected — Soniox treats it as the
       // head of the new stream, so the words land instead of vanishing.
@@ -115,6 +134,7 @@ export class SonioxRtClient extends EventEmitter {
     });
 
     ws.on("message", (data: Buffer | string) => {
+      if (ws !== this.ws) return; // a replaced socket's late tokens belong to no timeline
       try {
         const msg = JSON.parse(data.toString());
         if (msg.error) {
@@ -127,7 +147,7 @@ export class SonioxRtClient extends EventEmitter {
               speaker: this.speaker,
               text: token.text,
               isFinal: token.is_final,
-              timestampMs: token.start_ms ?? (Date.now() - this.startTime),
+              timestampMs: this.tokenTime(token.start_ms),
             };
             this.emit("transcript", event);
           }
@@ -157,6 +177,7 @@ export class SonioxRtClient extends EventEmitter {
     });
 
     ws.on("close", (code: number, reason: Buffer) => {
+      if (ws !== this.ws) return; // superseded: its replacement owns the reconnect
       this.stopHeartbeat();
       if (this.closing) {
         this.emit("closed", code, reason.toString());
@@ -164,6 +185,23 @@ export class SonioxRtClient extends EventEmitter {
       }
       this.scheduleReconnect(`socket closed (code=${code}${reason.length ? `, ${reason}` : ""})`);
     });
+  }
+
+  private elapsedMs(): number {
+    return this.startTime ? Date.now() - this.startTime : 0;
+  }
+
+  private bytesToMs(bytes: number): number {
+    return (bytes / (this.sampleRate * 2)) * 1000; // s16le mono
+  }
+
+  /**
+   * A token's time on this client's timeline: the stream's base plus the token's offset in
+   * the stream, never later than now (a token cannot have been spoken in the future).
+   */
+  private tokenTime(startMs: number | undefined): number {
+    const now = this.elapsedMs();
+    return startMs == null ? now : Math.min(this.streamBaseMs + startMs, now);
   }
 
   /**
