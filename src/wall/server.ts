@@ -1199,7 +1199,11 @@ export class WallServer {
    */
   private handleTranscript(url: URL, res: ServerResponse, tp: TranscriptPage & { speakers: Record<string, string> }): void {
     const file = this.activeTranscript();
-    const empty = { id: null, offset: 0, title: tp.title, lines: [] };
+    // The page's own chrome: the wall's theme (so a studio-dark wall gets a matching
+    // transcript) and the reading order. Sent on every poll, so a config change is picked
+    // up on the next wall start without a page-side setting.
+    const view = { theme: this.opts.presentation?.theme ?? "default", order: tp.order ?? "oldest-first" };
+    const empty = { id: null, offset: 0, title: tp.title, ...view, lines: [] };
     if (!file || !existsSync(file)) return this.json(res, empty);
     let size: number;
     let id: string;
@@ -1243,7 +1247,7 @@ export class WallServer {
         }
       }
     }
-    return this.json(res, { id, offset: next, title: tp.title, lines });
+    return this.json(res, { id, offset: next, title: tp.title, ...view, lines });
   }
 
   /** One transcript JSONL line → what the page shows, redacted when the page asks for it. */

@@ -425,6 +425,22 @@ describe("wall.scrollHistory config", () => {
   });
 });
 
+describe("wall theme and transcript order (studio-dark)", () => {
+  it("accepts studio-dark and falls back to default on an unknown theme", () => {
+    writeCfg(project, { wall: { presentation: { theme: "studio-dark" } } });
+    expect(loadConfig(project).wall.presentation.theme).toBe("studio-dark");
+    writeCfg(project, { wall: { presentation: { theme: "neon" } } });
+    expect(loadConfig(project).wall.presentation.theme).toBe("default");
+  });
+  it("reads transcriptPage.order, oldest-first unless newest-first is asked for", () => {
+    expect(loadConfig(project).wall.transcriptPage.order).toBe("oldest-first");
+    writeCfg(project, { wall: { transcriptPage: { route: "/t", order: "newest-first" } } });
+    expect(loadConfig(project).wall.transcriptPage.order).toBe("newest-first");
+    writeCfg(project, { wall: { transcriptPage: { route: "/t", order: "sideways" } } });
+    expect(loadConfig(project).wall.transcriptPage.order).toBe("oldest-first");
+  });
+});
+
 describe("narráció category + wall box subscription (live-narration, single-wall-default)", () => {
   it("resolves the narráció category and the single wall's text box subscribes to it", () => {
     const cfg = loadConfig(project);

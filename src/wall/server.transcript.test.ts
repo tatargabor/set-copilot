@@ -18,7 +18,7 @@ const windows: ResolvedWindow[] = [{
   name: "pub", route: "/wall", zones: ["public", "both"], audience: "public",
   layout: { id: "l", areas: [["p"]] }, boxes: [{ behavior: "scroll", cats: ["narráció"], position: "p" }],
 }];
-const page = { route: "/transcript", title: "Live transcript", redact: true, speakers: { mic: "ITLine", system: "Others" } };
+const page = { route: "/transcript", title: "Live transcript", redact: true, order: "oldest-first" as const, speakers: { mic: "ITLine", system: "Others" } };
 
 let server: WallServer | undefined;
 afterEach(() => { server?.stop(); server = undefined; });
@@ -92,6 +92,20 @@ describe("transcript page", () => {
     const port = await start(f);
     const r = await get(port, `/api/transcript?offset=5&id=${encodeURIComponent("/elsewhere:1")}`);
     expect(r.body.lines.map((l: any) => l.text)).toEqual(["one"]);
+  });
+
+  it("tells the page the wall's theme and the configured reading order", async () => {
+    const f = transcriptFile();
+    let port = await start(f);
+    let r = await get(port, "/api/transcript");
+    expect([r.body.theme, r.body.order]).toEqual(["default", "oldest-first"]);
+    server!.stop();
+    port = await start(f, {
+      transcriptPage: { ...page, order: "newest-first" },
+      presentation: { locale: "en", hideInput: true, theme: "studio-dark", scale: 1, autoScroll: true },
+    });
+    r = await get(port, "/api/transcript");
+    expect([r.body.theme, r.body.order]).toEqual(["studio-dark", "newest-first"]);
   });
 
   it("is not served when no route is configured", async () => {

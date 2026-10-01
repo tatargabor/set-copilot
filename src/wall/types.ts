@@ -554,6 +554,12 @@ export interface TranscriptPage {
    * internal figures off the wall should keep them off here too.
    */
   redact: boolean;
+  /**
+   * Reading order. `oldest-first` (default) appends at the bottom and follows the live
+   * edge; `newest-first` puts the latest turn at the top, so a glance shows what was just
+   * said without scrolling.
+   */
+  order: "oldest-first" | "newest-first";
 }
 
 /** Chrome-only settings for a wall shown to an audience. */
@@ -566,8 +572,12 @@ export interface WallPresentation {
   locale: "hu" | "en";
   /** Hide the operator input box — on a shared screen, typing there is visible. */
   hideInput: boolean;
-  /** `default` = the dense operator dashboard; `studio` = the presentation look. */
-  theme: "default" | "studio";
+  /**
+   * `default` = the dense operator dashboard; `studio` = the presentation look;
+   * `studio-dark` = the studio layout on a neutral near-black palette with one accent and
+   * no gradients or glows (also styles the transcript page).
+   */
+  theme: "default" | "studio" | "studio-dark";
   /** Type scale multiplier for screen sharing (0.75–2). */
   scale: number;
   /** Optional heading per box position, e.g. `{ "kitűzött": "Decisions · Open questions" }`. */

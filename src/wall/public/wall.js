@@ -47,7 +47,12 @@ function applyPresentation(p) {
   presentation = { ...presentation, ...(p ?? {}) };
   const root = document.documentElement;
   root.lang = presentation.locale;
-  root.dataset.theme = presentation.theme;
+  // `studio-dark` is the studio layout with its own palette: every studio rule applies,
+  // and the `data-variant="dark"` overrides in wall.css swap the colours.
+  const dark = presentation.theme === "studio-dark";
+  root.dataset.theme = dark ? "studio" : presentation.theme;
+  if (dark) root.dataset.variant = "dark";
+  else delete root.dataset.variant;
   root.style.setProperty("--scale", String(presentation.scale ?? 1));
   let bar = document.getElementById("title-bar");
   if (presentation.title) {

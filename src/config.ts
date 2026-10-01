@@ -770,7 +770,7 @@ export function resolvePresentation(raw: Partial<WallPresentation> | undefined):
     subtitle: text(p.subtitle),
     locale: p.locale === "en" ? "en" : DEFAULT_PRESENTATION.locale,
     hideInput: p.hideInput === true,
-    theme: p.theme === "studio" ? "studio" : DEFAULT_PRESENTATION.theme,
+    theme: p.theme === "studio" || p.theme === "studio-dark" ? p.theme : DEFAULT_PRESENTATION.theme,
     scale:
       typeof p.scale === "number" && p.scale >= 0.75 && p.scale <= 2 ? p.scale : DEFAULT_PRESENTATION.scale,
     boxTitles:
@@ -796,7 +796,7 @@ export const DEFAULT_WALL: WallConfig = {
   layouts: DEFAULT_LAYOUTS,
   windows: DEFAULT_WINDOWS,
   presentation: DEFAULT_PRESENTATION,
-  transcriptPage: { route: null, title: "Live transcript", redact: true },
+  transcriptPage: { route: null, title: "Live transcript", redact: true, order: "oldest-first" },
 };
 
 /**
@@ -1293,6 +1293,7 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
             : DEFAULT_WALL.transcriptPage.title,
         // Only an explicit `false` turns redaction off; anything else keeps the safe default.
         redact: wall.transcriptPage?.redact !== false,
+        order: wall.transcriptPage?.order === "newest-first" ? "newest-first" : DEFAULT_WALL.transcriptPage.order,
       },
     },
     transcript: {

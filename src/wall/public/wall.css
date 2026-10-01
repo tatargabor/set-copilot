@@ -917,3 +917,130 @@ body.dragging-row, body.dragging-row * { cursor: row-resize !important; user-sel
 .slot-maximized .maximize-toggle { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
 /* The tab strip must stop short of the button. */
 .slot-paced .graph-tabs { right: calc(130px * var(--scale, 1)); }
+
+/* ======================================================================================
+   `studio-dark` (presentation.theme): the studio layout on a neutral near-black palette.
+   wall.js sets data-theme="studio" + data-variant="dark", so every studio rule above still
+   applies and only what is overridden here changes. The brief: one accent colour, no
+   gradients, no glows, no glass — hairline borders and solid panels, the look of a
+   product screen rather than a demo. `default` and `studio` are untouched by this block.
+   ====================================================================================== */
+
+:root[data-theme="studio"][data-variant="dark"] {
+  --bg: #08090b;
+  --panel: #111215;
+  --panel-solid: #111215;
+  --line: #23252b;
+  --text: #ececef;
+  --muted: #8a8f9a;
+  --accent: #5b8def;
+  --accent-2: #5b8def;
+  --alert: #e5484d;
+  --ok: #3fb68b;
+  /* No gradient anywhere: the "gradient" slots resolve to the single accent. */
+  --grad: linear-gradient(var(--accent), var(--accent));
+  --graph-node: #16181c;
+  --graph-group: #0d0e11;
+  --tone-primary: #5b8def;
+  --tone-secondary: #3fb68b;
+  --tone-shared: #a48be0;
+  --tone-open: #d9a944;
+  --radius: 10px;
+}
+
+:root[data-theme="studio"][data-variant="dark"] body {
+  background: var(--bg);
+  letter-spacing: -0.003em;
+}
+
+/* Title: a small solid square instead of the breathing glow dot. */
+:root[data-theme="studio"][data-variant="dark"] .title-bar {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: calc(10px * var(--scale, 1));
+  margin-bottom: calc(2px * var(--scale, 1));
+}
+:root[data-theme="studio"][data-variant="dark"] .title-bar .title-mark {
+  width: calc(10px * var(--scale, 1));
+  height: calc(10px * var(--scale, 1));
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: none;
+  animation: none;
+}
+:root[data-theme="studio"][data-variant="dark"] .title-bar .title-text { font-weight: 600; letter-spacing: -0.01em; }
+
+:root[data-theme="studio"][data-variant="dark"] .chan-active .chan-bar { background: var(--ok); }
+
+/* Solid panels with a hairline: no blur, no drop shadow. */
+:root[data-theme="studio"][data-variant="dark"] .slot {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+:root[data-theme="studio"][data-variant="dark"] .slot[data-title]::before {
+  font-size: calc(11px * var(--scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/* Working record: a left accent rule instead of a tinted wash. */
+:root[data-theme="studio"][data-variant="dark"] .slot[data-area="kitűzött"] {
+  background: var(--panel);
+  border-color: var(--line);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+:root[data-theme="studio"][data-variant="dark"] .slot[data-area="kitűzött"] .line .txt .hd { color: var(--text); opacity: 0.72; }
+
+/* Agenda: plain hairline box; the current item is bold accent text, not gradient text. */
+:root[data-theme="studio"][data-variant="dark"] .slot[data-area="agenda"] {
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+:root[data-theme="studio"][data-variant="dark"] .slot[data-area="agenda"] .line .txt strong,
+:root[data-theme="studio"][data-variant="dark"] .ticker-item strong {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--accent);
+  font-weight: 600;
+}
+:root[data-theme="studio"][data-variant="dark"] .slot[data-area="agenda"] .line .txt code.ic {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+:root[data-theme="studio"][data-variant="dark"] .pending-overlay {
+  background: var(--panel-solid);
+  border-color: var(--line);
+}
+:root[data-theme="studio"][data-variant="dark"] .slot.slot-maximized { box-shadow: 0 0 0 1px var(--line), 0 20px 60px rgba(0, 0, 0, 0.6); }
+:root[data-theme="studio"][data-variant="dark"] .graph-tab.fresh::after { color: var(--accent); }
+
+/* studio-dark: a scroll box (the Live summary) reads as a live feed. Lines already arrive
+   newest-on-top in every theme; here the newest line is set larger with an accent rule,
+   the next one stays legible and everything older recedes. Each line eases in on arrival
+   (a CSS animation runs once, when wall.js inserts the element). Opt-in by theme: the
+   `default` and `studio` scroll boxes keep their flat log. */
+@keyframes sd-line-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+:root[data-theme="studio"][data-variant="dark"] .slot-scroll .pane-text > .line {
+  opacity: 0.42;
+  transition: opacity 400ms ease, font-size 300ms ease;
+  animation: sd-line-in 450ms ease-out;
+  border-bottom: 1px solid var(--line);
+  padding-left: calc(10px * var(--scale, 1));
+  border-left: 2px solid transparent;
+}
+:root[data-theme="studio"][data-variant="dark"] .slot-scroll .pane-text > .line:nth-child(2) { opacity: 0.68; }
+:root[data-theme="studio"][data-variant="dark"] .slot-scroll .pane-text > .line:first-child {
+  opacity: 1;
+  font-size: calc(18.5px * var(--scale, 1));
+  font-weight: 500;
+  border-left-color: var(--accent);
+}
+:root[data-theme="studio"][data-variant="dark"] .slot-scroll .pane-text > .line:first-child .time { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="studio"][data-variant="dark"] .slot-scroll .pane-text > .line { animation: none; transition: none; }
+}

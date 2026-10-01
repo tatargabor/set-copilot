@@ -21,7 +21,7 @@
       --size: 20px;
     }
     @media (prefers-color-scheme: light) {
-      :root:not([data-theme="dark"]) {
+      :root:not([data-theme="dark"]):not([data-theme="studio-dark"]) {
         --bg: #f5f7fb;
         --panel: #ffffff;
         --line: #dfe5ef;
@@ -32,6 +32,25 @@
         --sp-c: #17864a;
       }
     }
+    /* studio-dark (the wall's presentation.theme, sent by /api/transcript): the same
+       neutral near-black palette as the wall — one accent, hairlines, no glow. Dark in any
+       OS theme, like the shared wall it accompanies. */
+    :root[data-theme="studio-dark"] {
+      --bg: #08090b;
+      --panel: #111215;
+      --line: #23252b;
+      --text: #ececef;
+      --muted: #8a8f9a;
+      --sp-a: #5b8def;
+      --sp-b: #d9a944;
+      --sp-c: #3fb68b;
+      color-scheme: dark;
+    }
+    :root[data-theme="studio-dark"] header { background: var(--panel); }
+    :root[data-theme="studio-dark"] h1 { font-weight: 600; letter-spacing: -0.01em; }
+    :root[data-theme="studio-dark"] .status.live .dot { background: #3fb68b; box-shadow: none; animation: none; }
+    :root[data-theme="studio-dark"] .who { font-weight: 600; letter-spacing: 0.01em; }
+    :root[data-theme="studio-dark"] #jump { background: var(--sp-a); box-shadow: 0 0 0 1px var(--line); }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; }
     body {
