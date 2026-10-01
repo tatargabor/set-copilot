@@ -20,3 +20,4 @@ set-copilot.config.json
 
 # set-core futásidejű állapot (orphan-detect PID-ek) — soha nem verziózandó
 .set-core/
+.claude/settings.json.bak*

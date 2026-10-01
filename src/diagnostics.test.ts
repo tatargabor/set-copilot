@@ -49,6 +49,47 @@ describe("diagnoseConfig — keywords", () => {
   });
 });
 
+describe("diagnoseConfig — a device pinned in the project config", () => {
+  const pinned = (findings: { message: string }[]) => findings.filter((f) => f.message.includes("eszköznév a projekt configban"));
+
+  it("flags a committed micSource — it names hardware the next machine will not have", () => {
+    // The real 2026-08-05 value: a Linux ALSA name, cloned onto a Mac, where it
+    // resolved to nothing and captured 0 bytes without an error anywhere.
+    const findings = diagnoseConfig([
+      file(USER, {}),
+      file(PROJ, { audio: { micSource: "alsa_input.usb-046d_C920-02.analog-stereo" } }),
+    ]);
+    expect(pinned(findings)).toHaveLength(1);
+    expect(pinned(findings)[0].level).toBe("warn");
+    expect(pinned(findings)[0].message).toContain("alsa_input.usb-046d_C920-02.analog-stereo");
+  });
+
+  it("names both device keys in one finding rather than two near-identical lines", () => {
+    const findings = pinned(diagnoseConfig([
+      file(USER, {}),
+      file(PROJ, { audio: { micSource: "mic-x", monitorSource: "mon-y" } }),
+    ]));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain("audio.micSource");
+    expect(findings[0].message).toContain("audio.monitorSource");
+  });
+
+  it("never flags the user-level config — that is where a device belongs", () => {
+    expect(pinned(diagnoseConfig([file(USER, { audio: { micSource: "HD Pro Webcam C920" } })]))).toHaveLength(0);
+    expect(pinned(diagnoseConfig([
+      file(USER, { audio: { micSource: "HD Pro Webcam C920" } }),
+      file(PROJ, { audio: { sampleRate: 16000 } }),
+    ]))).toHaveLength(0);
+  });
+
+  it("treats an empty device string as unpinned — it means 'system default'", () => {
+    expect(pinned(diagnoseConfig([
+      file(USER, {}),
+      file(PROJ, { audio: { micSource: "", monitorSource: "" } }),
+    ]))).toHaveLength(0);
+  });
+});
+
 describe("diagnoseConfig — unknown keys", () => {
   it("names an unknown key, at top level and one level in", () => {
     const findings = diagnoseConfig([

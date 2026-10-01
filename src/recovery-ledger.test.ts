@@ -52,7 +52,15 @@ function cli(args: string[], opts: { input?: string } = {}): { out: string; err:
     cwd: root,
     encoding: "utf-8",
     input: opts.input ?? "",
-    env: { ...process.env, SET_COPILOT_DIR: join(root, ".set", "copilot", "sess") },
+    // SET_COPILOT_HOME is as load-bearing as SET_COPILOT_DIR: this spawns the REAL
+    // CLI, whose config preflight migrates and rewrites the user-level config. Without
+    // it the suite reached into the developer's own ~/.config/set-copilot and rewrote
+    // it — caught the first time the preflight existed, by the `.bak` it left behind.
+    env: {
+      ...process.env,
+      SET_COPILOT_DIR: join(root, ".set", "copilot", "sess"),
+      SET_COPILOT_HOME: join(root, "home"),
+    },
   });
   return { out: r.stdout ?? "", err: r.stderr ?? "", code: r.status ?? 1 };
 }
