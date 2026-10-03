@@ -1,10 +1,9 @@
 {
   "version": 2,
   "_help": "Written by `set-project init`. 'files' maps a project-relative path to the sha256 of the content set-core deployed there; a file whose hash still matches is treated as untouched and may be updated, one that differs belongs to the project and is left alone. 'tombstones' lists paths the project deleted on purpose — set-core will not recreate them. To accept the framework version of a tombstoned path again, remove its entry from the 'tombstones' list and re-run the init.",
-  "updated": "2026-08-20T08:56:36+00:00",
+  "updated": "2026-10-03T15:06:46+00:00",
   "files": {
     ".claude/agents/code-reviewer.md": "b011204625d57a3bbd8d115f6a30ff19bed46aed82411542498cc33fd2dfd4a6",
-    ".claude/agents/gui-tester.md": "7a0ef70bea07d10ceb04d07101920393ac4d5c0fac1a07695877a07bd601289d",
     ".claude/agents/openspec-verifier.md": "6daacea20850ec88e6c419884033920eed651e841241768a72fcd1e6d88d2196",
     ".claude/commands/opsx/bulk-archive.md": "7d662769abbde7c55e1c5329fe1322171c036e558c0bb11fa4f4f7eb222e37ad",
     ".claude/commands/opsx/continue.md": "53be942f423456507e6f2e056ece77b1f2cfa068dd8de166b1bd2ae4a3b1e3e6",
@@ -18,7 +17,7 @@
     ".claude/commands/set/decompose.md": "8ca22a22519a773b538ef6bd3c47142bc368929b6e71fcf107fc945981233cb5",
     ".claude/commands/set/forensics.md": "32faa7ce0bd105b4ecb0b02c8a0ab62f03887660779a64d3257ef9c8031b76fb",
     ".claude/commands/set/harvest.md": "14187d8f7e183c32e055fb80691568af51aaa3f5579d629b64a59b3e692fee66",
-    ".claude/commands/set/help.md": "55fcf47fd2264a3d3b04a6e651977d370e4690c5c6e554d942f115dab5d6c101",
+    ".claude/commands/set/help.md": "2149308804856aef9956943476c3431ad18d154ffe31077673cf78af852dce8e",
     ".claude/commands/set/inbox.md": "6d7c4a2187c480ad8ffc8593591f54e8e6cfc341033ff5910fe342b59f63002f",
     ".claude/commands/set/list.md": "17dd4fee79432a86bba2246b2d7845632f2a7cd4fbf65db377f9728a09aa804a",
     ".claude/commands/set/loop.md": "d14af532815576bbf1482b25482ae7333a3806b766df039f353d111a1dfa5ed3",
@@ -40,6 +39,8 @@
     ".claude/rules/set-design-source-hygiene.md": "e7b925fd0dd7b6e3b1101fc22e49874ceb068a9acd33c75c1ee213145f17721a",
     ".claude/rules/set-e2e-infra-evolution.md": "eed3742407fc858daabecc4fbfec67d4ccc35e3869237316763a4bf1c431ec8c",
     ".claude/rules/set-efficiency.md": "49ace63c22115faa0433c548ff71e97bf1dc8db07b06afc7555824979f8bfb9b",
+    ".claude/rules/set-file-references.md": "8f64477895ce064aa11636aa9d6ed975f7494a7fab29945cb2af72b7c0f95e3f",
+    ".claude/rules/set-git-commit-pathspec.md": "6884c79c517580626652a79cd20474d08844f247638836f35fba3cc167ed1dd5",
     ".claude/rules/set-project-guide.md": "8d3ba8e1513b71f2cb75458a4adb9ec3344d2e7748af95ef195ac6e8dfd1f0f6",
     ".claude/rules/set-sentinel-autonomy.md": "32d1cb4c2e0260b8b07093e615e1f26fa56e9c10b3b95c5e0a7dcd779e491014",
     ".claude/rules/set-set-testing.md": "59fc097c3132047ca430709048efeebf1fb3ab8e49ff1b19564b9147b1803f56",
@@ -51,10 +52,13 @@
     ".claude/skills/openspec-onboard/SKILL.md": "d389cc98dba87e4482c60189d5b62376b38c62b647ab500e322b1e4cacb9a0ba",
     ".claude/skills/openspec-verify-change/SKILL.md": "23dab643474612a5b553769a766b229873f7d78919a7875c25b6c08882f19e1e",
     ".claude/skills/set/SKILL.md": "65a5b51230e6be88f2536adc7055a2692b81359d6b561c5dae4b1702cab55d5d",
-    ".claude/skills/set/decompose/SKILL.md": "17e7b30781bc60b972a6d5df58c4d354cc8b58ce86e170b0aa1aec6833bce780",
+    ".claude/skills/set/decompose/SKILL.md": "c72e386f8b34f5a602040dfc80cd900a46f5ae69fe06150198611e2776f029a3",
     ".claude/skills/set/forensics/SKILL.md": "dc109012770e35b0b1fd7dbe9b4bbb5907412b8c8ec8727b0beb16bf4df8c476",
+    ".claude/skills/set/glm/SKILL.md": "7e0c099052f40b7ef633aa1b42825edc4ee88df20082ab89c7f91cd37c8843db",
     ".claude/skills/set/harvest/SKILL.md": "6e2bfba07d40651ddd2b9e3214932b428d3089a01394d28c1b25219f1798a0e2",
     ".claude/skills/set/write-spec/SKILL.md": "2ab8b6d92aac34fa2ce7c8a25f6c884ee07bd8b4d42a75a637a44103e3d12242"
   },
-  "tombstones": []
+  "tombstones": [
+    ".claude/agents/gui-tester.md"
+  ]
 }
