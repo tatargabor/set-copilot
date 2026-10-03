@@ -2,7 +2,7 @@
 
 ## Purpose
 How the copilot's content mandate is scoped to an individual box — the instructions, alert
-categories, engagement level, and drawing conventions that govern what a box emits — layered over
+categories, engagement level, and line budget that govern what a box emits — layered over
 the session-global `copilot.*` policy and rendered as one section per box by `set-copilot prompt`.
 A box's mandate is independent of the window-level zone that routes where its events may appear.
 
@@ -10,9 +10,11 @@ A box's mandate is independent of the window-level zone that routes where its ev
 
 ### Requirement: Policy is scopable to a box
 
-Content policy — the instructions, the alert categories, the engagement level, and the drawing
-conventions that govern what the copilot produces — SHALL be scopable to an individual box, in
-addition to the existing session-global scope.
+Content policy — the instructions, the alert categories, the engagement level, and the per-emission
+line budget (`maxLines`) that govern what the copilot produces for a surface — SHALL be scopable to
+an individual box, in addition to the existing session-global scope. The drawing contract
+(`copilot.drawing`: the category summary, payload shapes, render types and drawing conventions) is
+session-global and SHALL NOT be overridden per box.
 
 A box's effective policy SHALL be the session-global policy overridden key by key with that box's
 own declarations. A box that declares no policy SHALL inherit the global one unchanged, so an
@@ -32,6 +34,11 @@ NOT require editing `src/` or a skill.
 
 - **WHEN** a config declares only session-global `copilot.*` policy and no box-scoped policy
 - **THEN** every box inherits the global policy and behaves exactly as before this change
+
+#### Scenario: The drawing contract is not box-scoped
+
+- **WHEN** a project changes its drawing conventions
+- **THEN** it does so in `copilot.drawing`, and the change applies to every box
 
 ### Requirement: A box's mandate is independent of its zone
 
@@ -75,9 +82,12 @@ box's mandate SHALL NOT change any zone.
 
 ### Requirement: The prompt renderer composes one section per box
 
-`set-copilot prompt` SHALL render the policy as one section per box, each naming the box, its
-zone, its render surface, and its effective mandate — so a session reading the prompt knows what
-each box is for without inspecting config.
+`set-copilot prompt` SHALL render, in addition to the global policy, one section for every box that
+declares its own policy, each naming the window and box position, the window's zones, the box's
+categories with their render types, and **only the keys the box overrides** — stating that
+everything else is inherited from the global policy. Restating inherited values would invite the
+two to drift; a session reading the prompt still knows what each box is for without inspecting
+config.
 
 Where no box declares its own policy, the renderer SHALL emit the single global section as it does
 today, so the output stays compact for the common case.
@@ -94,18 +104,25 @@ today, so the output stays compact for the common case.
 - **WHEN** no box declares its own policy
 - **THEN** `set-copilot prompt` emits one global policy section, unchanged from today's output
 
+#### Scenario: Only overridden keys are printed
+
+- **WHEN** a box declares only `instructions` and `maxLines`
+- **THEN** its section prints those two and states that the rest is inherited, without restating
+  the global engagement or alert categories
+
 ### Requirement: A public narration box narrates processed output
 
-Once the public zone is redacted, the default `/wall` MAY carry a narration box: the private hint box's
-counterpart, rendering the conversation for an audience. Its mandate SHALL be to narrate what the
-speaker says — but what it emits SHALL be *processed* output (filtered and condensed), never a raw
-transcript. This preserves the `src/config.ts` invariant that the wall shows only processed output:
-narration is a summary that has passed redaction, not the transcript verbatim.
+The shipped `/wall` window SHALL carry a narration box (`szöveg`, a scrolling text box subscribed
+to the narration and chat-mirror categories) whose policy mandates condensed, audience-safe
+output: narrate what the speaker says, never the raw transcript, and mark internal detail
+`[belső]` (which the server redacts) or leave it out. What it emits SHALL be *processed* output
+(filtered and condensed), never a raw transcript. This preserves the invariant that the wall's
+event stream shows only processed output: narration is a summary that has passed redaction, not
+the transcript verbatim.
 
-The narration box SHALL rely on the `public-redaction` capability for its safety: it SHALL NOT be
-enabled in a default config until redaction is present and adversarially verified. It builds on the
-existing box-policy requirement that a box's mandate is independent of its zone — the narration box is
-a `public`/`both`-zone box whose mandate is narration.
+The narration box SHALL rely on the `public-redaction` capability for its safety — the ingest
+funnel's redactor, not the producer's care, is what keeps internal detail off the wall. The box's
+mandate is independent of its window's zones, per the requirement above.
 
 #### Scenario: The narration box emits processed, redacted output
 
@@ -115,6 +132,17 @@ a `public`/`both`-zone box whose mandate is narration.
 
 #### Scenario: The narration box is absent until redaction lands
 
-- **WHEN** the `public-redaction` capability is not present in the running build
-- **THEN** the default config ships no public narration box, and the `/wall` shows only graphs and
-  charts a producer deliberately draws there
+- **WHEN** the default config is loaded
+- **THEN** the `/wall` window carries the narration box only together with an active public-zone
+  redaction taxonomy that matches the `[belső]`/`[internal]` marking its policy teaches — the
+  narration box never ships without the redactor it relies on
+
+### Requirement: Box policy is never served to wall clients
+
+A box's policy is copilot instruction, and may name internal matters. The window definition the
+server hands a wall client SHALL omit every box's `policy`, whatever the window's audience.
+
+#### Scenario: The bootstrap carries boxes without their policy
+
+- **WHEN** a wall client fetches its window definition and a box in that window declares a policy
+- **THEN** the definition carries the box's position, categories and behaviour, and no `policy`

@@ -1,19 +1,30 @@
 # fork-producer Specification
 
 ## Purpose
-What a wall producer is: a fork of the main Claude Code session (`subagent_type: "fork"`) that
-inherits the chat's context as its grounding, draws one slot on demand, emits through the
+What a composing wall producer is: a fork of the main Claude Code session (`subagent_type: "fork"`) that
+inherits the chat's context as its grounding, draws one category on demand, emits through the
 `wall-emit` seam, and exits — no separate model client, no polling, running on the parent's model
-tier. The drawing contract it needs lives in the base context (see `copilot.drawing`).
+tier. Content already settled in the conversation is emitted by the main session directly, without a
+fork. The drawing contract a fork needs lives in the base context (see `copilot.drawing`).
+
 ## Requirements
+
 ### Requirement: The producer is a fork of the main session
 
-The wall producer SHALL be a fork of the main Claude Code session (`subagent_type: "fork"`),
-inheriting the parent's full conversation context. A producer SHALL NOT be a separate model
-client with its own independently-assembled context.
+A wall producer that has to **compose** a visual — read sources, work something out, or build a
+graph or chart from the discussion — SHALL be a fork of the main Claude Code session
+(`subagent_type: "fork"`), inheriting the parent's full conversation context. A producer SHALL NOT
+be a separate model client with its own independently-assembled context.
 
 The inherited context IS the grounding: the fork carries the same understanding the chat has,
 so it does not have to infer from the transcript alone what matters.
+
+Content that is already settled in the conversation SHALL NOT pay a fork's cost (measured at
+16–62 s and tens of thousands of tokens per drawing, against about a second for a direct emit):
+a one-line note, a narration line, a pinned update, a pending marker, a promotion, or a visual
+whose full content is already stated in the chat SHALL be emitted by the main session directly
+through `wall-emit`. The chat mirror is not a model producer at all: it is emitted by the
+`mirror-follow` process.
 
 #### Scenario: Fork inherits the chat's understanding
 
@@ -26,8 +37,15 @@ so it does not have to infer from the transcript alone what matters.
 #### Scenario: No separate model client
 
 - **WHEN** a producer needs to emit a visual
-- **THEN** it does so as a fork invoking `set-copilot wall-emit`, with no model SDK, no API key
-  handling, and no transcript sent to a separate model
+- **THEN** it does so as a fork (or, for settled content, as the main session) invoking
+  `set-copilot wall-emit`, with no model SDK, no API key handling, and no transcript sent to a
+  separate model
+
+#### Scenario: Settled content is emitted without a fork
+
+- **WHEN** the content to show is already fully stated in the conversation (a one-line note, a
+  narration line, a pinned update, a promotion)
+- **THEN** the main session emits it directly with `wall-emit` and spawns no fork
 
 ### Requirement: The fork terminates after emitting
 
@@ -64,20 +82,21 @@ context alive while doing nothing.
 
 ### Requirement: One fork per slot mandate, parallelizable
 
-Each producer fork SHALL receive a narrow mandate scoped to a single slot. Multiple forks MAY
-be spawned concurrently, one per slot. The narrow scope is itself grounding: the fork is told
-which slot it serves, rather than deciding for itself what to capture.
+Each producer fork SHALL receive a narrow mandate naming exactly one **category** (the unit a box
+subscribes to; "slot" is the legacy name), and SHALL emit only into that category. Multiple forks
+MAY be spawned concurrently, one per category. The narrow scope is itself grounding: the fork is
+told which category it serves, rather than deciding for itself what to capture.
 
 #### Scenario: Concurrent slot forks
 
 - **WHEN** both the architecture canvas and the metrics chart warrant an update
-- **THEN** two forks are spawned concurrently, each with a mandate naming its own slot, and
+- **THEN** two forks are spawned concurrently, each with a mandate naming its own category, and
   each emits only its own category
 
 #### Scenario: A fork stays within its mandate
 
 - **WHEN** a fork mandated to draw the metrics chart notices architecture-relevant content
-- **THEN** it emits only its own category; it does not emit into another slot
+- **THEN** it emits only its own category; it does not emit into another category
 
 ### Requirement: The drawing contract lives in the base context
 
@@ -114,13 +133,19 @@ producer fork, since the override is ignored.
 
 ### Requirement: The emission seam is unchanged
 
-A producer fork SHALL emit through the existing `set-copilot wall-emit` seam into
-`<runtimeDir>/wall-events.jsonl`. The wire format, the category-tagged event shape, the zone
-routing, and the server-side director SHALL be unaffected by this change of producer.
+A producer fork SHALL emit only through the `set-copilot wall-emit` seam into
+`<runtimeDir>/wall-events.jsonl`. There SHALL be no fork-specific wire shape: a fork's line is the
+same category-tagged event any other producer appends, carries the same zone routing, and is
+handled by the same server-side ingest and director. The emission timestamp (`emittedAt`) SHALL be
+stamped by the append path at the moment of appending, never supplied by the producer.
 
 #### Scenario: Wire format is identical to the previous producer
 
 - **WHEN** a fork emits a graph delta
-- **THEN** the emitted line is the same category-tagged shape the fake-feed and the previous
-  producers emitted, and the server core, SSE, director, and client renderer require no change
+- **THEN** the emitted line is the same category-tagged shape the fake-feed and every other
+  producer emit, and the server core, SSE, director, and client renderer treat it no differently
 
+#### Scenario: The producer does not stamp its own emission time
+
+- **WHEN** a fork's event carries its own `emittedAt`
+- **THEN** the append path SHALL replace it with the time of the append

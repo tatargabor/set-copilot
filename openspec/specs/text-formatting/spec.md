@@ -9,6 +9,7 @@ existing producer, and the server-side redaction funnel stay unchanged; and the 
 stays compact enough to read from across a room on a 1920×1080 display.
 
 ## Requirements
+
 ### Requirement: The inline formatting vocabulary is closed
 
 A `text` line SHALL render a closed set of inline and block constructs: **bold**,
@@ -18,6 +19,15 @@ Anything outside that set SHALL render as literal text.
 The set SHALL be closed in the same sense as the render-type vocabulary: extending it is an
 engine change, never a configuration one. There SHALL be no configuration option that adds,
 removes, or redefines a construct.
+
+Italic SHALL be marked by `*asterisks*` only: `_underscores_` SHALL render literally, because a
+coding copilot's message is full of `snake_case` identifiers and file names, and italicizing half
+of one is a worse failure than not italicizing an underscore someone meant. A heading SHALL be one
+to six `#` characters, preceded by at most three spaces and followed by whitespace and non-empty
+content — `#hashtag` and a bare `###` are not headings. A table SHALL be recognised by its header
+row followed by a separator row; a body row with fewer or more cells than the header SHALL still
+render inside the table, padded with empty cells or cut to the header's width, because a mirrored
+message is often mid-stream and a readable table beats none.
 
 Heading is part of the set because the wall's largest producer of text is a mirrored Claude Code
 message, and such a message is heading-structured: its sections are what make it scannable at wall
@@ -35,7 +45,8 @@ paragraph without dominating the box.
 
 #### Scenario: A heading renders as a heading
 
-- **WHEN** a text line begins a block with one or more leading `#` characters followed by a space
+- **WHEN** a text line begins a block with one to six `#` characters (after at most three
+  spaces) followed by whitespace and content
 - **THEN** it SHALL render as a heading, with the `#` characters absent from the output
 
 #### Scenario: An unsupported construct renders literally
@@ -49,6 +60,16 @@ paragraph without dominating the box.
 - **WHEN** a project wishes to render a construct outside the set
 - **THEN** no configuration SHALL enable it; the vocabulary SHALL only change by an engine
   change
+
+#### Scenario: Underscores are not italic
+
+- **WHEN** a text line contains an identifier such as `snake_case_name` outside inline code
+- **THEN** it SHALL render with its underscores, and no part of it SHALL be italic
+
+#### Scenario: A ragged table row stays in the table
+
+- **WHEN** a table body row has fewer cells than the header
+- **THEN** it SHALL render as a row of that table, padded with empty cells
 
 ### Requirement: Formatted content is constructed as elements, never as markup
 

@@ -1,7 +1,12 @@
 # wall-feedback Specification
 
 ## Purpose
-TBD - created by archiving change wall-feedback. Update Purpose after archive.
+Keep the copilot audibly responsive while it drives the wall. Chat is the copilot's primary voice and the
+wall a secondary, polished artifact, so a direct address and each of the copilot's own wall visuals are
+met with a brief chat acknowledgement, and an ambiguous reading is raised in chat instead of being shown
+on the wall as established fact. The behaviour is rendered into the session policy from config
+(`copilot.acknowledge`) and leaves the multi-party engagement policy unchanged.
+
 ## Requirements
 ### Requirement: Chat is the primary feedback channel; the wall is a secondary artifact
 
