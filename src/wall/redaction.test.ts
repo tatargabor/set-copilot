@@ -87,6 +87,43 @@ describe("URL sources withhold the whole event, never scrub (D2)", () => {
     expect(out).not.toBeNull();
     expect(out!.image!.src).toBe("diagram.png");
   });
+
+  // A graph node's `image` is fetched too (media route or URL), so it is a source, not prose.
+  function graphEvent(nodes: unknown[]): DisplayEvent {
+    return { category: "arch", zone: "both", visual: "v1", graph: { op: "add", nodes: nodes as never } };
+  }
+
+  it("withholds a whole graph delta when one node image matches, private gets it unchanged", () => {
+    const ev = graphEvent([
+      { id: "a", label: "clean" },
+      { id: "b", image: "docs/clients/SECRET-acme/q3.png" },
+      { id: "c", label: "also clean" },
+    ]);
+    const { public: pub, private: priv, redacted } = splitForZones(ev, redactor());
+    expect(pub).toBeNull(); // not published minus the matching node
+    expect(redacted).toBe(true);
+    expect((priv.graph!.nodes![1] as { image: string }).image).toBe("docs/clients/SECRET-acme/q3.png");
+    expect(priv.redaction).toBe("withheld");
+  });
+
+  it("checks a non-string node image too: an array of URLs is fetched element by element", () => {
+    const ev = graphEvent([{ id: "f", image: ["https://cdn.test/ok.png", "https://cdn.test/SECRET-acme/q3.png"] }]);
+    expect(splitForZones(ev, redactor()).public).toBeNull();
+  });
+
+  it("passes clean node images unchanged", () => {
+    const ev = graphEvent([{ id: "a", image: "docs/figures/flow.png", w: 400, h: 240 }]);
+    const out = splitForZones(ev, redactor()).public;
+    expect(out).not.toBeNull();
+    expect((out!.graph!.nodes![0] as { image: string }).image).toBe("docs/figures/flow.png");
+  });
+
+  it("does not withhold a clean delta because a nodes entry is malformed", () => {
+    const ev = graphEvent([null, 7, { id: "a", label: "clean" }]);
+    const out = splitForZones(ev, redactor()).public;
+    expect(out).not.toBeNull();
+    expect(out!.graph!.nodes).toHaveLength(3);
+  });
 });
 
 describe("fail-closed (D5)", () => {

@@ -15,9 +15,11 @@
  *    (`GraphNode`/`ChartDatum` carry `[k: string]: unknown`), so `redactValue`
  *    walks the whole tree and scrubs every *string leaf* at any depth under any key.
  *    A list can never be complete; a walk is closed to future keys too.
- *  - **URL → withhold, never scrub (D2).** A token in `image.src`/`webpage.url`
- *    cannot be removed while leaving the URL usable, so a match there withholds the
- *    WHOLE event from the public zone rather than emitting a mangled link.
+ *  - **Source → withhold, never scrub (D2).** A token in `image.src`, `webpage.url`
+ *    or a graph node's `image` cannot be removed while leaving the source usable, so a
+ *    match there withholds the WHOLE event from the public zone rather than emitting a
+ *    mangled link. A node `image` is checked in any shape: the renderer hands a
+ *    non-string one to Cytoscape, whose `background-image` loads every URL in an array.
  *  - **Fail-closed (D5).** Any failure — a leaf too long to bound, an unexpected
  *    shape, a pattern throwing — withholds the event from public. This is the one
  *    place the wall departs from its usual "drop it and carry on": here carrying on
@@ -215,11 +217,27 @@ function redactValue(value: unknown, r: CompiledRedactor, state: { changed: bool
   return value;
 }
 
-/** The URL leaves that are structured values — a match there withholds (D2), never scrubs. */
+/** True if any string leaf at any depth under `value` matches. */
+function anyLeafMatches(value: unknown, r: CompiledRedactor): boolean {
+  if (typeof value === "string") return r.matches(value);
+  if (Array.isArray(value)) return value.some((v) => anyLeafMatches(v, r));
+  if (value && typeof value === "object") return Object.values(value).some((v) => anyLeafMatches(v, r));
+  return false;
+}
+
+/**
+ * The source leaves the wall FETCHES — a match there withholds (D2), never scrubs:
+ * `image.src`, `webpage.url`, and every graph node's `image`, in whatever shape it
+ * arrives. Node entries are read defensively: ingest only checks that `nodes` is an
+ * array, and a malformed entry must not trip the fail-closed catch on a clean delta.
+ */
 function urlSourcesMatch(ev: DisplayEvent, r: CompiledRedactor): boolean {
   const src = ev.image?.src;
   const url = ev.webpage?.url;
-  return (typeof src === "string" && r.matches(src)) || (typeof url === "string" && r.matches(url));
+  if ((typeof src === "string" && r.matches(src)) || (typeof url === "string" && r.matches(url))) return true;
+  const nodes = ev.graph?.nodes;
+  if (!Array.isArray(nodes)) return false;
+  return nodes.some((n) => n !== null && typeof n === "object" && anyLeafMatches((n as { image?: unknown }).image, r));
 }
 
 /** The public/private split of one event, computed once at ingest. */
