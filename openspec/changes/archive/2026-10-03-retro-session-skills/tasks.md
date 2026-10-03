@@ -1,0 +1,20 @@
+# Tasks
+
+## 1. session-skills
+
+- [x] 1.1 Verify the per-session `SET_COPILOT_DIR` (`$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}`) is identical in start and stop against skills/ds/SKILL.md:14, skills/dd/SKILL.md:14 and skills/meeting-copilot/SKILL.md:57 [REQ: Every skill command runs against one per-session runtime directory]
+- [x] 1.2 Verify `/ds` is one background call with a 10-minute default and `/dd` is one `stop --print` call, neither routing through `dictate`, against skills/ds/SKILL.md:9 and skills/dd/SKILL.md:9 [REQ: Dictation start and stop are each one tool call]
+- [x] 1.3 Verify the dictated output is acted on as the user's message and `[set-copilot]` lines are ignored, and that stop's status line goes to stdout while hand-off output goes to stderr, against skills/dd/SKILL.md:23, skills/dictate/SKILL.md:42, src/cli.ts:763 and src/handover.ts:161 [REQ: The dictated output is the user's message, and tooling lines are not]
+- [x] 1.4 Verify the start phases run in order without pausing and end with the active message against skills/meeting-copilot/SKILL.md:21 and skills/meeting-copilot/SKILL.md:181 [REQ: The meeting copilot starts in one uninterrupted sequence]
+- [x] 1.5 Verify the default/`--lite`/`--zero` modes and that `prompt` runs in every mode against skills/meeting-copilot/SKILL.md:23 and skills/meeting-copilot/SKILL.md:80 [REQ: Three knowledge modes, with the policy loaded in every one]
+- [x] 1.6 Verify the policy, not the skill, decides categories, engagement and drawing against skills/meeting-copilot/SKILL.md:214, skills/meeting-copilot/SKILL.md:221 and skills/meeting-copilot/SKILL.md:317 [REQ: Mechanics live in the skill, judgement in the rendered policy]
+- [x] 1.7 Verify capture and wall start with `--detach` (never `run_in_background`), the 240-minute capture limit, the session-derived wall port, and the start-up log tail on failure against skills/meeting-copilot/SKILL.md:110, skills/meeting-copilot/SKILL.md:113, skills/meeting-copilot/SKILL.md:137 and src/detach.ts:55 [REQ: The capture and the wall outlive the tool call that starts them]
+- [x] 1.8 Verify the persistent poll Monitor exits on `capture-dead` and is re-armed after a `status` check against skills/meeting-copilot/SKILL.md:178 and skills/meeting-copilot/SKILL.md:183 [REQ: The poll Monitor is re-armed while the capture lives]
+- [x] 1.9 Verify no-filler reactions, the reconnect-gap report and acting on `wall-input` as an event against skills/meeting-copilot/SKILL.md:201, skills/meeting-copilot/SKILL.md:202 and skills/meeting-copilot/SKILL.md:211 [REQ: A batch is answered without filler, acting on events rather than lines]
+- [x] 1.10 Verify the `wall` option starts the wall in the same dir and the `mirror` option orders follower, `doctor --mirror` gate, then marker, with `COPILOT_MIRROR=1`, against skills/meeting-copilot/SKILL.md:28 and skills/meeting-copilot/SKILL.md:151 [REQ: The `wall` and `mirror` options make the session own its wall]
+- [x] 1.11 Verify the summary-first ordering, `stop` then `wall-stop`, the topic slug, and reporting undelivered messages against skills/meeting-copilot/SKILL.md:410, skills/meeting-copilot/SKILL.md:416, skills/meeting-copilot/SKILL.md:452 and src/cli.ts:1107 [REQ: The meeting stop writes the summary first, then stops capture and wall]
+
+## 2. meeting-transcript-persistence (ADDED)
+
+- [x] 2.1 Verify the dictation hand-off runs only on the `--print` path after print and archive, receives `SET_COPILOT_TRANSCRIPT`/`SET_COPILOT_DIR` and no derived-artifact paths, ignores a malformed value, and cannot fail the handover, against src/cli.ts:788, src/handover.ts:106, src/handover.ts:141 and src/config.ts:1002 [REQ: A project command may run after a dictation handover]
+- [x] 2.2 Verify the hand-off's stdout never reaches stdout and is re-emitted prefixed on stderr, blank lines dropped, against src/handover.ts:128, src/handover.ts:161 and src/handover.test.ts:242 [REQ: The dictation hand-off never speaks inside the dictated message]
