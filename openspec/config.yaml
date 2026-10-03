@@ -28,12 +28,50 @@ context: |
 
   Direction and rationale live in docs/ROADMAP.md; research notes in docs/research/.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+# Per-artifact rules — additive to the schema's built-in guidance, injected into
+# `openspec instructions <artifact>`. Artifact IDs of spec-driven: proposal, specs,
+# design, tasks.
+rules:
+  specs:
+    - "Each delta spec carries a `## IN SCOPE` and a `## OUT OF SCOPE` section, as plain
+      bullet lists naming what this change implements and what it deliberately does not.
+      Apply implements IN SCOPE only; the rules-conformance auditor and /opsx:verify check
+      both sections."
+    - "A requirement whose name already exists in openspec/specs/<capability>/spec.md is
+      `## MODIFIED`, never `## ADDED`, and the MODIFIED block carries forward every base
+      scenario (reframe an obsolete one, or move it under `## REMOVED`)."
+  tasks:
+    - "Every implementation task carries `[REQ: <requirement name>]`, naming the delta-spec
+      requirement it implements verbatim. A task with no requirement behind it is either a
+      missing requirement or overshoot."
+    - "Each task group carries its own tests (vitest, pure logic) as tasks inside that
+      group, not a single testing group at the end. Behaviour that needs a microphone,
+      Soniox or the PID lifecycle gets a task that verifies it by running the CLI
+      (e.g. `set-copilot doctor`), and any test that spawns the real CLI sets
+      SET_COPILOT_HOME."
+
+# Per-operation advisory guidance, injected into `openspec instructions apply` and the
+# archive instructions (OpenSpec >= 1.14 reads operations.<apply|archive>.guidance).
+operations:
+  apply:
+    guidance:
+      - "Before implementing: openspec/changes/<name>/review-findings.md must exist and
+        contain no OPEN CRITICAL. If it is missing, stop and run /opsx:review <name>
+        first. If a CRITICAL is OPEN, stop: fix it in the proposal/design/tasks/spec
+        artifacts and mark it RESOLVED, or get the user's explicit OK to REJECT it with a
+        reason. Exempt only if proposal.md states a review skip with its reason (docs-only,
+        or a retro-spec with no code task) — see .claude/rules/spec-adversarial-review.md."
+      - "Implement the IN SCOPE items of the delta specs only. An OUT OF SCOPE item stays
+        out even when it is obvious or useful — stop and tell the user instead."
+  archive:
+    guidance:
+      - "Never archive with --skip-specs: the spec sync is the point of archiving here.
+        Archive in dependency order — a change that MODIFIES a requirement archives after
+        the change that ADDED it."
+      - "A MODIFIED requirement must carry forward every base scenario. Never silently drop
+        one; reframe it to its surviving intent or move it under REMOVED. A delta that
+        would leave a capability empty retires it with a tombstone ADDED requirement."
+      - "After archiving, run `openspec validate --specs --strict` and compare the total
+        requirement count across openspec/specs/ with the count before the archive. It
+        must not drop by more than the change's REMOVED requirements; an unexplained drop
+        means a requirement was lost in the sync."

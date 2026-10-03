@@ -22,6 +22,8 @@ Tests cover the pure logic only (config resolution, keyword matching, source glo
 
 Spec-driven changes live in `openspec/changes/`; the applied source of truth is `openspec/specs/`. Drive this work through the **`/opsx:*` skills** (`/opsx:propose`, `/opsx:apply`, `/opsx:archive`, `/opsx:continue`, `/opsx:status`), **not** the raw `openspec` CLI by hand — the skills enforce the workflow (context-file reads, status/artifact ordering, sync-then-archive). The bare CLI is fine only for quick read-only inspection.
 
+**The cycle is propose → `/opsx:review` → apply → verify → archive.** `/opsx:review` runs two agents blind and in parallel — `adversarial-code-reviewer` (refutes the plan against the real code) and `rules-conformance-auditor` (PASS/FAIL/N-A per mandatory rule) — and merges them into `openspec/changes/<name>/review-findings.md`. No apply while a CRITICAL there is OPEN; see `.claude/rules/spec-adversarial-review.md`.
+
 **Commit at each step.** An `/opsx:apply` (implementation) and an `/opsx:archive` (spec sync + move) are each a commit-worthy unit — commit after each rather than batching many changes into one. Doing it after the fact is fine when a run got ahead of its commits, but the default is one commit per apply and one per archive.
 
 Two archive-time invariants, each learned from a real abort:
