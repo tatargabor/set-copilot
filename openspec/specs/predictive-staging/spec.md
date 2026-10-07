@@ -71,6 +71,20 @@ elapsed since its most recent staged delta. The window SHALL be configured as `w
 the clock at the moment of the promote, not by whether a periodic sweep has already run — so a
 prediction past its window is never promotable, even between two sweeps.
 
+"The clock" is **emission time**: a staged delta's window SHALL run from that delta's `emittedAt`,
+and a promote SHALL be judged at its own `emittedAt`. Because both are written into the canonical
+event log, a wall that rebuilds its state from that log after a restart SHALL reach — for an
+unchanged `wall.staging.ttlMs` — the same promote decisions the live wall reached: a prediction
+that had expired stays expired, a promote that was refused stays refused, and a promote that
+succeeded is lifted again. A restart SHALL NOT grant any prediction a fresh window.
+
+A line that carries no `emittedAt` — replayed from the log or arriving live — cannot show when it
+happened. Such a staged delta SHALL NOT enter the promotable registry (it is still shown
+privately), and such a promote SHALL publish nothing, so a log written before stamping can only
+make a prediction less promotable, never more. A stamp that cannot be honest is read the same
+way: a promote whose `emittedAt` is later than the moment it is processed, or earlier than the
+staged prediction it names, SHALL publish nothing and leave the prediction in the registry.
+
 There is no engine-side divergence detection: when the conversation moves away from a prediction,
 the producer lets it expire. On expiry the server SHALL drop the prediction from the promotable
 registry and broadcast an expiry marker (`stage-expired`, naming its category and visual) to
@@ -101,6 +115,35 @@ the prediction never had a display surface in the first place.
 
 - **WHEN** a staged prediction expires while a public-audience window is connected
 - **THEN** that window SHALL NOT receive the expiry marker
+
+#### Scenario: A restart does not revive an expired prediction
+
+- **WHEN** a prediction was staged longer ago than its window, and the wall restarts and rebuilds
+  from the log
+- **THEN** the prediction is not promotable, and a public client that connects after the restart
+  receives nothing from it
+
+#### Scenario: A promote refused live stays refused on rebuild
+
+- **WHEN** the log holds a staged delta and, later than its window, a promote for it that the live
+  wall refused, and the wall restarts
+- **THEN** the rebuild publishes nothing from that prediction
+
+#### Scenario: A promote that succeeded live is lifted again on rebuild
+
+- **WHEN** the log holds a staged delta and, within its window, a promote that the live wall
+  executed, and the wall restarts
+- **THEN** the rebuilt public state shows the promoted visual, as it did before the restart
+
+#### Scenario: An unstamped line fails closed
+
+- **WHEN** the server meets a `staged:true` delta or a `promote` without `emittedAt`, from the startup replay or arriving live
+- **THEN** the delta is shown privately but is not promotable, and the promote publishes nothing
+
+#### Scenario: A stamp that cannot be honest is refused
+
+- **WHEN** a promote's `emittedAt` is later than the moment it is processed, or earlier than the staged prediction it names
+- **THEN** the promote publishes nothing, and the prediction stays in the registry
 
 ### Requirement: The predictive mandate is box policy, not engine code
 
