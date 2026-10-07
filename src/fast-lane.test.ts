@@ -117,3 +117,90 @@ describe("channels and state", () => {
     expect(feedAll(lane({ enabled: false }), ["copilot rajzolj csináld"])).toEqual([]);
   });
 });
+
+/**
+ * Field regression, 2026-10-07: in one meeting the opener fired three times INSIDE a word.
+ * Hungarian attaches suffixes directly to the word, and Soniox delivered each of these as
+ * `" Copilot"` + a suffix token — so after the first token the buffer ENDED in `copilot`, and
+ * end-of-buffer was taken as a word boundary. The recorded spans began with the suffix
+ * (`"ot, alapból a…"`, `"okat meg az elmaradt…"`, `"os beállításokat…"`); one of them was even
+ * closed and handed to the copilot as a command.
+ */
+describe("an opener needs a boundary that was actually observed (2026-10-07 field phrases)", () => {
+  it("„Meeting Copilotot” — the suffix token continues the word, no command opens", () => {
+    const out = feedAll(lane(), [
+      " Ehm,", " első", " feladat:", " minden", " projekt,", " amiben", " használunk",
+      " Meeting", " Copilot", "ot", ",", " alapból", " a", " Copilot", " transcription", "-ök",
+      " be", " kell,", " hogy", " menjenek.", " Most", " csak", " rögzítsd,", " de", " még", " ne", " csináld",
+    ]);
+    // `Copilot transcription` IS a standalone opener — that one legitimately opens, and the
+    // closing word closes it. What must not happen is the suffix `ot` opening a span.
+    expect(out.every((e) => e.kind !== "command" || !e.text.startsWith("ot"))).toBe(true);
+    expect(out.some((e) => (e.kind === "command" ? e.text : e.partial).startsWith("ot"))).toBe(false);
+  });
+
+  it("„Copilotokat” — no command opens", () => {
+    const l = lane();
+    const out = feedAll(l, [
+      " hogy", " beimportáltuk", " az", " elmaradt", " Copilot", "okat", " meg", " az",
+      " elmaradt", " diktálásokat.",
+    ]);
+    expect(out).toEqual([]);
+    expect(l.isOpen("mic")).toBe(false);
+    expect(l.close(99)).toEqual([]);
+  });
+
+  it("„Set Copilotos” — no command opens", () => {
+    const l = lane();
+    const out = feedAll(l, [
+      " rendbe", " tenni", " a", " Set", " Copilot", "os", " beállításokat,", " minden", " projekthez,",
+    ]);
+    expect(out).toEqual([]);
+    expect(l.isOpen("mic")).toBe(false);
+    expect(l.close(99)).toEqual([]);
+  });
+
+  it("a standalone opener is confirmed by the next word's leading space", () => {
+    const out = feedAll(lane(), [" Copilot", " rajzold", " fel", " csináld"]);
+    expect(out).toEqual([expect.objectContaining({ kind: "command", text: "rajzold fel" })]);
+  });
+
+  it("a standalone opener is confirmed by punctuation", () => {
+    const out = feedAll(lane(), [" Copilot", ",", " rajzold", " csináld"]);
+    expect(out).toHaveLength(1);
+    // The instruction keeps the speaker's own text, punctuation included (unchanged behaviour).
+    expect(out[0]).toMatchObject({ kind: "command", text: ", rajzold" });
+  });
+
+  it("the span starts where the opener was SAID, not where it was confirmed", () => {
+    const l = lane();
+    l.feed("mic", " Copilot", 100, 1_000);
+    l.feed("mic", " rajzold", 200, 1_100);
+    const out = l.feed("mic", " csináld", 300, 1_200);
+    expect(out[0]).toMatchObject({ kind: "command", startTs: 100, ts: 300 });
+  });
+
+  it("a closer that ends the received speech closes at once — no waiting for the next token", () => {
+    const l = lane();
+    l.feed("mic", " Copilot rajzold", 1, 1_000);
+    const out = l.feed("mic", " csináld", 2, 1_100);
+    expect(out).toEqual([expect.objectContaining({ kind: "command", text: "rajzold" })]);
+  });
+
+  it("a trimmed pending buffer never starts in the middle of a word", () => {
+    // The pending buffer keeps its last 200 characters. Here the cut lands inside
+    // `autocopilot` (exactly 200 characters from `copilot` to the end), so the kept tail would
+    // begin with `copilot` and "start of buffer" would pass as a word boundary.
+    const out = feedAll(lane(), [" auto", "copilot " + "y".repeat(192), " rajzold", " csináld"]);
+    expect(out).toEqual([]);
+  });
+});
+
+describe("chunked backends deliver each chunk as a new word", () => {
+  it("a chunk ending in the opener is confirmed by the next chunk's leading space", async () => {
+    const { chunkEventText } = await import("./soniox-rt.js");
+    expect(chunkEventText("rajzold fel csináld  ")).toBe(" rajzold fel csináld");
+    const out = feedAll(lane(), [chunkEventText("Na jó, Copilot"), chunkEventText("rajzold fel csináld")]);
+    expect(out).toEqual([expect.objectContaining({ kind: "command", text: "rajzold fel" })]);
+  });
+});

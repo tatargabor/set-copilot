@@ -4,7 +4,7 @@ import { writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { addWavHeader, type TranscriptEvent } from "./soniox-rt.js";
+import { addWavHeader, chunkEventText, type TranscriptEvent } from "./soniox-rt.js";
 
 export interface WhisperLocalOptions {
   /** whisper.cpp CLI binary (e.g. "whisper-cli" or an absolute path) */
@@ -72,7 +72,7 @@ export class WhisperLocalClient extends EventEmitter {
       if (text.trim()) {
         const event: TranscriptEvent = {
           speaker: this.speaker,
-          text: text.trim(),
+          text: chunkEventText(text),
           isFinal: true,
           timestampMs: Date.now() - this.startTime,
         };

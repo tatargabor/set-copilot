@@ -24,6 +24,8 @@ this is the normal case for the language the copilot is used in, not an edge cas
 - The pending buffer is trimmed on a word boundary, so a trimmed tail can never start in the
   middle of a word and present its last letters as a whole word.
 - Closing markers are unchanged: a closing word takes effect when it is said (see design D2).
+- The chunked backends (Soniox chunk mode, local whisper) emit each chunk with a leading space, so
+  the boundary rule holds for them too (design D4).
 
 ## Capabilities
 
@@ -39,7 +41,8 @@ this is the normal case for the language the copilot is used in, not an edge cas
 
 ## Impact
 
-- `src/fast-lane.ts` (the matcher and the pending-buffer trim), `src/fast-lane.test.ts`.
+- `src/fast-lane.ts` (the matcher and the pending-buffer trim), `src/fast-lane.test.ts`,
+  `src/soniox-rt.ts` + `src/whisper-local.ts` (chunk event text).
 - No config, CLI or wire-format change. Latency: an opener is confirmed one token later, which
   is the first word of the instruction — the span cannot carry anything before that anyway.
 - Review: touches `src/`, so it goes through `/opsx:review`.

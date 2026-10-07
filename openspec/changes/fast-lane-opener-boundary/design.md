@@ -42,3 +42,22 @@ Field input: `transcript-2026-10-07T16-52-53-662Z.jsonl` (a consumer project's m
 phrases are quoted, not the file). Unit tests feed the three phrases as token sequences in the
 shape Soniox delivered them (`" Meeting"`, `" Copilot"`, `"ot"`, `","`, …) and assert that no
 span opens; they are run against the unfixed `fast-lane.ts` first and must fail there.
+
+## D4 — Chunked backends emit a leading space (review F1)
+
+The real-time client's tokens carry Soniox's leading space; the chunk client (`sonioxMode:
+"chunk"`) and local whisper emitted `text.trim()`. Under D1 a chunk ending in `…Copilot` followed
+by `rajzold fel csináld` would read as `copilotrajzold` and never open — a regression for those
+backends. They now emit `" " + text.trim()` (`chunkEventText`). The same missing space made the
+writer mark every chunk resumption `midWord`, so the stitch glued two words at each chunk join;
+that sibling defect is fixed by the same line.
+
+## D5 — Stated limits (review F2, F3)
+
+- `fold` turns `'` and `-` into separators, so `Copilot's` and `Copilot-ot` still confirm an
+  opener. Hungarian suffixes attach without a hyphen except after abbreviations and numerals, and
+  Soniox wrote all three field cases without one; narrowing "separator" to whitespace and clause
+  punctuation is left for a measured case.
+- The extracted instruction keeps the speaker's own text between the markers, trimmed of
+  whitespace only, so an opener followed by a comma yields `, rajzold`. That is today's behaviour
+  (`sliceAtMarker`), unchanged here; the scenario says "carrying `rajzold`" accordingly.

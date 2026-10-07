@@ -6,6 +6,8 @@
   stream; a marker at the end of the stream so far is held, not matched.
 - The pending buffer is trimmed on a word boundary.
 - Regression scenarios built from the three 2026-10-07 field phrases.
+- The chunked backends (Soniox chunk mode, local whisper) deliver each chunk with a leading space,
+  so a chunk boundary is an observed word boundary.
 
 ## OUT OF SCOPE
 
@@ -13,6 +15,9 @@
   risk is reported, not changed.
 - The shipped default vocabulary (`copilot`, `start`, `csináld`, `stop`) and `copilot.names`.
 - `detect.command` / the line-level `command: true` flag.
+- An apostrophe or hyphen after an opener (`Copilot's`, `Copilot-ot`) still counts as a boundary
+  (design D5).
+- Stripping leading punctuation from the extracted instruction (design D5).
 
 ## MODIFIED Requirements
 
@@ -59,7 +64,7 @@ the middle of a word.
 
 - **WHEN** the start word is `copilot` and the tokens `" Copilot"`, `","`, `" rajzold"`,
   `" csináld"` arrive one at a time
-- **THEN** one command with the text `rajzold` is produced
+- **THEN** one command carrying `rajzold` is produced
 
 #### Scenario: A closer at the end of the received speech closes at once
 
@@ -73,3 +78,8 @@ the middle of a word.
   in the start word (for example `…autocopilot`)
 - **THEN** the trimmed tail does not present that word's ending as a standalone start word, and
   no command is opened from it
+
+#### Scenario: A chunk boundary confirms an opener
+
+- **WHEN** a chunked backend delivers `Na jó, Copilot` and then `rajzold fel csináld` as two chunks
+- **THEN** one command carrying `rajzold fel` is produced

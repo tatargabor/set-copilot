@@ -33,7 +33,9 @@
  *
  * Matching is accent- and case-insensitive over Unicode letters, so "CSINÁLD", "csinald"
  * and "Csináld" are one marker; the extracted instruction keeps the speaker's own text,
- * accents and all. Markers match as whole words: "restart" never opens a command.
+ * accents and all. Markers match as whole words: "restart" never opens a command, and an
+ * opener counts only once a boundary AFTER it has been seen in the stream — "Copilot" + "ot"
+ * is one word, `Copilotot`, not an opener (see `findWord`).
  */
 
 /** The words that open and close a spoken command, and the caps that bound one. */
@@ -74,26 +76,37 @@ function fold(s: string): string {
 /**
  * Where `marker` occurs as a whole word in the folded text: the index just past it, or
  * -1. Whole-word only, so "start" does not fire inside "restart" or "startup".
+ *
+ * `endIsBoundary` decides what the END of the text counts as. For a closing word it is a
+ * boundary: the speaker hands the instruction over by saying it, and waiting for the token
+ * after it would hold every command until they say something else. For an OPENING word it
+ * is not (`fast-lane-opener-boundary`): speech arrives as tokens, and Hungarian attaches a
+ * suffix directly to the word, which Soniox delivers as its own token — `" Copilot"` then
+ * `"ot"`. Measured 2026-10-07: „Meeting Copilotot", „Copilotokat" and „Set Copilotos" each
+ * opened a command in one meeting, because after the first token the buffer ended in
+ * `copilot`. So an opener counts only once a separator has actually been SEEN after it — the
+ * leading space of the next word's token, or punctuation; until then it is held.
  */
-function findWord(folded: string, marker: string): number {
+function findWord(folded: string, marker: string, endIsBoundary: boolean): number {
   const m = fold(marker).trim();
   if (!m) return -1;
   let from = 0;
   for (;;) {
     const at = folded.indexOf(m, from);
     if (at < 0) return -1;
+    const atEnd = at + m.length >= folded.length;
     const before = at === 0 ? " " : folded[at - 1];
-    const after = at + m.length >= folded.length ? " " : folded[at + m.length];
+    const after = atEnd ? (endIsBoundary ? " " : "") : folded[at + m.length];
     if (before === " " && after === " ") return at + m.length;
     from = at + 1;
   }
 }
 
 /** The earliest whole-word hit among several markers: index just past it, or -1. */
-function findAny(folded: string, markers: string[]): number {
+function findAny(folded: string, markers: string[], endIsBoundary: boolean): number {
   let best = -1;
   for (const marker of markers) {
-    const end = findWord(folded, marker);
+    const end = findWord(folded, marker, endIsBoundary);
     if (end >= 0 && (best < 0 || end < best)) best = end;
   }
   return best;
@@ -111,6 +124,12 @@ export class FastLane {
   private readonly pending: Record<string, string> = {};
   /** The open span, per speaker. At most one — a second opener restarts it. */
   private readonly open: Record<string, Span | undefined> = {};
+  /**
+   * When the pending buffer ends in an opener not yet confirmed by a boundary: the `ts` and
+   * clock of the piece it arrived in. A confirmed span starts THERE — where the word was said,
+   * not one token later where the boundary after it was seen.
+   */
+  private readonly held: Record<string, { ts: number; now: number } | undefined> = {};
 
   constructor(cfg: FastLaneConfig) {
     this.cfg = cfg;
@@ -127,61 +146,62 @@ export class FastLane {
    */
   feed(speaker: string, text: string, ts: number, now: number): FastLaneEvent[] {
     if (!this.cfg.enabled || !text) return [];
-    const out: FastLaneEvent[] = [];
-    let span = this.open[speaker];
-
+    const span = this.open[speaker];
     if (span) {
       span.text += text;
-      const folded = fold(span.text);
-      const closes = findAny(folded, this.cfg.end);
-      if (closes >= 0) {
-        // The instruction is what lies between the markers. Cut on the RAW text at the
-        // proportional point rather than the folded one: folding changes lengths, and
-        // an instruction with the closing word left on the end reads as part of it.
-        const instruction = cutBeforeMarker(span.text, this.cfg.end).trim();
-        this.open[speaker] = undefined;
-        this.pending[speaker] = "";
-        out.push({ kind: "command", speaker, text: instruction, startTs: span.startTs, ts });
-        return out;
-      }
-      const reason = span.text.length > this.cfg.maxChars
-        ? "too-long" as const
-        : now - span.openedAt > this.cfg.maxSpanMs
-          ? "timeout" as const
-          : null;
-      if (reason) {
-        this.open[speaker] = undefined;
-        this.pending[speaker] = "";
-        out.push({ kind: "abandoned", speaker, partial: span.text.trim(), reason, startTs: span.startTs, ts });
-      }
-      return out;
+      return this.settle(speaker, ts, now);
     }
 
     // No span open: watch for an opener. The pending buffer is bounded so a meeting
     // with no command in it never grows memory — a marker is a word, not a paragraph.
     const buf = (this.pending[speaker] ?? "") + text;
     const folded = fold(buf);
-    const opens = findAny(folded, this.cfg.start);
+    const opens = findAny(folded, this.cfg.start, false);
     if (opens >= 0) {
-      this.open[speaker] = { text: cutAfterMarker(buf, this.cfg.start), startTs: ts, openedAt: now };
+      const at = this.held[speaker] ?? { ts, now };
+      this.held[speaker] = undefined;
+      this.open[speaker] = { text: cutAfterMarker(buf, this.cfg.start), startTs: at.ts, openedAt: at.now };
       this.pending[speaker] = "";
       // The opener and closer can arrive in the SAME piece ("copilot rajzolj csináld"),
-      // so the just-opened span is examined at once rather than waiting for more speech
-      // that may never come.
-      return this.closeIfClosed(speaker, ts);
+      // and a held opener is confirmed by a piece that may already be long or late — so the
+      // just-opened span is judged at once, by the same close/cap rules as any open span,
+      // rather than waiting for more speech that may never come.
+      return this.settle(speaker, ts, now);
     }
-    this.pending[speaker] = buf.slice(-MAX_PENDING);
-    return out;
+    // An opener the buffer ENDS with is held, not matched: remember where it was said.
+    // Re-derived from the whole buffer every piece, so a suffix token (`ot`) that continues
+    // the word clears it again.
+    if (findAny(folded, this.cfg.start, true) >= 0) this.held[speaker] ??= { ts, now };
+    else this.held[speaker] = undefined;
+    this.pending[speaker] = trimPending(buf);
+    return [];
   }
 
-  /** Re-check an open span for a closing marker already inside it. */
-  private closeIfClosed(speaker: string, ts: number): FastLaneEvent[] {
+  /**
+   * Judge an open span: a closing word inside it completes the command; otherwise the time
+   * and length caps may abandon it. Shared by every path that leaves a span open.
+   */
+  private settle(speaker: string, ts: number, now: number): FastLaneEvent[] {
     const span = this.open[speaker];
     if (!span) return [];
-    if (findAny(fold(span.text), this.cfg.end) < 0) return [];
-    const instruction = cutBeforeMarker(span.text, this.cfg.end).trim();
+    if (findAny(fold(span.text), this.cfg.end, true) >= 0) {
+      // The instruction is what lies between the markers. Cut on the RAW text at the
+      // proportional point rather than the folded one: folding changes lengths, and
+      // an instruction with the closing word left on the end reads as part of it.
+      const instruction = cutBeforeMarker(span.text, this.cfg.end).trim();
+      this.open[speaker] = undefined;
+      this.pending[speaker] = "";
+      return [{ kind: "command", speaker, text: instruction, startTs: span.startTs, ts }];
+    }
+    const reason = span.text.length > this.cfg.maxChars
+      ? "too-long" as const
+      : now - span.openedAt > this.cfg.maxSpanMs
+        ? "timeout" as const
+        : null;
+    if (!reason) return [];
     this.open[speaker] = undefined;
-    return [{ kind: "command", speaker, text: instruction, startTs: span.startTs, ts }];
+    this.pending[speaker] = "";
+    return [{ kind: "abandoned", speaker, partial: span.text.trim(), reason, startTs: span.startTs, ts }];
   }
 
   /**
@@ -201,6 +221,19 @@ export class FastLane {
 
 /** Enough to hold any plausible marker plus the fragments around it. */
 const MAX_PENDING = 200;
+
+/**
+ * Keep the last `MAX_PENDING` characters — cut on a word boundary. A slice that starts inside
+ * a word (`…autocopilot` → `copilot…`) would present the word's tail as a whole word, with
+ * "start of buffer" passing as the boundary before it: the same buffer-edge-is-a-word-edge
+ * mistake as an opener at the end, at the other end.
+ */
+function trimPending(buf: string): string {
+  if (buf.length <= MAX_PENDING) return buf;
+  const cut = buf.length - MAX_PENDING;
+  const tail = buf.slice(cut);
+  return /[\p{L}\p{N}]/u.test(buf[cut - 1]) ? tail.replace(/^[\p{L}\p{N}]+/u, "") : tail;
+}
 
 /** The raw text AFTER the earliest start marker in it. */
 function cutAfterMarker(raw: string, markers: string[]): string {

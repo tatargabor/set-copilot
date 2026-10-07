@@ -152,6 +152,13 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   The vocabulary is config (`copilot.fastLane`), the mechanism is engine — the `detect.*`
   seam again. Matching is accent- and case-insensitive over Unicode letters and whole-word
   only (`restart` never opens one); the extracted instruction keeps the speaker's own text.
+  **An opener needs a boundary that was actually seen after it** (`fast-lane-opener-boundary`):
+  Hungarian attaches suffixes directly to the word and Soniox delivers the suffix as its own token
+  (`" Copilot"`, `"ot"`), so with end-of-buffer counted as a boundary „Meeting Copilotot",
+  „Copilotokat" and „Set Copilotos" each opened a command in one meeting (2026-10-07). The opener is
+  held until the next token's leading space or punctuation confirms it; a closer still takes effect
+  the moment it is said (waiting would cost the latency the lane exists for). The chunked backends
+  emit each chunk with a leading space (`chunkEventText`) so a chunk boundary counts as seen.
   A note on the shipped defaults: `copilot` is a word nobody says mid-meeting, while
   `start`/`stop` are ordinary speech — both bracket styles ship because both were asked
   for, and a project whose meetings say them should drop them in config. Requiring both
