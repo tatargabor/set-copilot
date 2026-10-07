@@ -563,15 +563,37 @@ export class WallServer {
       console.warn(`[set-copilot] wall: refusing promote — nothing staged for "${p.category}"/"${p.visual}"`);
       return;
     }
+    // Judge the promote at its OWN emission time (staged-expiry-survives-restart): the
+    // log carries when it was issued, so a rebuild repeats the live decision instead of
+    // re-running history at "now". A promote without a usable stamp cannot show when it
+    // happened and publishes nothing — live or replayed alike.
+    if (p.emittedAt === undefined) {
+      console.warn(`[set-copilot] wall: refusing promote — no emission time on "${p.visual}"`);
+      return;
+    }
+    // A stamp that cannot be honest is refused like a missing one: the log is ordered and
+    // the append path stamps at write, so a promote later than the processing clock — or
+    // earlier than the prediction it names — was not written by the append path. Publish
+    // nothing; the registry stays untouched.
+    if (p.emittedAt > Date.now()) {
+      console.warn(`[set-copilot] wall: refusing promote — "${p.visual}" carries a future emission time`);
+      return;
+    }
     // Expiry is decided by the CLOCK, not by whether the sweep timer has fired yet. The
     // gate used to be plain map presence, which left a window as wide as the sweep
     // interval (5 s by default) in which a prediction past its ttl could still be
     // published — the exact "an unspoken guess reaches the wall late and out of context"
     // failure the ttl exists to prevent. Found by the promotable-listing tests: the
     // listing filtered by the clock while the gate did not, so the two disagreed.
+    // The clock read here is the promote's own emission time against the staged delta's,
+    // so a rebuilt wall decides exactly as the live one did.
     const stagedAt = this.staged.get(key);
     const ttl = this.opts.stagingTtlMs ?? 120_000;
-    if (stagedAt === undefined || (ttl > 0 && Date.now() - stagedAt >= ttl)) {
+    if (stagedAt !== undefined && p.emittedAt < stagedAt) {
+      console.warn(`[set-copilot] wall: refusing promote — "${p.visual}" predates its staged prediction`);
+      return;
+    }
+    if (stagedAt === undefined || (ttl > 0 && p.emittedAt - stagedAt >= ttl)) {
       console.warn(`[set-copilot] wall: refusing promote — "${p.visual}" is not a live staged prediction (expired or never staged)`);
       if (stagedAt !== undefined) {
         // Past its ttl but not yet swept: retire it here so the sweep's private marker
@@ -744,6 +766,13 @@ export class WallServer {
       this.promote(p.promote);
       return;
     }
+    // The staging gate decides by the log's own emission time (staged-expiry-survives-
+    // restart), so read the stamp from the RAW line: normalizeEvent's field allowlist
+    // drops emittedAt, and the reassignment below would lose it. A line without a usable
+    // stamp cannot show when it happened — the registration below fails closed on it,
+    // replayed or live alike.
+    const rawStamp = (msg as { emittedAt?: unknown }).emittedAt;
+    const emittedAt = typeof rawStamp === "number" && Number.isFinite(rawStamp) ? rawStamp : undefined;
     const norm = normalizeEvent(msg, { projectRoot: this.opts.projectRoot });
     if (!norm.ok) {
       console.warn(`[set-copilot] wall: dropping invalid event (${norm.reason})`);
@@ -771,7 +800,19 @@ export class WallServer {
     // model already keeps it off every public client, and it reaches the public wall only
     // through an explicit promote.
     if (msg.staged && msg.graph && msg.visual && reachesPrivate(msg.zone)) {
-      this.staged.set(this.stageKey(msg.category, msg.visual), Date.now());
+      const key = this.stageKey(msg.category, msg.visual);
+      if (emittedAt !== undefined) {
+        // The window runs from the delta's own emission time, so a wall rebuilt from the
+        // log re-registers at the ORIGINAL stamp instead of granting a fresh window
+        // (staged-expiry-survives-restart). Live this equals "now" to within the tail
+        // interval, exactly as before.
+        this.staged.set(key, emittedAt);
+      } else {
+        // No stamp, no promotability: the delta is still shown privately (it accumulated
+        // above), but a prediction that cannot be dated is never lifted — a restart can
+        // grant nothing, and neither can a line that bypassed the append path.
+        this.staged.delete(key);
+      }
     }
 
     // A graph reset (new visual) offers a candidate to the director; an immediate

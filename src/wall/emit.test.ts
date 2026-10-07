@@ -250,6 +250,8 @@ describe("emitWallEvents pending + heartbeat routing", () => {
     expect(line.kind).toBe("pending");
     expect(line.zone).toBe("both");
     expect(line.ttlMs).toBe(DEFAULT_PENDING_TTL_MS);
+    // A control line nothing decides by carries no stamp (staged-expiry-survives-restart).
+    expect(line.emittedAt).toBeUndefined();
   });
 
   it("drops an injected heartbeat — it is server-only", () => {
@@ -259,12 +261,25 @@ describe("emitWallEvents pending + heartbeat routing", () => {
     expect(res.dropped[0]?.reason).toContain("server-only");
   });
 
-  it("writes a promote command, defaulting its zone to public", () => {
+  it("writes a promote command, defaulting its zone to public and stamping it", () => {
     const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
     const res = emitWallEvents(cfg(dir), { kind: "promote", category: "előrejelzés", visual: "v1" });
     expect(res.emitted).toBe(1);
     const line = JSON.parse(readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim());
-    expect(line).toEqual({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" });
+    // Stamped by the append path (staged-expiry-survives-restart): the gate judges a
+    // promote by when it was issued, so the log must carry the time.
+    expect(line).toEqual({
+      kind: "promote", category: "előrejelzés", visual: "v1", zone: "public",
+      emittedAt: expect.any(Number),
+    });
+  });
+
+  it("overwrites a producer-supplied emittedAt on a promote — the append path owns the time", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wall-emit-"));
+    emitWallEvents(cfg(dir), { kind: "promote", category: "előrejelzés", visual: "v1", emittedAt: 123 });
+    const line = JSON.parse(readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim());
+    expect(line.emittedAt).not.toBe(123);
+    expect(typeof line.emittedAt).toBe("number");
   });
 
   it("drops an injected stage-expired — it is server-only", () => {
@@ -280,6 +295,8 @@ describe("emitWallEvents pending + heartbeat routing", () => {
     expect(res.emitted).toBe(1);
     const line = JSON.parse(readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim());
     expect(line).toEqual({ kind: "layout", route: "/wall", layout: "mirror" });
+    // A control line nothing decides by carries no stamp (staged-expiry-survives-restart).
+    expect(line.emittedAt).toBeUndefined();
   });
 
   it("drops a malformed layout switch (missing route or layout)", () => {
@@ -300,6 +317,16 @@ describe("normalizePromote + staged passthrough (predictive-staging)", () => {
   it("honours an explicit target zone and rejects a bad one", () => {
     expect(normalizePromote({ kind: "promote", category: "a", visual: "v", zone: "both" }).ok).toBe(true);
     expect(normalizePromote({ kind: "promote", category: "a", visual: "v", zone: "nope" }).ok).toBe(false);
+  });
+
+  it("carries a finite numeric emittedAt through and drops anything else", () => {
+    // The server's view of a logged promote keeps its time (staged-expiry-survives-restart).
+    const stamped = normalizePromote({ kind: "promote", category: "a", visual: "v", emittedAt: 123 });
+    expect(stamped.ok && stamped.promote.emittedAt).toBe(123);
+    for (const bad of ["123", Number.NaN, null]) {
+      const r = normalizePromote({ kind: "promote", category: "a", visual: "v", emittedAt: bad });
+      expect(r.ok && r.promote.emittedAt).toBeUndefined();
+    }
   });
 
   it("carries the staged marker through normalizeEvent when private", () => {

@@ -288,7 +288,13 @@ export function normalizePromote(raw: unknown): NormalizePromoteResult {
     zone = o.zone as Zone;
   }
 
-  return { ok: true, promote: { kind: "promote", category: category.trim(), visual: visual.trim(), zone } };
+  // A finite numeric `emittedAt` rides through so the server's view of a logged promote
+  // keeps its time (staged-expiry-survives-restart); anything else reads as absent, and
+  // the gate refuses a promote that cannot show when it happened. The APPEND path still
+  // stamps the written line itself, so a producer-supplied value never reaches the log.
+  const promote: Promote = { kind: "promote", category: category.trim(), visual: visual.trim(), zone };
+  if (typeof o.emittedAt === "number" && Number.isFinite(o.emittedAt)) promote.emittedAt = o.emittedAt;
+  return { ok: true, promote };
 }
 
 export type NormalizeLayoutResult =
@@ -362,7 +368,12 @@ export function emitWallEvents(cfg: CopilotConfig, raw: unknown): EmitResult {
         result.dropped.push({ reason: p.reason });
         continue;
       }
-      batch += JSON.stringify(p.promote) + "\n";
+      // Stamped by the append path, like a display event (staged-expiry-survives-restart):
+      // the staging gate judges a promote by when it was issued, and a wall rebuilt from
+      // the log must be able to read that time back — a rebuild re-running every logged
+      // promote at "now" would lift guesses the live wall had already refused. A
+      // producer-supplied value is overwritten, exactly as for a display event.
+      batch += JSON.stringify({ ...p.promote, emittedAt: Date.now() }) + "\n";
       result.emitted++;
       continue;
     }
