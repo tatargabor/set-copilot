@@ -913,6 +913,14 @@ type RawConfig = Omit<Partial<CopilotConfig>, "knowledge"> & { knowledge?: RawKn
 type RawAudio = Partial<CopilotConfig["audio"]>;
 
 /**
+ * The keys that describe a MACHINE (its audio chain) or the PERSON at it (the mic speaker
+ * label), as `section.key` paths. They resolve from the user config first, the diagnostics warn
+ * when a tracked project config carries one, and `doctor --fix` moves them — one list, so the
+ * three cannot disagree. `audio.*` stands for every key of the `audio` section.
+ */
+export const MACHINE_LOCAL_KEYS = ["audio.*", "transcript.speakers.mic"] as const;
+
+/**
  * Merge the `audio` section per key, treating an empty value in the higher-priority
  * layer as absent.
  *
@@ -1053,7 +1061,8 @@ function normalizeAlerts(raw: unknown): AlertCategory[] | undefined {
  * Load the effective config for a project.
  *
  * Resolution order (later wins): built-in defaults → user config → project config
- * → env overrides. Secrets (SONIOX_API_KEY) come from env / .env only (project
+ * → env overrides — except the per-machine keys (`MACHINE_LOCAL_KEYS`: every `audio` key and
+ * `transcript.speakers.mic`), where the user config wins over the project config. Secrets (SONIOX_API_KEY) come from env / .env only (project
  * .env first, then the user-level one), never the committed config.
  */
 export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
@@ -1082,10 +1091,23 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
   // input delivering noise — and every dictation in that project came back empty
   // while the same setup worked everywhere else. Nobody writes `micSource: ""` to
   // mean "use the default"; they write it because the key was scaffolded empty.
-  const audio = mergeAudio(userCfg.audio, projCfg.audio);
+  //
+  // And the MACHINE wins here (machine-local-audio-and-speaker): every `audio` key describes
+  // the local audio chain, so a project value applies only on a machine that declares none.
+  // Committed in the project layer, these keys conflicted in git between machines and
+  // silently overrode every other clone. The empty-is-unset rule protects the project value
+  // from a scaffolded empty machine value, exactly as it protected the machine value before.
+  const audio = mergeAudio(projCfg.audio, userCfg.audio);
   const detect = { ...userCfg.detect, ...projCfg.detect };
   const wall = { ...userCfg.wall, ...projCfg.wall };
   const transcript = { ...userCfg.transcript, ...projCfg.transcript };
+  // `transcript.speakers.mic` names the PERSON at this machine's microphone — per machine, like
+  // `audio`. The rest of `speakers` (`system`: how a project's meetings label the other side)
+  // stays project-owned, so only `mic` is lifted from the machine layer.
+  const machineMic = userCfg.transcript?.speakers?.mic;
+  if (typeof machineMic === "string" && machineMic.trim()) {
+    transcript.speakers = { ...(transcript.speakers ?? {}), mic: machineMic };
+  }
   // Resolve redaction patterns fail-SAFE: this is a safety seam feeding a public
   // narration box that ships enabled, so it must never resolve to "no redaction". An
   // empty list is the obvious case; the subtler one is a non-empty list whose entries
@@ -1131,8 +1153,8 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       // the project config pins a device. A committed `micSource` is
       // machine-specific by nature — a Linux `alsa_input.usb-…` name resolves to
       // nothing on macOS, where it yields a clean 0-byte capture and no error —
-      // and the project config outranks the user-level one, so a per-machine
-      // override has nowhere else to live. With `||`, MIC_SOURCE="" fell through
+      // and on a machine whose own config names no device, the project's pinned one
+      // still applies, so the env var is the escape that can say "none". With `||`, MIC_SOURCE="" fell through
       // to the very value it was set to escape. (An empty value in a config
       // FILE is different: `mergeAudio` reads it as "never filled in".)
       micSource: process.env.MIC_SOURCE ?? (audio.micSource || DEFAULTS.audio.micSource),

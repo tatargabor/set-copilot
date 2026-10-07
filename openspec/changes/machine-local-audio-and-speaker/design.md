@@ -48,3 +48,16 @@ function beside the migrations (`moveMachineLocalKeys`), reusing the preflight's
 Never overwriting a machine value follows migration v1: a value the machine declares is, by
 construction, the right one for this hardware/person. The dropped project value is printed, so
 nothing disappears silently.
+
+## D5 — Review outcomes folded in (2026-10-07)
+
+- `init`'s own next-steps text sent the user to put `audio.micSource` into the project config;
+  it now names the machine config. README and the `dictate` skill say the same.
+- The new finding names a project value the machine overrides as ignored here, so the flipped
+  precedence is never silent where both layers disagree.
+- `init`'s drift report passes the same `projectConfigTracked` context as `doctor`, so both print
+  the same findings.
+- Open (the user's): `transcript.speakers.mic` is applied when a recording is stitched, on the
+  machine that stitches it. Re-stitching a colleague's committed recording labels their
+  microphone with this machine's name. Binding the label at capture time would be a separate
+  change (a field in the transcript), not in scope here.

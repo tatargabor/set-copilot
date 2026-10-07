@@ -9,9 +9,14 @@
  * and an already-migrated install writes nothing at all.
  */
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { CONFIG_VERSION, migrateConfigDocs, type ConfigDoc } from "./config-migrate.js";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+import { CONFIG_VERSION, migrateConfigDocs, moveMachineLocalKeys, withoutMachineLocalKeys, type ConfigDoc } from "./config-migrate.js";
 
 const USER = "/home/u/.config/set-copilot/set-copilot.config.json";
 const PROJ = "/repo/set-copilot.config.json";
@@ -120,5 +125,65 @@ describe("versioning", () => {
     const input = project({ audio: { micSource: "mic-x" } });
     migrateConfigDocs([user({}, false), input]);
     expect(input.data.audio).toEqual({ micSource: "mic-x" });
+  });
+});
+
+describe("moveMachineLocalKeys — what `doctor --fix` runs", () => {
+  it("moves every audio key and the mic label into a machine that declares none", () => {
+    const r = moveMachineLocalKeys([
+      user({}, false),
+      project({ language: "hu", audio: { sampleRate: 48000, toneStart: "/t.wav" }, transcript: { speakers: { mic: "Alice", system: "Others" } } }),
+    ]);
+    expect(find(r, USER).data).toEqual({ audio: { sampleRate: 48000, toneStart: "/t.wav" }, transcript: { speakers: { mic: "Alice" } } });
+    // The project keeps what is genuinely the project's: its language and its `system` label.
+    expect(find(r, PROJ).data).toEqual({ language: "hu", transcript: { speakers: { system: "Others" } } });
+    expect(r.changed.sort()).toEqual([PROJ, USER].sort());
+    expect(r.actions.map((a) => `${a.kind} ${a.key}`)).toEqual([
+      "moved audio.sampleRate", "moved audio.toneStart", "moved transcript.speakers.mic",
+    ]);
+  });
+
+  it("never overwrites the machine's value — the project's is dropped, and both are reported", () => {
+    const r = moveMachineLocalKeys([
+      user({ transcript: { speakers: { mic: "Bob" } } }),
+      project({ transcript: { speakers: { mic: "Alice" } } }),
+    ]);
+    expect(find(r, USER).data).toEqual({ transcript: { speakers: { mic: "Bob" } } });
+    expect(find(r, PROJ).data).toEqual({});
+    expect(r.actions).toEqual([{ kind: "dropped", key: "transcript.speakers.mic", value: "Alice", kept: "Bob" }]);
+  });
+
+  it("removes a scaffolded empty placeholder instead of moving it", () => {
+    const r = moveMachineLocalKeys([
+      user({ audio: { micSource: "usb-mic" } }),
+      project({ audio: { micSource: "", monitorSource: "" } }),
+    ]);
+    expect(find(r, PROJ).data).toEqual({});
+    expect(find(r, USER).data).toEqual({ audio: { micSource: "usb-mic" } });
+    expect(r.actions.map((a) => a.kind)).toEqual(["removed", "removed"]);
+    expect(r.changed).toEqual([PROJ]);
+  });
+
+  it("is idempotent: a second run changes nothing", () => {
+    const first = moveMachineLocalKeys([user({}), project({ audio: { sampleRate: 16000 } })]);
+    const second = moveMachineLocalKeys(first.docs);
+    expect(second.changed).toEqual([]);
+    expect(second.actions).toEqual([]);
+  });
+
+  it("does nothing when the project root IS the user config dir", () => {
+    const r = moveMachineLocalKeys([user({ audio: { sampleRate: 1 } }), { role: "project", path: USER, data: { audio: { sampleRate: 1 } }, exists: true }]);
+    expect(r.changed).toEqual([]);
+  });
+});
+
+describe("withoutMachineLocalKeys — what project-mode init writes", () => {
+  it("drops the example's audio section and keeps everything else", () => {
+    const example = JSON.parse(readFileSync(join(__dirname, "..", "set-copilot.config.example.json"), "utf-8")) as Record<string, unknown>;
+    expect(example.audio).toBeDefined(); // the example (and --global init) still carries it
+    const project = withoutMachineLocalKeys(example);
+    expect(project.audio).toBeUndefined();
+    const { audio: _audio, ...rest } = example;
+    expect(project).toEqual(rest);
   });
 });

@@ -40,9 +40,10 @@ layer outranks the machine's user config, so:
 ### Modified Capabilities
 
 - `config-resolution-and-migration`: the layer order gains the per-machine exception; the audio
-  merge's "a real project value still overrides" becomes "applies when the machine declares none".
+  merge's "a real project value still overrides" becomes "applies when the machine declares none";
+  the device-name migration's rationale stops claiming the project layer outranks the machine.
 - `setup-diagnostics`: a new requirement for per-machine keys in a tracked project config, and
-  `doctor --fix`.
+  `doctor --fix`; the governing "report, never repair" requirement gains the explicit `--fix` exception.
 - `skill-installation`: `init` scaffolds a project config without the `audio` section.
 
 ## Impact
@@ -58,4 +59,6 @@ layer outranks the machine's user config, so:
   `sampleRate: 16000`, equal to every project value seen.
 - No other project's config is edited by this change; the mechanism is `doctor --fix`, run by
   whoever owns the project.
+- Sibling change `recording-handover` also edits `cmdInit` in `src/cli.ts` and MODIFIES a different
+  `skill-installation` requirement; apply order: this change's commit first, then recording-handover's.
 - Review: touches `src/`, goes through `/opsx:review`.

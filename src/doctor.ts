@@ -12,12 +12,13 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { CONFIG_FILENAME, userConfigDir, type CopilotConfig } from "./config.js";
 import { listSources, parecBin, soxBin } from "./audio.js";
+import { moveMachineLocalKeys, type ConfigDoc, type MachineKeyMove } from "./config-migrate.js";
 import { lastMirrorEmission, mirrorPid } from "./mirror-follow.js";
 import {
   diagnoseConfig, diagnoseMirror, stopHookRegistered,
@@ -152,6 +153,15 @@ export interface ConfigState {
   files: ConfigFileState[];
   envRuntimeDir?: string;
   hasWall: boolean;
+  /** Is the project config tracked by git? (`git ls-files --error-unmatch`) */
+  projectConfigTracked: boolean;
+}
+
+/** Is `file` tracked by git in `cwd`'s repository? Not a repo, or git missing → false. */
+export function isGitTracked(file: string, cwd: string): boolean {
+  if (!existsSync(file)) return false;
+  const r = spawnSync("git", ["ls-files", "--error-unmatch", "--", file], { cwd, stdio: "ignore" });
+  return !r.error && r.status === 0;
 }
 
 function readConfigFileState(path: string): ConfigFileState {
@@ -201,6 +211,7 @@ export function collectConfigState(cfg: CopilotConfig): ConfigState {
     files,
     envRuntimeDir: process.env.SET_COPILOT_DIR || undefined,
     hasWall: projectUsesWall(cfg),
+    projectConfigTracked: projPath !== userPath && isGitTracked(projPath, cfg.projectRoot),
   };
 }
 
@@ -268,7 +279,9 @@ export function printConfigSection(state: ConfigState): Finding[] {
   for (const f of state.files) {
     console.log(`      ${f.path} — ${f.exists ? formatMtime(f.mtime) : "nincs"}`);
   }
-  const findings = diagnoseConfig(state.files, { envRuntimeDir: state.envRuntimeDir, hasWall: state.hasWall });
+  const findings = diagnoseConfig(state.files, {
+    envRuntimeDir: state.envRuntimeDir, hasWall: state.hasWall, projectConfigTracked: state.projectConfigTracked,
+  });
   if (findings.length) for (const f of findings) printFinding(f);
   else console.log("    ✓ nincs eltérés a config fájlokban");
   return findings;
@@ -289,6 +302,11 @@ export function printMirrorSection(report: MirrorReport): void {
 export interface DoctorOptions {
   /** Skip the audio probes, print only mirror readiness, and EXIT NON-ZERO when the hook is unregistered. */
   mirrorOnly?: boolean;
+  /**
+   * Move the per-machine keys out of the project config into the machine's before anything
+   * else runs (`doctor --fix`). Asks nothing; prints every action. Without it doctor writes nothing.
+   */
+  fix?: boolean;
 }
 
 export async function runDoctor(cfg: CopilotConfig, opts: DoctorOptions = {}): Promise<void> {
@@ -312,6 +330,8 @@ export async function runDoctor(cfg: CopilotConfig, opts: DoctorOptions = {}): P
     console.log("\n[set-copilot] doctor --mirror: a leirat-figyelő fut — a tükrözés bekapcsolható");
     return;
   }
+
+  if (opts.fix) fixMachineLocalKeys(cfg.projectRoot);
 
   let failed = false;
   const os = platform();
@@ -387,4 +407,48 @@ export async function runDoctor(cfg: CopilotConfig, opts: DoctorOptions = {}): P
       ? "\n[set-copilot] doctor: a felvételi lánc rendben — a fenti ⚠ nem blokkolja a felvételt, de a beállítás nem azt csinálja, amit a config mond"
       : "\n[set-copilot] doctor: minden rendben");
   if (failed) process.exit(1);
+}
+
+/**
+ * `doctor --fix`: move `MACHINE_LOCAL_KEYS` out of the project config (machine-local-audio-and-speaker).
+ * The decision is the pure `moveMachineLocalKeys`; this reads, backs up (`.bak`, before the
+ * first write — the preflight's rule), writes, and prints each action. It runs before the probes,
+ * so the config section below already reports the moved state.
+ */
+export function fixMachineLocalKeys(projectRoot: string): MachineKeyMove | null {
+  const userPath = join(userConfigDir(), CONFIG_FILENAME);
+  const projPath = join(projectRoot, CONFIG_FILENAME);
+  const read = (role: ConfigDoc["role"], path: string): ConfigDoc | null => {
+    if (!existsSync(path)) return { role, path, data: {}, exists: false };
+    try {
+      const data = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+      if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+      return { role, path, data: data as Record<string, unknown>, exists: true };
+    } catch { return null; }
+  };
+  const user = read("user", userPath);
+  const project = projPath === userPath ? null : read("project", projPath);
+  if (!user || !project) {
+    console.log("  • --fix: nincs mit áthelyezni (nincs külön, olvasható projekt config)");
+    return null;
+  }
+  const result = moveMachineLocalKeys([user, project]);
+  if (!result.actions.length) {
+    console.log("  ✓ --fix: a projekt config nem tartalmaz gépenkénti kulcsot");
+    return result;
+  }
+  for (const path of result.changed) {
+    const doc = result.docs.find((d) => d.path === path)!;
+    if (existsSync(path)) copyFileSync(path, `${path}.bak`);
+    else mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(doc.data, null, 2)}\n`);
+  }
+  for (const a of result.actions) {
+    const v = JSON.stringify(a.value);
+    if (a.kind === "moved") console.log(`  ✓ --fix: ${a.key}=${v} áthelyezve → ${userPath}`);
+    else if (a.kind === "dropped") console.log(`  ✓ --fix: ${a.key}=${v} törölve a projekt configból — a gép configja már ezt adja meg: ${JSON.stringify(a.kept)}`);
+    else console.log(`  ✓ --fix: ${a.key}=${v} (üres helyőrző) törölve a projekt configból`);
+  }
+  for (const path of result.changed) console.log(`    írva: ${path} (előző állapot: ${path}.bak)`);
+  return result;
 }

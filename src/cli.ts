@@ -357,7 +357,7 @@ async function main(): Promise<void> {
     }
     case "doctor": {
       const { runDoctor } = await import("./doctor.js");
-      return runDoctor(loadConfig(), { mirrorOnly: args.includes("--mirror") });
+      return runDoctor(loadConfig(), { mirrorOnly: args.includes("--mirror"), fix: args.includes("--fix") });
     }
     case "beep": return void beep(args.includes("--end") ? "end" : "start");
     case "notify": return void notify(args[0] ?? "", args[1] ?? "", args.includes("--critical"));
@@ -467,7 +467,9 @@ async function reportConfigDrift(): Promise<void> {
     console.log(`  ⚠ could not read the existing config: ${(err as Error).message}`);
     return;
   }
-  const findings = diagnoseConfig(state.files, { envRuntimeDir: state.envRuntimeDir, hasWall: state.hasWall });
+  const findings = diagnoseConfig(state.files, {
+    envRuntimeDir: state.envRuntimeDir, hasWall: state.hasWall, projectConfigTracked: state.projectConfigTracked,
+  });
   if (!findings.length) {
     console.log("  ✓ no drift found in the existing config");
     return;
@@ -562,7 +564,19 @@ async function cmdInit(global = false, forceCopy = false): Promise<void> {
     // init still writes nothing here, per "diagnostics report, never repair".
     await reportConfigDrift();
   } else {
-    cpSync(join(PKG_ROOT, "set-copilot.config.example.json"), cfgPath);
+    const example = join(PKG_ROOT, "set-copilot.config.example.json");
+    if (global) {
+      cpSync(example, cfgPath);
+    } else {
+      // A PROJECT config gets no `audio` section (machine-local-audio-and-speaker): every
+      // audio key is per-machine, a committed one conflicts between machines, and the
+      // example's empty `audio: { micSource: "", monitorSource: "" }` is the very placeholder
+      // that once replaced a machine's microphone (2026-08-27). The machine's own config
+      // (`init --global`, or `set-copilot sources` → user config) is where it belongs.
+      const { withoutMachineLocalKeys } = await import("./config-migrate.js");
+      const data = withoutMachineLocalKeys(JSON.parse(readFileSync(example, "utf-8")) as Record<string, unknown>);
+      writeFileSync(cfgPath, `${JSON.stringify(data, null, 2)}\n`);
+    }
     console.log(`✓ Wrote ${cfgPath}`);
   }
 
@@ -579,8 +593,8 @@ Next steps:
   1. Put SONIOX_API_KEY into ${envPath} (get a key at https://soniox.com).
      It is the fallback for every project — a project-local .env overrides it.
   2. Pick your microphone:  set-copilot sources  → put the right input into
-     ${cfgPath} audio.micSource (empty = system default, which is
-     often NOT the mic you speak into)
+     ${join(cfgHome, CONFIG_FILENAME)} audio.micSource — the machine's own config,
+     never the project's (empty = system default, which is often NOT the mic you speak into)
   3. Verify the chain:  set-copilot doctor  (probes mic + system audio for real signal)
   4. Edit ${CONFIG_FILENAME} — set knowledge.sources to your docs (optional; dictation needs none)
   5. In Claude Code:  /ds  (start dictation) · /dd (stop) · /meeting-copilot start
@@ -1359,6 +1373,9 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot sources              list audio input devices
   set-copilot doctor               audio + env + setup health check (probes real
                                    signal; also reports config drift + mirror readiness)
+  set-copilot doctor --fix         doctor, after moving the per-machine keys (audio.*,
+                                   transcript.speakers.mic) out of the project config into
+                                   the machine's own config; prints every move
   set-copilot doctor --mirror      chat→wall mirror readiness only (no audio probe);
                                    exits non-zero when the Stop hook is not registered
   set-copilot beep [--end]         OS chime (start: single, --end: double)

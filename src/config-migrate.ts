@@ -155,3 +155,100 @@ export function migrateConfigDocs(input: ConfigDoc[]): MigrationResult {
 
   return { docs, changed, notes };
 }
+
+/** One thing `moveMachineLocalKeys` did, as `doctor --fix` prints it. */
+export interface MachineKeyAction {
+  /** `moved`: into the user config. `dropped`: the machine already declares one. `removed`: an empty placeholder. */
+  kind: "moved" | "dropped" | "removed";
+  key: string;
+  value: unknown;
+  /** The machine's own value, for `dropped`. */
+  kept?: unknown;
+}
+
+export interface MachineKeyMove {
+  docs: ConfigDoc[];
+  changed: string[];
+  actions: MachineKeyAction[];
+}
+
+function section(data: Record<string, unknown>, name: string): Record<string, unknown> | undefined {
+  const v = data[name];
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+}
+
+const isEmptyValue = (v: unknown): boolean => v === null || (typeof v === "string" && v.trim() === "");
+const isDeclared = (v: unknown): boolean => v !== undefined && !isEmptyValue(v);
+
+/**
+ * Move the per-machine keys (`MACHINE_LOCAL_KEYS`: every `audio` key, `transcript.speakers.mic`)
+ * out of the project config — what `doctor --fix` runs. Deliberately NOT a registered migration:
+ * migrations apply themselves on every command, and this would then rewrite every consumer's
+ * tracked config the next time anything ran there. It runs when the project's owner asks.
+ *
+ * Same contract as `migrateConfigDocs`: pure, returns new documents and the paths that changed.
+ * Same rule as the v1 move: a value the machine already declares is never overwritten — it is,
+ * by construction, the right one for this hardware and this person — so the project value is
+ * dropped, and the action says so with both values.
+ */
+export function moveMachineLocalKeys(input: ConfigDoc[]): MachineKeyMove {
+  const docs: ConfigDoc[] = input.map((d) => ({ ...d, data: structuredClone(d.data) }));
+  const before = new Map(docs.map((d) => [d.path, JSON.stringify(d.data)]));
+  const actions: MachineKeyAction[] = [];
+  const project = docs.find((d) => d.role === "project" && d.exists);
+  const user = docs.find((d) => d.role === "user");
+  if (!project || !user || project.path === user.path) return { docs, changed: [], actions };
+
+  /** Move one leaf: `from[key]` (project) → `to()[key]` (user), creating the target lazily. */
+  const moveLeaf = (from: Record<string, unknown>, key: string, label: string, to: () => Record<string, unknown>) => {
+    const value = from[key];
+    if (value === undefined) return;
+    delete from[key];
+    if (isEmptyValue(value)) { actions.push({ kind: "removed", key: label, value }); return; }
+    const target = to();
+    if (isDeclared(target[key])) { actions.push({ kind: "dropped", key: label, value, kept: target[key] }); return; }
+    target[key] = value;
+    actions.push({ kind: "moved", key: label, value });
+  };
+
+  const projAudio = section(project.data, "audio");
+  if (projAudio) {
+    for (const key of Object.keys(projAudio)) {
+      moveLeaf(projAudio, key, `audio.${key}`, () => {
+        const a = section(user.data, "audio") ?? {};
+        user.data.audio = a;
+        return a;
+      });
+    }
+    if (Object.keys(projAudio).length === 0) delete project.data.audio;
+  }
+
+  const projTranscript = section(project.data, "transcript");
+  const projSpeakers = projTranscript && section(projTranscript, "speakers");
+  if (projTranscript && projSpeakers && "mic" in projSpeakers) {
+    moveLeaf(projSpeakers, "mic", "transcript.speakers.mic", () => {
+      const t = section(user.data, "transcript") ?? {};
+      user.data.transcript = t;
+      const sp = section(t, "speakers") ?? {};
+      t.speakers = sp;
+      return sp;
+    });
+    if (Object.keys(projSpeakers).length === 0) delete projTranscript.speakers;
+    if (Object.keys(projTranscript).length === 0) delete project.data.transcript;
+  }
+
+  const changed = docs.filter((d) => before.get(d.path) !== JSON.stringify(d.data)).map((d) => d.path);
+  return { docs, changed, actions };
+}
+
+/**
+ * A config document with the per-machine keys taken out — what project-mode `init` writes from
+ * the example config. Pure; the caller writes. The example's `audio: { micSource: "", … }`
+ * placeholder is exactly what once replaced a machine's microphone (2026-08-27), and every audio
+ * key is per-machine anyway.
+ */
+export function withoutMachineLocalKeys(data: Record<string, unknown>): Record<string, unknown> {
+  const doc: ConfigDoc = { role: "project", path: "<project>", data, exists: true };
+  const moved = moveMachineLocalKeys([doc, { role: "user", path: "<user>", data: {}, exists: false }]);
+  return moved.docs[0].data;
+}

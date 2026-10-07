@@ -154,7 +154,7 @@ Every field is optional. Dictation works with an empty config; the copilot needs
     "bin": "whisper-cli",           // whisper.cpp binary (brew install whisper-cpp)
     "model": ""                     // path to a ggml model; empty → ~/.config/set-copilot/models/ggml-small.en.bin
   },
-  "audio": { "sampleRate": 16000 },  // micSource/monitorSource belong in the USER config — see below
+  // no "audio" here: every audio key, and transcript.speakers.mic, is per machine — USER config, see below
 
   "knowledge": {
     "adapter": "markdown",          // built-in, or a path to your own adapter module
@@ -199,6 +199,8 @@ An up-to-date install writes nothing and leaves no backup. Add `set-copilot.conf
 
 Resolution order, later wins: built-in defaults → `~/.config/set-copilot/set-copilot.config.json` → the project's `set-copilot.config.json` → environment variables (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, `SET_COPILOT_LANGUAGE`). Sections merge key by key, so a project can override `knowledge.sources` without restating your user-level `keywords`. The API key is read from the environment, then the project `.env`, then the user-level one.
 
+**One exception: the per-machine keys** — every `audio` key and `transcript.speakers.mic` (the name printed for *your* microphone). For these the user-level config wins over the project's; a project value applies only on a machine that declares none. They describe this machine and the person at it, and committed to the repo they conflict in git between machines. `doctor` warns when a tracked project config carries one; `set-copilot doctor --fix` moves them into the machine's config (never overwriting a value the machine already declares) and prints every move.
+
 `micSource` / `monitorSource` are device names. List them with `npx set-copilot sources`; **empty means the system default**, which is the right answer more often than a pinned name.
 
 #### A device name belongs to the machine, not to the repo
@@ -211,13 +213,11 @@ Resolution order, later wins: built-in defaults → `~/.config/set-copilot/set-c
 ```
 
 ```jsonc
-// <repo>/set-copilot.config.json                   ← shared, no device names
-{ "language": "hu", "audio": { "sampleRate": 16000 } }
+// <repo>/set-copilot.config.json                   ← shared, nothing per machine
+{ "language": "hu", "transcript": { "speakers": { "system": "Others on the call" } } }
 ```
 
-The project config outranks the user-level one, so a committed device name wins on **every** clone — and on a machine that has no such device, the capture starts, reports no error, and streams zero bytes. `doctor` warns when it finds one, because nothing else will.
-
-Per-machine `audio` keys survive alongside project-level ones (the section merges key by key), so declaring `sampleRate` in the repo does not discard the machine's microphone.
+A committed device name reaches **every** clone, and on a machine that declares no device of its own it applies — on a machine that has no such device, the capture starts, reports no error, and streams zero bytes. `doctor` warns when it finds one, because nothing else will; `doctor --fix` moves it.
 
 If you cannot edit either file — CI, a one-off run, a device you're testing — the environment still wins, and **an empty value is meaningful**:
 

@@ -666,3 +666,48 @@ describe("copilot.dictationHandoverCommand (the dictation hand-off seam)", () =>
     }
   });
 });
+
+/**
+ * machine-local-audio-and-speaker: `audio.*` and `transcript.speakers.mic` describe the local
+ * audio chain and the person at the microphone. Committed in the project layer they conflicted
+ * in git between machines (2026-10-07) and silently overrode every other clone, so for these
+ * keys — and only these — the machine's own config wins.
+ */
+describe("loadConfig — per-machine keys resolve from the machine first", () => {
+  it("the machine's audio value wins over the project's", () => {
+    writeCfg(userHome, { audio: { sampleRate: 16000, toneStart: "/machine/start.wav" } });
+    writeCfg(project, { audio: { sampleRate: 48000, toneStart: "/project/start.wav" } });
+    const cfg = loadConfig(project);
+    expect(cfg.audio.sampleRate).toBe(16000);
+    expect(cfg.audio.toneStart).toBe("/machine/start.wav");
+  });
+
+  it("a project audio value still applies on a machine that declares none (or only an empty one)", () => {
+    writeCfg(project, { audio: { micSource: "proj-mic", sampleRate: 48000 } });
+    expect(loadConfig(project).audio.micSource).toBe("proj-mic");
+    expect(loadConfig(project).audio.sampleRate).toBe(48000);
+    writeCfg(userHome, { audio: { micSource: "", monitorSource: "  " } });
+    expect(loadConfig(project).audio.micSource).toBe("proj-mic");
+  });
+
+  it("the machine's speaker label wins; the project's other labels survive", () => {
+    writeCfg(userHome, { transcript: { speakers: { mic: "Bob" } } });
+    writeCfg(project, { transcript: { speakers: { mic: "Alice", system: "Others on the call" } } });
+    const cfg = loadConfig(project);
+    expect(cfg.transcript.speakers).toEqual({ mic: "Bob", system: "Others on the call" });
+  });
+
+  it("a project speaker label applies on a machine that declares none", () => {
+    writeCfg(userHome, { transcript: { speakers: { mic: "" } } });
+    writeCfg(project, { transcript: { speakers: { mic: "Alice" } } });
+    expect(loadConfig(project).transcript.speakers.mic).toBe("Alice");
+  });
+
+  it("every other key keeps 'project wins'", () => {
+    writeCfg(userHome, { language: "en", transcript: { speakers: { system: "machine-side" } } });
+    writeCfg(project, { language: "hu", transcript: { speakers: { system: "project-side" } } });
+    const cfg = loadConfig(project);
+    expect(cfg.language).toBe("hu");
+    expect(cfg.transcript.speakers.system).toBe("project-side");
+  });
+});

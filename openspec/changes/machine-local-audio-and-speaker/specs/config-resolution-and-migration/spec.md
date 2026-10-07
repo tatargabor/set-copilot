@@ -105,3 +105,42 @@ project came back empty.
 - **WHEN** the user config sets `audio.sampleRate` to `16000` and the project config sets it to
   `48000`
 - **THEN** the resolved `sampleRate` is `16000`
+
+### Requirement: Device names migrate from the project config to the machine's
+
+The version-1 migration SHALL move `audio.micSource` and `audio.monitorSource` out of the project
+config into the user-level config. A device name names hardware: committed to a project config it
+reaches every clone — on a machine that declares no device of its own the project's applies — and on
+a second machine it resolves to nothing, producing a zero-byte capture with no error from any layer
+(measured 2026-08-05 bringing a Linux-developed project up on macOS).
+
+The migration SHALL move rather than delete, because on the machine that wrote it the name is
+correct. It SHALL NOT overwrite a device the user config already declares — that one matches the
+hardware by construction — and in that case SHALL drop the project's value and say so. An empty
+device string is not a pin and SHALL be left alone. A project `audio` section emptied by the move
+SHALL be removed rather than left as `"audio": {}`; the project's other `audio` keys SHALL be left
+in place. When the user config does not exist, it SHALL be created to receive the moved device.
+
+#### Scenario: A pinned project device moves to the machine
+
+- **WHEN** an unversioned project config sets `audio.micSource` to a device and the user config
+  declares no microphone
+- **THEN** after the preflight the project config has no `audio.micSource`, the user config has
+  that device, and both files are stamped with the current version
+
+#### Scenario: The machine's own device is never overwritten
+
+- **WHEN** an unversioned project config sets `audio.micSource` to one device and the user config
+  already sets it to another
+- **THEN** the user config keeps its device, the project's value is removed, and the decision is
+  reported
+
+#### Scenario: The project's other audio keys stay
+
+- **WHEN** the project config's `audio` section holds a device name and `sampleRate`
+- **THEN** only the device name moves, and `sampleRate` remains in the project config
+
+#### Scenario: An empty device string is not migrated
+
+- **WHEN** the project config sets `audio.micSource` to `""`
+- **THEN** the migration does not move it and does not create a user config for it
