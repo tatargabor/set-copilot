@@ -22,6 +22,8 @@
 export interface StitchLine {
   ts: number;
   speaker: string;
+  /** The capturing machine's recorded label (speaker-label-recorded-at-capture), if any. */
+  speakerName?: string;
   text: string;
   /**
    * Position in the file. The transcript is append-only, so file order IS recording
@@ -50,6 +52,8 @@ export interface StitchEvent {
 
 export interface StitchedSentence {
   speaker: string;
+  /** The channel's recorded label, resolved at render ahead of the config map. */
+  speakerName?: string;
   text: string;
   /** When the sentence STARTED (from `startTs`, falling back to `ts`) */
   startTs: number;
@@ -175,6 +179,7 @@ export function parseLines(text: string): { lines: StitchLine[]; events: StitchE
       seq,
       ts: o.ts,
       speaker: o.speaker,
+      speakerName: typeof o.speakerName === "string" && o.speakerName.trim() ? o.speakerName.trim() : undefined,
       text: o.text,
       startTs: typeof o.startTs === "number" ? o.startTs : undefined,
       partial: o.partial === true,
@@ -372,7 +377,7 @@ function resumesLowercase(text: string, from: number): boolean {
 }
 
 /** Split a rebuilt channel into sentences, each carrying its own start/end timestamps. */
-export function splitSentences(channel: RebuiltChannel, speaker: string): StitchedSentence[] {
+export function splitSentences(channel: RebuiltChannel, speaker: string, speakerName?: string): StitchedSentence[] {
   const { text, marks, guessedAt } = channel;
   const out: StitchedSentence[] = [];
 
@@ -389,6 +394,7 @@ export function splitSentences(channel: RebuiltChannel, speaker: string): Stitch
     if (!s) return;
     out.push({
       speaker,
+      ...(speakerName ? { speakerName } : {}),
       text: s,
       startTs: tsAt(marks, firstWordPos(from), "ts"),
       endTs: tsAt(marks, Math.max(from, to - 1), "endTs"),
@@ -510,7 +516,9 @@ export function renderMarkdown(
       continue;
     }
     activeRedaction = null;
-    const who = opts.speakers[s.speaker] ?? s.speaker;
+    // The recorded label is TERMINAL (speaker-label-recorded-at-capture): no later
+    // machine's config — or --speakers override — may re-attribute it.
+    const who = s.speakerName ?? opts.speakers[s.speaker] ?? s.speaker;
     lines.push(`**[${hhmmss(s.startTs)}] ${who}${s.overlap ? " ⇄" : ""}:** ${s.text}`);
   }
   return lines.join("\n\n") + "\n";
@@ -562,7 +570,7 @@ export function renderPlain(
  */
 export function renderJsonl(
   stream: StreamItem[],
-  opts: { redactions: RedactionWindow[] },
+  opts: { redactions: RedactionWindow[]; speakers?: Record<string, string> },
 ): string {
   const out: string[] = [];
   let activeRedaction: RedactionWindow | null = null;
@@ -596,7 +604,7 @@ export function renderJsonl(
     activeRedaction = null;
     out.push(
       JSON.stringify({
-        speaker: s.speaker,
+        speaker: s.speakerName ?? opts.speakers?.[s.speaker] ?? s.speaker,
         text: s.text,
         startTs: s.startTs,
         endTs: s.endTs,
@@ -660,8 +668,11 @@ export function stitchTranscript(
   // Whatever channels the recording actually has — mic-only dictation is the common case,
   // and a future third channel needs no change here.
   const speakers = [...new Set(lines.map((l) => l.speaker))].sort();
+  // One label per channel — the capture stamps it on every line, so the first non-empty
+  // one is the channel's. The CHANNEL stays the grouping key; the label only renders.
+  const labelOf = new Map(speakers.map((sp) => [sp, lines.find((l) => l.speaker === sp && l.speakerName)?.speakerName]));
   const rebuilt = speakers
-    .flatMap((sp) => splitSentences(rebuildChannel(lines, sp, stats, { completeWords, pauseGapMs }), sp));
+    .flatMap((sp) => splitSentences(rebuildChannel(lines, sp, stats, { completeWords, pauseGapMs }), sp, labelOf.get(sp)));
   const sentences = unreliable
     // Recording order; no overlap marks — they would be read off the same broken clocks.
     ? rebuilt.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
@@ -677,7 +688,7 @@ export function stitchTranscript(
   const markdown = renderMarkdown(stream, { speakers: opts.speakers ?? {}, redactions });
   return {
     markdown: unreliable ? `${unreliableNote(repairs)}\n\n${markdown}` : markdown,
-    jsonl: renderJsonl(stream, { redactions }),
+    jsonl: renderJsonl(stream, { redactions, speakers: opts.speakers ?? {} }),
     plain: renderPlain(stream, { redactions }),
     sentences,
     stats: {

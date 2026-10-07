@@ -48,6 +48,18 @@ function transcriptFile(): string {
 }
 
 describe("transcript page", () => {
+  it("a recorded speakerName outranks the serving machine's map", async () => {
+    const f = transcriptFile();
+    appendFileSync(f, JSON.stringify({ ts: 100, speaker: "mic", speakerName: "gazda", text: "Labelled line", final: true }) + "\n");
+    appendFileSync(f, JSON.stringify({ ts: 200, speaker: "mic", text: "Mapped line", final: true }) + "\n");
+    const port = await start(f);
+    const first = await get(port, "/api/transcript?offset=0");
+    expect(first.body.lines.map((l: any) => [l.label, l.text])).toEqual([
+      ["gazda", "Labelled line"],
+      ["ITLine", "Mapped line"],
+    ]);
+  });
+
   it("returns labelled lines and advances an offset cursor", async () => {
     const f = transcriptFile();
     appendFileSync(f, JSON.stringify({ ts: 1000, speaker: "mic", text: "Good morning", final: true }) + "\n");

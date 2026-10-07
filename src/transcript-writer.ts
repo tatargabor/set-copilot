@@ -10,6 +10,13 @@ export interface TranscriptLine {
   text: string;
   final: boolean;
   /**
+   * The display label the CAPTURING machine resolved for this channel from its
+   * `transcript.speakers.*` (speaker-label-recorded-at-capture). Who sat at this machine's
+   * microphone is a fact of capture time; a stitch on another machine must not
+   * re-attribute it. Absent when the channel has no configured label — never empty.
+   */
+  speakerName?: string;
+  /**
    * Timestamp of the FIRST token in this line. `ts` is the last token's — fine for a
    * single channel, but with two channels a long utterance completes after several
    * short ones from the other side, so completion order is not speaking order.
@@ -70,6 +77,12 @@ export interface TranscriptWriterOptions {
    * the writer behaves exactly as before, byte for byte.
    */
   fastLane?: FastLaneConfig;
+  /**
+   * Channel → display label, resolved by the capturing machine (`cfg.transcript.speakers`).
+   * Stamped onto every speech line as `speakerName` (speaker-label-recorded-at-capture);
+   * a channel with no label writes no field.
+   */
+  speakerNames?: Record<string, string>;
 }
 
 const noopMatcher = (): string[] => [];
@@ -148,6 +161,7 @@ export class TranscriptWriter {
    * written lines, and an instruction that spans two sentences would arrive in halves.
    */
   private fastLane: FastLane | null;
+  private readonly speakerNames?: Record<string, string>;
   /** Wall-clock time of the last final transcript event (any speaker); 0 = no speech yet */
   private lastEventAt = 0;
   /** True once the silence event for the current silence period has been written */
@@ -164,6 +178,7 @@ export class TranscriptWriter {
     this.questionRe = compileDetector(detect.question, "question");
     this.commandRe = compileDetector(detect.command ?? [], "command");
     this.fastLane = opts?.fastLane ? new FastLane(opts.fastLane) : null;
+    this.speakerNames = opts?.speakerNames;
 
     const emptyBuffer = () => ({
       text: "",
@@ -319,6 +334,13 @@ export class TranscriptWriter {
     opts: { partial?: boolean } = {},
   ): void {
     const line: TranscriptLine = { ts: buf.lastTs, speaker, text, final: true };
+    // The capturing machine's label, stamped at capture time (speaker-label-recorded-at-
+    // capture): who spoke is a fact of the capture, and no later machine's config may
+    // re-attribute it. A channel with no label writes no field at all — never an empty one.
+    const speakerLabel = this.speakerNames?.[speaker];
+    if (typeof speakerLabel === "string" && speakerLabel.trim()) {
+      line.speakerName = speakerLabel.trim();
+    }
     if (buf.startTs && buf.startTs !== buf.lastTs) {
       line.startTs = buf.startTs;
     }

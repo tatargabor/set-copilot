@@ -438,3 +438,38 @@ describe("stitchTranscript", () => {
     expect(stitchTranscript({ lines: [], events: [] })).toBeNull();
   });
 });
+
+describe("recorded speaker labels (speaker-label-recorded-at-capture)", () => {
+  it("the recorded label beats a conflicting map, in both artifacts", () => {
+    const r = stitchText(
+      jsonl([{ ts: 1000, speaker: "mic", speakerName: "gazda", text: "Első mondat." }]),
+      { ...OPTS, speakers: { mic: "más", gazda: "mapwrote" } },
+    )!;
+    expect(r.markdown).toContain("gazda");
+    expect(r.markdown).not.toContain("más");
+    expect(r.markdown).not.toContain("mapwrote");
+    expect(JSON.parse(r.jsonl.trim()).speaker).toBe("gazda");
+  });
+
+  it("a pre-field line still maps through the config", () => {
+    const r = stitchText(
+      jsonl([{ ts: 1000, speaker: "mic", text: "Első mondat." }]),
+      { ...OPTS, speakers: { mic: "más" } },
+    )!;
+    expect(r.markdown).toContain("más");
+    expect(JSON.parse(r.jsonl.trim()).speaker).toBe("más");
+  });
+
+  it("equal labels on both channels keep the sentences distinct per channel, overlap marked", () => {
+    const r = stitchText(
+      jsonl([
+        { ts: 10000, startTs: 1000, speaker: "system", speakerName: "gazda", text: "Hosszan beszélek." },
+        { ts: 5000, startTs: 4000, speaker: "mic", speakerName: "gazda", text: "Közbevágok." },
+      ]),
+      OPTS,
+    )!;
+    expect(r.sentences).toHaveLength(2);
+    expect(r.sentences.every((s) => s.overlap)).toBe(true);
+    expect(r.sentences.every((s) => s.speakerName === "gazda")).toBe(true);
+  });
+});

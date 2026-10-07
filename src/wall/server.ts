@@ -1342,10 +1342,13 @@ export class WallServer {
       }
     }
     const speaker = typeof o.speaker === "string" ? o.speaker : "";
+    // The recording's own label wins (speaker-label-recorded-at-capture): the serving
+    // machine's map answers a different microphone.
+    const recorded = typeof o.speakerName === "string" && o.speakerName.trim() ? o.speakerName.trim() : undefined;
     return {
       ts: typeof o.ts === "number" ? o.ts : 0,
       speaker,
-      label: tp.speakers[speaker] ?? speaker,
+      label: recorded ?? tp.speakers[speaker] ?? speaker,
       text,
       cont: o.cont === true,
       midWord: o.midWord === true,

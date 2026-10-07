@@ -289,3 +289,23 @@ describe("the fast lane inside the writer", () => {
     expect(lines().some((l) => String((l as unknown as { type?: string }).type ?? "").startsWith("command"))).toBe(false);
   });
 });
+
+describe("speakerName stamping (speaker-label-recorded-at-capture)", () => {
+  it("stamps the channel's configured label at capture time", () => {
+    writer = new TranscriptWriter(out, { speakerNames: { mic: "gazda" } });
+    writer.onTranscript(token("Első mondat."));
+    writer.onTranscript(token(" Második.", "system"));
+    writer.close();
+    expect(lines()[0]).toMatchObject({ speaker: "mic", speakerName: "gazda" });
+    // An unlabelled channel writes NO field at all — not an empty one.
+    expect(lines()[1]).toMatchObject({ speaker: "system" });
+    expect("speakerName" in lines()[1]).toBe(false);
+  });
+
+  it("a blank label writes no field", () => {
+    writer = new TranscriptWriter(out, { speakerNames: { mic: "   " } });
+    writer.onTranscript(token("Első mondat."));
+    writer.close();
+    expect("speakerName" in lines()[0]).toBe(false);
+  });
+});
