@@ -328,6 +328,11 @@ export interface TranscriptConfig {
   pauseGapMs: number;
 }
 
+export interface ProjectsConfig {
+  /** Directories `set-copilot project scan` sweeps for git repositories (depth-limited, `~` allowed) */
+  scanRoots: string[];
+}
+
 export interface CopilotConfig {
   /** Language hint passed to Soniox (e.g. "hu", "en") */
   language: string;
@@ -363,6 +368,8 @@ export interface CopilotConfig {
   wall: WallConfig;
   /** Post-processing of a finished transcript (the stitch) */
   transcript: TranscriptConfig;
+  /** Project discovery for the registry/launcher (`projects.scanRoots`) */
+  projects: ProjectsConfig;
   /** Absolute path of the project root the config was loaded from */
   projectRoot: string;
 }
@@ -901,6 +908,9 @@ export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     completeWords: DEFAULT_COMPLETE_WORDS,
     pauseGapMs: 2500,
   },
+  projects: {
+    scanRoots: ["~/code", "~/src", "~/projects", "~/dev"],
+  },
 };
 
 const ENGAGEMENTS: Engagement[] = ["silent", "reactive", "participant"];
@@ -1112,6 +1122,7 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
   if (typeof machineMic === "string" && machineMic.trim()) {
     transcript.speakers = { ...(transcript.speakers ?? {}), mic: machineMic };
   }
+  const projects = { ...userCfg.projects, ...projCfg.projects };
   // Resolve redaction patterns fail-SAFE: this is a safety seam feeding a public
   // narration box that ships enabled, so it must never resolve to "no redaction". An
   // empty list is the obvious case; the subtler one is a non-empty list whose entries
@@ -1359,6 +1370,14 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         typeof transcript.pauseGapMs === "number" && transcript.pauseGapMs > 0
           ? Math.floor(transcript.pauseGapMs)
           : DEFAULTS.transcript.pauseGapMs,
+    },
+    projects: {
+      // An explicit empty list is honoured as "no filesystem scan, history only" —
+      // a missing or malformed key falls back to the defaults, like `detect.*`.
+      scanRoots:
+        Array.isArray(projects.scanRoots) && projects.scanRoots.every((r) => typeof r === "string")
+          ? projects.scanRoots
+          : DEFAULTS.projects.scanRoots,
     },
     projectRoot: root,
   };

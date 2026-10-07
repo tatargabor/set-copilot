@@ -11,6 +11,9 @@
  *   recovery <sub>           the recovery ledger: status [--json] | claim | mark | abandon
  *   status                   is capture running? how many lines captured?
  *   backfill [--dry-run|--check]  save recordings that never reached the repo
+ *   project <sub>            the project registry: list | add [path] | remove | scan
+ *   meeting [--project p]    resolve a project, preflight with doctor, and hand
+ *                            over to a Claude Code session running the skill
  *   digest                   (re)build the knowledge index/context/digest
  *   prompt                   print the copilot policy (alert categories + instructions)
  *   poll [seconds]           long-poll the transcript for the copilot monitor
@@ -58,6 +61,10 @@ import {
   formatStats, loadRedactions, parseSpeakerMap, resolveInputs, stitchArtifactsExist, stitchFile,
 } from "./transcript-stitch-run.js";
 import { playTone } from "./tones.js";
+import {
+  discoverProjects, loadRegistry, lookupProjects,
+  removeProject, saveRegistry, upsertProject, type ProjectRecord,
+} from "./project-registry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = resolve(__dirname, "..");
@@ -120,6 +127,11 @@ async function main(): Promise<void> {
       }
       if (code) process.exit(code);
       return;
+    }
+    case "project": return cmdProject(args);
+    case "meeting": {
+      const { runMeeting } = await import("./meeting.js");
+      return runMeeting(args);
     }
     case "deck": {
       // The extraction has to be readable before a meeting depends on it. An extraction
@@ -1272,6 +1284,83 @@ function cmdStatus(): void {
   console.log(`capture: ${running ? "running" : "stopped"} · transcript: ${out} (${lines} lines)`);
 }
 
+// ---- project registry ------------------------------------------------------
+
+function formatLastUsed(iso: string | null): string {
+  return iso ?? "never used";
+}
+
+function cmdProject(args: string[]): void {
+  const sub = args[0];
+  const registry = loadRegistry();
+  switch (sub) {
+    case "list": {
+      if (!registry.projects.length) {
+        console.log("No projects registered — add one with: set-copilot project add [path]");
+        return;
+      }
+      const byRecency = (a: ProjectRecord, b: ProjectRecord) =>
+        (b.lastUsedAt ?? "").localeCompare(a.lastUsedAt ?? "");
+      for (const p of [...registry.projects].sort(byRecency)) {
+        console.log(`${p.name}\t${p.path}\t${formatLastUsed(p.lastUsedAt)}`);
+      }
+      return;
+    }
+    case "add": {
+      const raw = args[1] || process.cwd();
+      if (!existsSync(raw)) {
+        console.error(`[set-copilot] not a directory: ${raw}`);
+        process.exit(1);
+      }
+      const { record, created } = upsertProject(registry, raw, flag(args, "--name"));
+      saveRegistry(registry);
+      console.log(`${created ? "Registered" : "Updated"} project ${record.name} — ${record.path}`);
+      return;
+    }
+    case "remove": {
+      const target = args[1];
+      if (!target) {
+        console.error("Usage: set-copilot project remove <name-or-path>");
+        process.exit(1);
+      }
+      const matches = lookupProjects(registry, target);
+      if (matches.length > 1) {
+        const list = matches.map((m) => `  ${m.name}  ${m.path}`).join("\n");
+        console.error(`[set-copilot] "${target}" matches several projects:\n${list}`);
+        process.exit(1);
+      }
+      if (!matches.length) {
+        console.error(`[set-copilot] no project "${target}" is registered`);
+        process.exit(1);
+      }
+      removeProject(registry, matches[0]);
+      saveRegistry(registry);
+      console.log(`Removed project ${matches[0].name} — ${matches[0].path}`);
+      return;
+    }
+    case "scan": {
+      const cfg = loadConfig();
+      const found = discoverProjects({ roots: cfg.projects.scanRoots });
+      if (!found.length) {
+        console.log(
+          "No projects discovered — add directories to projects.scanRoots in set-copilot.config.json",
+        );
+        return;
+      }
+      for (const d of found) {
+        const known = lookupProjects(registry, d.path).length > 0;
+        const age = d.recencyMs !== null ? ` · ${new Date(d.recencyMs).toISOString().slice(0, 10)}` : "";
+        console.log(`${known ? "·" : "+"} ${d.path}  (${d.sources.join("+")}${age})`);
+      }
+      console.log("\n+ = not registered yet — add with: set-copilot project add <path>");
+      return;
+    }
+    default:
+      console.error("Usage: set-copilot project <list|add [path] [--name n]|remove <name-or-path>|scan>");
+      process.exit(1);
+  }
+}
+
 // ---- path ------------------------------------------------------------------
 
 function cmdPath(name?: string): void {
@@ -1388,6 +1477,17 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    docs/inputs/copilot/). Copies, never moves; never commits.
                                    --dry-run lists, --check prints one line only when
                                    something is unsaved (the SessionStart hook runs it)
+  set-copilot project list|add [path]|remove <name-or-path>|scan
+                                   the per-user project registry (advisory: nothing
+                                   requires registration). scan merges git repos under
+                                   projects.scanRoots with the projects Claude Code
+                                   has opened, most recent first
+  set-copilot meeting [--project <name-or-path>] [--mic-only] [--dry-run] [-- <skill words>]
+                                   one command to a meeting: resolve the project
+                                   (argument > last used > cwd), preflight the audio
+                                   chain with doctor, then start a Claude Code session
+                                   on /meeting-copilot start wall. The session owns
+                                   capture/wall/stop exactly as when started by hand
   set-copilot deck                 print the slides and numeric facts extracted from
                                    knowledge.deck — read this before a meeting relies on
                                    it; an unread extraction fails as silence
