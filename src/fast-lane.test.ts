@@ -55,6 +55,16 @@ describe("a bracketed command", () => {
     expect(out).toEqual([]);
   });
 
+  it("„stoppolni” does not close a command — a suffixed closing word is not the word", () => {
+    // Hungarian attaches suffixes directly to the word, and Soniox delivers the whole
+    // inflected form: "stoppolni" is stop+polni, ONE word, the closing-side twin of the
+    // "Copilotot" opener case (fast-lane-opener-boundary). Only a whole "csináld"/"stop"
+    // hands the instruction over; the suffixed form stays inside it.
+    const out = feedAll(lane(), [" Copilot", " rajzold", " meg", " holnap", " stoppolni", " kell.", " csináld"]);
+    expect(out).toHaveLength(1);
+    expect(out[0].text).toBe("rajzold meg holnap stoppolni kell.");
+  });
+
   it("does not fire on the opening word alone — both words, in order", () => {
     expect(feedAll(lane(), ["Copilot, szerintem ez jó lesz."])).toEqual([]);
   });
