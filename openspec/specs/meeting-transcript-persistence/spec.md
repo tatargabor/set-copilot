@@ -310,6 +310,29 @@ stdout for a meeting, on stderr for a dictation stop. A failure of the copy SHAL
 SHALL NOT fail the stop. A configured command for that kind SHALL replace the built-in target
 entirely; a project that wants no copy at all configures a command that does nothing (`true`).
 
+The built-in target SHALL also stand down — before any copy is attempted, with the same report
+shape and the archive left in place — when `copilot.defaultHandover` (default `"auto"`) does not
+permit it. Under `"auto"` the target stands down when the work tree has a git remote on a known
+public hosting host — github.com, gitlab.com, codeberg.org, bitbucket.org, sr.ht, framagit.org,
+gitea.com — where a remote's host matches when it equals a listed one or is one of its subdomains
+(`git.sr.ht` matches `sr.ht`, since no sourcehut remote ever appears at the apex; a host under a
+different apex, like a dedicated `github.company.com` GitHub Enterprise install, is not a
+subdomain of `github.com` and does not match — the operator who wants it suppressed sets
+`copilot.defaultHandover`) — unless the machine-local visibility cache
+(`repo-visibility.json` beside the user config, keyed by the work tree's canonical top —
+`realpathSync` of `git rev-parse --show-toplevel`, so a symlink or an alternative spelling still
+finds its mark) marks that work tree `private`. A work tree with no remote, a remote on any other
+host, or a `private` cache mark SHALL keep the default behaviour. `"on"` SHALL force the copy and
+`"off"` SHALL force the stand-down, whatever the remotes say. The decision SHALL be made from
+local reads only — `git remote -v` and the cache file — and SHALL NOT make a network call. A
+suppressed recording SHALL be reported once, prefixed `[set-copilot]`, on the stream the built-in
+target's own report uses (stderr for a dictation stop, stdout for a meeting and back-fill),
+naming the reason, the offending host, and where the fix lives (the cache mark or the config
+key), and SHALL NOT be recorded as a `handover` step in the recovery ledger; the recording stays
+at its archived path. Back-fill SHALL count a suppressed recording as deliberately kept — neither
+as handed over nor as failed — SHALL report the suppression once per run rather than once per
+recording, and a run whose recordings are all suppressed SHALL exit 0.
+
 #### Scenario: A dictation in a project with no dictation command is saved with its readable file
 
 - **WHEN** a dictation stop runs in a git work tree with no `copilot.dictationHandoverCommand` and a
@@ -350,3 +373,47 @@ entirely; a project that wants no copy at all configures a command that does not
 
 - **WHEN** a stop with no configured command runs from a directory that is not inside a git work tree
 - **THEN** no directory is created, and a note names the archived recording
+
+#### Scenario: A public remote stands the default target down
+
+- **WHEN** a stop hands a recording to the built-in target in a work tree whose remote is
+  `git@github.com:owner/repo.git`, with `copilot.defaultHandover` unset (or `"auto"`) and no
+  visibility-cache mark
+- **THEN** nothing is written to `docs/inputs/copilot/`, one `[set-copilot]`-prefixed line on the
+  report stream names the stand-down, `github.com`, and where the fix lives, no `handover` step is
+  recorded in the recovery ledger, and the archived recording is intact in the runtime dir
+
+#### Scenario: A subdomain of a listed host matches
+
+- **WHEN** the work tree's remote is `git@git.sr.ht:~user/repo.git` (or `https://git.sr.ht/~user/repo`)
+- **THEN** the host matches the listed `sr.ht` and the target stands down, as for `github.com` itself
+
+#### Scenario: A private mark on a public host keeps the default
+
+- **WHEN** the visibility cache marks the work tree `private` and the built-in target runs
+- **THEN** the copy is made exactly as when the rule does not apply
+
+#### Scenario: A remote on a non-public host keeps the default
+
+- **WHEN** the work tree's only remote is on a company GitLab (`git@git.example.hu:owner/repo.git`)
+  or there is no remote at all
+- **THEN** the copy is made exactly as when the rule does not apply
+
+#### Scenario: The explicit override wins in both directions
+
+- **WHEN** `copilot.defaultHandover` is `"on"` in a work tree with a github.com remote, or `"off"`
+  in a work tree with no remote
+- **THEN** the copy is made in the first case, and nothing is written (with the stand-down report
+  naming the config) in the second
+
+#### Scenario: The decision makes no network call
+
+- **WHEN** the stand-down rule is evaluated during a stop with no network access
+- **THEN** the decision completes from `git remote -v` and the cache file alone
+
+#### Scenario: Back-fill counts a suppressed recording as deliberately kept
+
+- **WHEN** back-fill runs in a work tree the rule suppresses and finds recordings with no copy
+- **THEN** the run reports the suppression once for the whole run rather than once per recording,
+  no suppressed recording is counted as handed over or as failed, the run exits 0 when nothing
+  else failed, and `--check` reports no unsaved recording for them
