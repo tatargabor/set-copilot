@@ -46,6 +46,9 @@ nothing): `npx set-copilot backfill --dry-run`. Anything it lists is saved by
 `npx set-copilot backfill` — through the project's hand-off command for that kind, or into
 `docs/inputs/copilot/` — which copies and never moves, so it does not touch the "handed over
 exactly once" invariant below. Report the command; it writes files into the work tree.
+Recordings marked `kept back` are deliberate, not a fault: the built-in target stands down on a
+repo with a public-host remote, and the fix is the `repo-visibility.json` `private` mark or
+`copilot.defaultHandover` — never a hand copy into `docs/inputs/copilot/`.
 
 **1. Orphaned `capture.pid`.** The file exists and the process does not.
 

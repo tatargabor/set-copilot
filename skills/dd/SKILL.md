@@ -24,6 +24,8 @@ The output is plain text: the dictated words, already reassembled into sentences
 capture (pid …)`, the `Readable:` / `Structured:` paths, and where the dictation was saved:
 either `handover:` lines from the project's `copilot.dictationHandoverCommand`, or — when the
 project configured none — `Saved to the repo: docs/inputs/copilot/…` and a `To commit:` line
-(the copy is never committed for you). Ignore them; everything else is the message.
+(the copy is never committed for you), or a `Not saved to the repo (…)` line, which means the
+recording was **kept back** on purpose (a public-host remote stands the built-in target down) —
+report it as kept, do not retry. Ignore them; everything else is the message.
 
 Treat that text as the user's message — act on it. Do NOT echo it back. Respond in the language the user dictated in. If no text was captured, say: "Dictation stopped, no text captured."

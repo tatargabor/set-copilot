@@ -188,6 +188,41 @@ Every field is optional. Dictation works with an empty config; the copilot needs
 
 Secrets never go in this file — `SONIOX_API_KEY` comes from `.env` / the environment.
 
+### Where recordings are saved
+
+When a stop hands over a recording and the project configured no hand-off command for its kind
+(`copilot.handoverCommand` for a meeting, `copilot.dictationHandoverCommand` for a dictation), the
+built-in target copies it into `docs/inputs/copilot/` — raw `.jsonl`, readable `.md` and stitched
+`-stitched.jsonl`, content-deduplicated, never staged or committed.
+
+On a repository whose git remote sits on a **public host** (github.com, gitlab.com, codeberg.org,
+bitbucket.org, sr.ht, framagit.org, gitea.com), the built-in target stands down instead — dictated
+text is the most private artefact the tooling produces, and the default should not copy it into a
+tree a `git push` publishes. The recording stays in the runtime dir and `stop` says so. Decide
+with `copilot.defaultHandover`:
+
+```jsonc
+{
+  "copilot": {
+    "defaultHandover": "auto"  // "auto" (the rule above) | "on" (always copy) | "off" (never copy)
+  }
+}
+```
+
+`"auto"` can't ask the hosting API (a stop never touches the network), so a **private repo on a
+public host** needs one local mark — `repo-visibility.json` beside the user config
+(`~/.config/set-copilot/`), keyed by the work tree's canonical path:
+
+```jsonc
+{
+  "/home/me/code/internal-but-on-github": "private"
+}
+```
+
+Absent or corrupt file = no marks; only `"private"` is read. A configured hand-off command is
+never gated — writing one already was the decision. Back-fill counts kept-back recordings as
+deliberate (its `--check` stays silent about them); `backfill --dry-run` lists them.
+
 ### The config migrates itself
 
 Every command except `init` and `help` starts with a config preflight:

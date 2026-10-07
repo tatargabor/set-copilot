@@ -7,7 +7,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_FILENAME, loadConfig } from "./config.js";
 import { classifyRecordings, runBackfill, scanRecordings } from "./recording-backfill.js";
 import {
-  backfillMarkerPath, hasSpeech, localDate, persistToDefaultTarget, recordHandover, recordedAt, sha256File,
+  DEFAULT_TARGET_DIR, backfillMarkerPath, hasSpeech, localDate, persistToDefaultTarget, recordHandover, recordedAt, sha256File,
 } from "./recording-store.js";
 
 let repo: string;
@@ -245,5 +245,92 @@ describe("runBackfill", () => {
     expect(log).toHaveBeenCalledTimes(1);
     expect(String(log.mock.calls[0][0])).toMatch(/3 recording\(s\).*\(2 dictation, 1 meeting\).*set-copilot backfill/);
     expect(statSync(repo).isDirectory()).toBe(true);
+  });
+});
+
+describe("back-fill under the default-target stand-down (default-target-stands-down-on-public)", () => {
+  const addRemote = (url: string) =>
+    execFileSync("git", ["remote", "add", "origin", url], { cwd: repo, stdio: "pipe" });
+
+  it("a github remote keeps recordings back: one summary line, exit 0, nothing copied", () => {
+    addRemote("git@github.com:owner/repo.git");
+    record("s1", "dictation-1.jsonl", "Első dikatált mondat.");
+    record("s2", "dictation-2.jsonl", "Második diktált mondat.");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const code = runBackfill(loadConfig(repo), "run");
+
+    expect(code).toBe(0);
+    // Nothing was copied — the gate sits before the copy.
+    expect(existsSync(join(repo, "docs"))).toBe(false);
+    // The suppression is reported ONCE for the run, not per recording.
+    const summary = log.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(summary).toContain("2 kept back (public remote: github.com)");
+    expect(summary.match(/public remote: github\.com/g)?.length).toBe(1);
+    expect(summary).not.toContain("failed");
+  });
+
+  it("--check stays silent when the only unsaved recordings are kept back", () => {
+    addRemote("https://github.com/owner/repo.git");
+    record("s1", "dictation-1.jsonl");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    runBackfill(loadConfig(repo), "check");
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("--dry-run lists kept recordings with the reason", () => {
+    addRemote("git@github.com:owner/repo.git");
+    record("s1", "dictation-1.jsonl");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    runBackfill(loadConfig(repo), "dry-run");
+    const out = log.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(out).toContain("kept back");
+    expect(out).toContain("public remote: github.com");
+  });
+
+  it("a private cache mark restores the copy", () => {
+    addRemote("git@github.com:owner/repo.git");
+    record("s1", "dictation-1.jsonl");
+    writeFileSync(
+      join(home, "repo-visibility.json"),
+      JSON.stringify({ [realpathSync(repo)]: "private" }),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const code = runBackfill(loadConfig(repo), "run");
+
+    expect(code).toBe(0);
+    expect(readdirSync(join(repo, DEFAULT_TARGET_DIR)).some((f) => f.endsWith(".jsonl"))).toBe(true);
+  });
+
+  it('copilot.defaultHandover "on" forces the copy; "off" keeps back with the config reason', () => {
+    addRemote("git@github.com:owner/repo.git");
+    record("s1", "dictation-1.jsonl", "Első diktált mondat.");
+    record("s2", "dictation-2.jsonl", "Második diktált mondat.");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const on = { ...loadConfig(repo), copilot: { ...loadConfig(repo).copilot, defaultHandover: "on" } } as ReturnType<typeof loadConfig>;
+    expect(runBackfill(on, "run")).toBe(0);
+    expect(readdirSync(join(repo, DEFAULT_TARGET_DIR)).some((f) => f.endsWith(".jsonl"))).toBe(true);
+
+    record("s3", "dictation-3.jsonl", "Harmadik diktált mondat.");
+    const off = { ...loadConfig(repo), copilot: { ...loadConfig(repo).copilot, defaultHandover: "off" } } as ReturnType<typeof loadConfig>;
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(runBackfill(off, "run")).toBe(0);
+    expect(log.mock.calls.map((c) => String(c[0])).join("\n")).toContain('kept back (copilot.defaultHandover: "off")');
+  });
+
+  it("a configured dictation command is never gated, even on a public-host remote", () => {
+    addRemote("git@github.com:owner/repo.git");
+    record("s1", "dictation-1.jsonl");
+    const cfg = loadConfig(repo);
+    (cfg.copilot as { dictationHandoverCommand?: string }).dictationHandoverCommand = "true";
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const code = runBackfill(cfg, "run");
+
+    expect(code).toBe(0);
+    expect(existsSync(join(repo, "docs"))).toBe(false); // the command, not the default target, ran
   });
 });

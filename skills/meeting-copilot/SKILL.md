@@ -446,7 +446,9 @@ derived artifacts — that is where a project lifts the transcript out of the gi
 into its own inputs. **If it configured none**, `stop` copies the raw `.jsonl`, the `.md` and the
 `-stitched.jsonl` into `docs/inputs/copilot/` (`<date>-meeting-part<N>-<sha8>.*`), skips it when the
 same content is already in the repo, and prints `Saved to the repo:` lines and a `To commit:` line —
-nothing is committed for you; include those paths in the summary. Either way the hand-off cannot fail
+nothing is committed for you; include those paths in the summary. A `Not saved to the repo (…)`
+line instead means the recording was **kept back** on purpose — a public-host remote stands the
+built-in target down; report it as kept, and do not retry or hand-copy. Either way the hand-off cannot fail
 the stop: a failure is printed and the archive stays intact, so if you see that line, report it
 rather than claiming a clean hand-off. The paths reach a command as `SET_COPILOT_TRANSCRIPT` / `_MD` /
 `_JSONL`, with `SET_COPILOT_KIND=meeting`; the one thing it cannot know is what the meeting was

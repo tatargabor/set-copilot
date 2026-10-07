@@ -52,9 +52,11 @@ The built-in target SHALL also stand down — before any copy is attempted, with
 shape and the archive left in place — when `copilot.defaultHandover` (default `"auto"`) does not
 permit it. Under `"auto"` the target stands down when the work tree has a git remote on a known
 public hosting host — github.com, gitlab.com, codeberg.org, bitbucket.org, sr.ht, framagit.org,
-gitea.com — where a remote's host matches when it equals or is a subdomain of a listed one
-(`git.sr.ht` matches `sr.ht`; a dedicated GitHub Enterprise host such as `github.company.com`
-matches too, which is the protected reading) — unless the machine-local visibility cache
+gitea.com — where a remote's host matches when it equals a listed one or is one of its subdomains
+(`git.sr.ht` matches `sr.ht`, since no sourcehut remote ever appears at the apex; a host under a
+different apex, like a dedicated `github.company.com` GitHub Enterprise install, is not a
+subdomain of `github.com` and does not match — the operator who wants it suppressed sets
+`copilot.defaultHandover`) — unless the machine-local visibility cache
 (`repo-visibility.json` beside the user config, keyed by the work tree's canonical top —
 `realpathSync` of `git rev-parse --show-toplevel`, so a symlink or an alternative spelling still
 finds its mark) marks that work tree `private`. A work tree with no remote, a remote on any other

@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   loadConfig, normalizeKeywords, namePattern, isFillerMessage,
@@ -709,5 +709,25 @@ describe("loadConfig — per-machine keys resolve from the machine first", () =>
     const cfg = loadConfig(project);
     expect(cfg.language).toBe("hu");
     expect(cfg.transcript.speakers.system).toBe("project-side");
+  });
+});
+
+describe("copilot.defaultHandover (default-target-stands-down-on-public)", () => {
+  it("defaults to auto", () => {
+    expect(loadConfig(project).copilot.defaultHandover).toBe("auto");
+  });
+
+  it("honours on and off", () => {
+    writeCfg(project, { copilot: { defaultHandover: "off" } });
+    expect(loadConfig(project).copilot.defaultHandover).toBe("off");
+    writeCfg(project, { copilot: { defaultHandover: "on" } });
+    expect(loadConfig(project).copilot.defaultHandover).toBe("on");
+  });
+
+  it("warns and falls back to auto on an unusable value", () => {
+    writeCfg(project, { copilot: { defaultHandover: "maybe" } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(loadConfig(project).copilot.defaultHandover).toBe("auto");
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("defaultHandover"))).toBe(true);
   });
 });

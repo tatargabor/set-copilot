@@ -24,10 +24,11 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 
 import type { CopilotConfig } from "./config.js";
+import { userConfigDir } from "./config.js";
 import { appendEntry, ledgerPath, makeEntry, readLedger } from "./recovery-ledger.js";
 
 export type RecordingKind = "dictation" | "meeting";
@@ -330,4 +331,101 @@ export function persistToDefaultTarget(
 export function gitAddLine(top: string, files: string[]): string {
   const q = (s: string) => (/^[\w./@-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
   return `git -C ${q(top)} add -- ${files.map((f) => q(relative(top, f))).join(" ")}`;
+}
+
+// ---- the default-target stand-down policy (default-target-stands-down-on-public) ------------
+
+/**
+ * Hosting hosts whose repositories are PUBLIC unless the operator says otherwise. Domain-
+ * neutral internet taxonomy, deliberately an engine constant and not config: a list that
+ * defaults a safety behaviour must not be silently per-project (`wall.redaction`'s posture).
+ * A remote host matches when it EQUALS an entry or is one of its subdomains — `git.sr.ht`
+ * matches `sr.ht` (no sourcehut remote ever appears at the apex), and a dedicated GitHub
+ * Enterprise host matches `github.com`, which suppresses it: the wrong direction there is
+ * withheld, never published, and the cache mark or `"on"` answers it.
+ */
+export const PUBLIC_HOSTS = [
+  "github.com", "gitlab.com", "codeberg.org", "bitbucket.org", "sr.ht", "framagit.org", "gitea.com",
+];
+
+/** The host of a git remote URL, or null when the URL names no host. */
+export function parseRemoteHost(url: string): string | null {
+  const s = url.trim();
+  // scp-like `git@host:path` — no scheme, one colon after the host.
+  const scp = /^[^@/]+@([^:/]+):/.exec(s);
+  if (scp) return scp[1].toLowerCase();
+  // `scheme://[user@]host[:port]/path`
+  const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?([^:/?#]+)/i.exec(s);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** True when `host` equals a listed public host or is one of its subdomains. */
+export function hostIsPublic(host: string): boolean {
+  const h = host.toLowerCase();
+  return PUBLIC_HOSTS.some((p) => h === p || h.endsWith(`.${p}`));
+}
+
+/** `repo-visibility.json` beside the user config — the `projects.json` precedent. */
+export function repoVisibilityCachePath(): string {
+  return join(userConfigDir(), "repo-visibility.json");
+}
+
+/**
+ * The cache's marks, keyed by canonical work-tree top. Advisory: absent, unreadable or corrupt
+ * reads as no marks — a hand-edited file must not be able to fail a stop. Only `"private"` is
+ * ever consulted.
+ */
+export function loadVisibilityMarks(): Record<string, string> {
+  try {
+    const o = JSON.parse(readFileSync(repoVisibilityCachePath(), "utf-8")) as unknown;
+    if (typeof o === "object" && o !== null && !Array.isArray(o)) {
+      return Object.fromEntries(
+        Object.entries(o as Record<string, unknown>).filter(([, v]) => typeof v === "string"),
+      ) as Record<string, string>;
+    }
+    console.warn(`[set-copilot] ignoring malformed ${repoVisibilityCachePath()} — expected an object`);
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+/** The inputs the decision reads, so tests can inject both. */
+export interface PolicyIo {
+  remoteUrls(top: string): string[];
+  visibilityMarks(): Record<string, string>;
+}
+
+export function realPolicyIo(): PolicyIo {
+  return {
+    remoteUrls(top) {
+      const r = git(top, ["remote", "-v"]);
+      if (!r.ok) return [];
+      // `origin\tgit@github.com:owner/repo.git (fetch)` — the URL is the second column.
+      return r.out.split("\n").map((l) => l.split("\t")[1]?.replace(/ \(fetch\)$| \(push\)$/, "").trim() ?? "").filter(Boolean);
+    },
+    visibilityMarks: loadVisibilityMarks,
+  };
+}
+
+/**
+ * Why the built-in target stands down for this work tree, or undefined when it may run.
+ *
+ * Pure over the injected I/O. `"on"` never suppresses; `"off"` always does; `"auto"` suppresses
+ * iff a remote sits on a public host and the cache does not mark the work tree `private`. The
+ * cache key is the CANONICAL top (`realpathSync` — the `canonicalProjectPath` precedent), so
+ * the path the operator knows, possibly behind a symlink, is the key that matches.
+ */
+export function defaultHandoverSuppressed(cfg: CopilotConfig, top: string, io: PolicyIo = realPolicyIo()): string | undefined {
+  const mode = cfg.copilot?.defaultHandover ?? "auto";
+  if (mode === "on") return undefined;
+  if (mode === "off") return `copilot.defaultHandover: "off"`;
+  const canonical = (() => { try { return realpathSync(top); } catch { return resolve(top); } })();
+  const marks = io.visibilityMarks();
+  if (marks[canonical] === "private" || marks[resolve(top)] === "private") return undefined;
+  for (const url of io.remoteUrls(top)) {
+    const host = parseRemoteHost(url);
+    if (host && hostIsPublic(host)) return `public remote: ${host}`;
+  }
+  return undefined;
 }

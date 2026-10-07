@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -333,5 +333,74 @@ describe("runRecordingHandover — the command is chosen per kind", () => {
     );
     expect(out).toEqual({ via: "command", key: "copilot.handoverCommand", ok: true });
     expect(readFileSync(proof, "utf-8")).toBe("meeting");
+  });
+});
+
+describe("runRecordingHandover — the built-in target stands down on a public-host repo", () => {
+  /** A real git repo with the named remote, and SET_COPILOT_HOME pointed at a temp home. */
+  function gitRepoWithRemote(url: string): void {
+    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+    execFileSync("git", ["init", "-q"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["remote", "add", "origin", url], { cwd: dir, stdio: "pipe" });
+    process.env.SET_COPILOT_HOME = mkdtempSync(join(tmpdir(), "sc-handover-home-"));
+  }
+
+  afterEach(() => {
+    if (process.env.SET_COPILOT_HOME?.includes("sc-handover-home-")) {
+      rmSync(process.env.SET_COPILOT_HOME, { recursive: true, force: true });
+      delete process.env.SET_COPILOT_HOME;
+    }
+  });
+
+  it("reports the stand-down once, writes nothing, records no handover", () => {
+    gitRepoWithRemote("git@github.com:owner/repo.git");
+    const live = join(dir, "transcript.jsonl");
+    markMeetingOutput(live);
+    writeFileSync(live, '{"text":"hello"}\n');
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const out = runRecordingHandover(cfg, { archived: live }, "meeting");
+
+    expect(out).toEqual({ via: "default", written: [], skipped: "public remote: github.com" });
+    // One line, on the meeting's report stream, naming the host and the fix.
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0][0])).toContain("Not saved to the repo (public remote: github.com)");
+    expect(String(log.mock.calls[0][0])).toContain("repo-visibility.json");
+    // Nothing was copied, and nothing was recorded as handed over.
+    expect(existsSync(join(dir, "docs"))).toBe(false);
+    expect(existsSync(join(dir, ".set", "copilot", "recovery-log.jsonl"))).toBe(false);
+    // The archive invariant is untouched: the file is right where it was.
+    expect(existsSync(live)).toBe(true);
+  });
+
+  it("a private cache mark keeps the default: the copy happens", () => {
+    gitRepoWithRemote("git@github.com:owner/repo.git");
+    writeFileSync(join(process.env.SET_COPILOT_HOME!, "repo-visibility.json"), JSON.stringify({ [dir]: "private" }));
+    // Under .set/, where recordings live — the content index never matches a recording
+    // against itself there (isRuntimePath), which a loose file in the repo root would.
+    const live = join(dir, ".set", "copilot", "s1", "transcript.jsonl");
+    mkdirSync(join(dir, ".set", "copilot", "s1"), { recursive: true });
+    markMeetingOutput(live);
+    writeFileSync(live, '{"text":"hello"}\n');
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const out = runRecordingHandover(cfg, { archived: live }, "meeting");
+
+    expect(out.via).toBe("default");
+    expect(out.skipped).toBeUndefined();
+    expect(out.written.length).toBeGreaterThan(0);
+  });
+
+  it("a configured command for the kind bypasses the check entirely", () => {
+    gitRepoWithRemote("git@github.com:owner/repo.git");
+    cfg = { ...cfg, copilot: { dictationHandoverCommand: "true" } } as CopilotConfig;
+    const live = join(dir, "dictation.jsonl");
+    writeFileSync(live, '{"text":"szia"}\n');
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const out = runRecordingHandover(cfg, { archived: live }, "dictation");
+
+    expect(out).toEqual({ via: "command", key: "copilot.dictationHandoverCommand", ok: true });
+    expect(existsSync(join(dir, "docs"))).toBe(false);
   });
 });

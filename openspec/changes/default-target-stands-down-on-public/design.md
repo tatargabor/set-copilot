@@ -40,9 +40,10 @@ read locally without fetching). The user config dir helper is `userConfigDir()` 
   is a module constant; parsing covers `https://`, `ssh://`, scp-like `git@host:path`, ports, and
   `git remote -v`'s `(fetch)`/`(push)` suffixes. A host matches a listed one when it equals it or
   is one of its subdomains — `git.sr.ht` matches `sr.ht` (no sourcehut remote ever appears at the
-  bare apex), and `github.company.com` matches `github.com`, suppressing a GitHub Enterprise
-  install: the wrong direction there is withheld, not published, and the cache mark or `"on"`
-  answers it.
+  bare apex). Hostname semantics stay honest: a host under a DIFFERENT apex (`github.company.com`,
+  a dedicated GitHub Enterprise install) is not a subdomain of `github.com` and does not match —
+  such an install is ordinarily a private host, and one that serves public repos answers through
+  `copilot.defaultHandover: "off"`.
 - **The cache key is the canonical top.** `realpathSync` of `git rev-parse --show-toplevel` when
   it exists (the `canonicalProjectPath` precedent), so the path the operator knows — possibly
   behind a symlink — is the key that matches.

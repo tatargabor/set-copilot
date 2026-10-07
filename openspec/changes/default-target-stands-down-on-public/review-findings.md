@@ -20,7 +20,7 @@ Reviewers: adversarial-code-reviewer (blind), rules-conformance-auditor (blind)
 - **Claim:** The artifacts never say whether a remote host matches a listed one exactly or as a suffix, and `sr.ht` never appears as a bare host — sourcehut remotes are `git.sr.ht` — so the natural exact-match reading leaves sourcehut repos copying to a public repo.
 - **Evidence:** proposal host list; tasks.md 1.2 (parsing forms, no matching rule); delta spec host paragraph. No sourcehut remote exists at the apex.
 - **Failure scenario:** A speaker on sourcehut dictates; host `git.sr.ht` misses the exact list; the dictation is copied and pushed public — the harm the change exists to prevent, fail-open.
-- **Fix:** Pin the rule: equal or subdomain (also catches `github.company.com` GitHub Enterprise — the protected reading). Test cases for `git.sr.ht`, `github.company.com`, and the `git remote -v` `(fetch)`/`(push)` suffix.
+- **Fix:** Pin the rule: equal or subdomain. Test cases for `git.sr.ht`, `gist.github.com`, and the `git remote -v` `(fetch)`/`(push)` suffix. (Correction made while fixing: the reviewer's `github.company.com` example is a different apex, not a subdomain — honest hostname semantics do not match it, and the spec says so with the `"off"` escape; verified by the implemented `hostIsPublic`.)
 - **Status:** RESOLVED — delta spec "where a remote's host matches when it equals or is a subdomain of a listed one" + new scenario; design; tasks 1.2/1.3
 
 #### M2 — suppression counts as failed and exits 1 (MAJOR)

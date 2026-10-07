@@ -154,6 +154,17 @@ export interface CopilotPromptConfig {
    */
   handoverCommand?: string;
   /**
+   * Whether the BUILT-IN hand-over target (`docs/inputs/copilot/`) may copy a recording into
+   * this work tree when the kind's command key is not configured (default-handover-on-public).
+   * `"auto"` (the default) stands the target down when the work tree has a git remote on a
+   * known public host (github.com, gitlab.com, codeberg.org, …, matched equal-or-subdomain)
+   * unless the machine-local `repo-visibility.json` marks this work tree `private` — the
+   * offline answer to "this GitHub repo is actually internal". `"on"` forces the copy,
+   * `"off"` forces the stand-down. A configured `handoverCommand` /
+   * `dictationHandoverCommand` is NEVER gated: writing one already was the decision.
+   */
+  defaultHandover: "on" | "off" | "auto";
+  /**
    * The project's own hand-off for a DICTATION (`stop --print`, or any stop that archives a
    * `dictation*` file), run after the transcript was printed, archived and stitched. Same
    * contract as `handoverCommand` — same environment (`SET_COPILOT_KIND=dictation`), same "cannot
@@ -890,6 +901,7 @@ export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },
     narration: { enabled: true, verbosity: "normal", maxLines: 1 },
     fastLane: DEFAULT_FAST_LANE,
+    defaultHandover: "auto",
     mirror: {
       enabled: false,
       category: "tükör",
@@ -1019,6 +1031,19 @@ function validHandoverCommand(raw: unknown, key = "handoverCommand"): string | u
   if (typeof raw === "string") return raw.trim() || undefined;
   console.warn(`[set-copilot] Ignoring malformed copilot.${key}: ${JSON.stringify(raw)}`);
   return undefined;
+}
+
+/**
+ * `copilot.defaultHandover`, or the default. An unusable value warns and falls back to
+ * `"auto"` rather than throwing, like `validHandoverCommand`: the key only decides whether a
+ * copy is made, and a typo must not be able to take the stop down with it.
+ */
+function validDefaultHandover(raw: unknown): "on" | "off" | "auto" {
+  if (raw === "on" || raw === "off" || raw === "auto") return raw;
+  if (raw !== undefined && raw !== null) {
+    console.warn(`[set-copilot] Ignoring malformed copilot.defaultHandover: ${JSON.stringify(raw)} (expected "on", "off" or "auto")`);
+  }
+  return "auto";
 }
 
 function validFillerPhrases(raw: unknown[]): string[] {
@@ -1282,6 +1307,7 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       // it — losing the hand-off costs a manual copy, losing the stop costs the transcript.
       handoverCommand: validHandoverCommand(copilot.handoverCommand),
       dictationHandoverCommand: validHandoverCommand(copilot.dictationHandoverCommand, "dictationHandoverCommand"),
+      defaultHandover: validDefaultHandover(copilot.defaultHandover),
       names: resolvedNames,
     },
     detect: {

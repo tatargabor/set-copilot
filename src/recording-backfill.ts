@@ -23,8 +23,8 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import type { CopilotConfig } from "./config.js";
 import { runRecordingHandover, type HandoverOutcome } from "./handover.js";
 import {
-  ContentIndex, DEFAULT_TARGET_DIR, commandHandedOver, gitAddLine, gitToplevel, hasSpeech, kindOf, localDate,
-  readBackfillMarker, recordedAt, sha256File, walkFiles, writeBackfillMarker,
+  ContentIndex, DEFAULT_TARGET_DIR, commandHandedOver, defaultHandoverSuppressed, gitAddLine, gitToplevel,
+  hasSpeech, kindOf, localDate, readBackfillMarker, recordedAt, sha256File, walkFiles, writeBackfillMarker,
   type BackfillMarker, type RecordingKind,
 } from "./recording-store.js";
 import { captureAlive } from "./runtime-dir.js";
@@ -162,13 +162,23 @@ export function runBackfill(cfg: CopilotConfig, mode: BackfillMode): number {
   const { top, unsaved, saved, index } = classified;
   const rel = (p: string) => relative(top, p);
 
+  // The stand-down is a property of the WORK TREE, so it is consulted once per invocation here
+  // and per stop at the seam. A recording of a kind with its own command is never gated — the
+  // command already was the operator's decision (default-target-stands-down-on-public).
+  const suppressedReason = defaultHandoverSuppressed(cfg, top);
+  const keptFor = (kind: RecordingKind): string | undefined =>
+    suppressedReason && !(kind === "dictation" ? cfg.copilot?.dictationHandoverCommand : cfg.copilot?.handoverCommand)
+      ? suppressedReason
+      : undefined;
+
   if (mode === "check") {
-    if (!unsaved.length) return 0;
-    const d = unsaved.filter((r) => r.kind === "dictation").length;
-    const m = unsaved.length - d;
+    const attention = unsaved.filter((r) => !keptFor(r.kind));
+    if (!attention.length) return 0;
+    const d = attention.filter((r) => r.kind === "dictation").length;
+    const m = attention.length - d;
     const last = readBackfillMarker(root)?.lastRun ?? "never";
     console.log(
-      `[set-copilot] ${unsaved.length} recording(s) on this machine have no saved copy in the repo ` +
+      `[set-copilot] ${attention.length} recording(s) on this machine have no saved copy in the repo ` +
       `(${d} dictation, ${m} meeting) — list: \`set-copilot backfill --dry-run\` · save: \`set-copilot backfill\` ` +
       `(last back-fill on this machine: ${last})`,
     );
@@ -180,15 +190,21 @@ export function runBackfill(cfg: CopilotConfig, mode: BackfillMode): number {
     (scan.live.length ? `, ${scan.live.length} live (capture running, left alone)` : "") +
     (scan.speechless ? `, ${scan.speechless} without speech (ignored)` : ""));
   for (const r of unsaved) {
-    console.log(`  ${mode === "dry-run" ? "would save" : "saving"}  ${r.kind.padEnd(9)} ${localDate(r.recordedAt)}  ` +
-      `${String(r.lines).padStart(5)} lines  ${rel(r.path)}  → ${routeOf(cfg, r.kind)}`);
+    const kept = keptFor(r.kind);
+    console.log(`  ${kept ? "kept back " : mode === "dry-run" ? "would save" : "saving"}  ${r.kind.padEnd(9)} ${localDate(r.recordedAt)}  ` +
+      `${String(r.lines).padStart(5)} lines  ${rel(r.path)}` +
+      // The reason names once per run (the summary); the dry-run inventory, which has no
+      // summary, carries it on the line.
+      (kept ? (mode === "dry-run" ? `  (${kept})` : "  (kept back)") : `  → ${routeOf(cfg, r.kind)}`));
   }
   if (mode === "dry-run" || !unsaved.length) return 0;
 
   const handedOver: BackfillMarker["handedOver"] = [];
   const written: string[] = [];
   let failed = 0;
+  let kept = 0;
   for (const r of unsaved) {
+    if (keptFor(r.kind)) { kept++; continue; } // deliberate — no attempt, no ledger record, not a failure
     const derived = derivedFor(cfg, r);
     const out: HandoverOutcome = runRecordingHandover(
       cfg, { archived: r.path, ...derived }, r.kind, { backfill: true, runtimeDir: dirname(r.path), index },
@@ -203,7 +219,9 @@ export function runBackfill(cfg: CopilotConfig, mode: BackfillMode): number {
   }
   writeBackfillMarker(root, { lastRun: new Date().toISOString(), projectRoot: root, handedOver });
 
-  console.log(`\n[set-copilot] backfill: handed over ${unsaved.length - failed} of ${unsaved.length}` +
+  const attempted = unsaved.length - kept;
+  console.log(`\n[set-copilot] backfill: handed over ${attempted - failed} of ${attempted}` +
+    (kept ? `, ${kept} kept back (${suppressedReason})` : "") +
     (failed ? ` — ${failed} failed (see above; they stay unsaved and the next run retries them)` : ""));
   if (written.length) console.log(`[set-copilot] Nothing was committed. To commit the built-in target's files:\n  ${gitAddLine(top, written)}`);
   if (handedOver.some((h) => h.via === "command")) {

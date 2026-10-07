@@ -18,7 +18,8 @@ import { join, relative } from "node:path";
 
 import type { CopilotConfig } from "./config.js";
 import {
-  DEFAULT_TARGET_DIR, gitAddLine, persistToDefaultTarget, recordHandover, recordedAt, sha256File,
+  DEFAULT_TARGET_DIR, defaultHandoverSuppressed, gitAddLine, gitToplevel, persistToDefaultTarget,
+  recordHandover, recordedAt, repoVisibilityCachePath, sha256File,
   type ContentIndex, type DefaultTargetResult, type RecordingKind, type RecordingPaths,
 } from "./recording-store.js";
 import { stitchText } from "./transcript-build.js";
@@ -125,6 +126,20 @@ export function runRecordingHandover(
   }
 
   try {
+    // The built-in default assumes an INTERNAL repo; on a public-host remote the same default
+    // would copy every recording into a tree a push publishes (default-target-stands-down-on-
+    // public). Stand down before any copy: the archive stays in the runtime dir, nothing is
+    // recorded as handed over, and one line names the fix. A configured command for the kind
+    // never reaches this branch — writing one already was the operator's decision.
+    const top = gitToplevel(cfg.projectRoot ?? process.cwd());
+    const suppressed = top ? defaultHandoverSuppressed(cfg, top) : undefined;
+    if (suppressed) {
+      report(`[set-copilot] Not saved to the repo (${suppressed}) — the recording stays at ${paths.archived}` +
+        (suppressed.startsWith("public remote")
+          ? ` — mark the work tree "private" in ${repoVisibilityCachePath()} or set copilot.defaultHandover: "on"`
+          : ""));
+      return { via: "default", written: [], skipped: suppressed };
+    }
     const result = persistToDefaultTarget(cfg.projectRoot ?? process.cwd(), paths, kind, opts.index);
     if (result.existing) {
       report(`[set-copilot] Already saved:      ${result.existing} (same content)`);
