@@ -3,7 +3,8 @@
 ## IN SCOPE
 
 - `set-copilot backfill [--dry-run | --check]`: scan, identity, hand-over through the stop-time
-  seam, machine-local ledger and marker.
+  seam, the `handover` ledger step and the marker.
+- A read-only config preflight for `--dry-run` / `--check`.
 - The `SessionStart` check script.
 
 ## OUT OF SCOPE
@@ -20,12 +21,14 @@
 `set-copilot backfill` SHALL scan the project's `.set/copilot/` directory, to a depth of four
 directories, for recordings: files named `dictation*.jsonl` or `transcript*.jsonl`, excluding
 `*-stitched.jsonl`. A live-named file (`transcript.jsonl`, `dictation.jsonl`) SHALL be included only
-when no capture is alive in its directory. A file with no line carrying speech text SHALL NOT be
+when no capture is alive in its directory. A directory holding `replay-run.json` SHALL be skipped:
+a replay plays a scenario fixture back, it does not record this machine's speech. A file with no line carrying speech text SHALL NOT be
 counted as a recording.
 
 A recording SHALL count as saved when a file byte-identical to it (equal SHA-256) is present in the
-git work tree among tracked or untracked-but-not-ignored files, or when this machine's hand-off
-ledger records a successful command hand-off of the same SHA-256. Every other recording is unsaved.
+git work tree among tracked or untracked-but-not-ignored files (files under a `.set/` directory never
+count), or when the project's recovery ledger records a successful command hand-off (`handover` step,
+via a command) of the same SHA-256. Every other recording is unsaved.
 Identity SHALL NOT be decided by file name or path.
 
 #### Scenario: An archived dictation with no copy is unsaved
@@ -36,13 +39,18 @@ Identity SHALL NOT be decided by file name or path.
 
 #### Scenario: A copy under another name counts as saved
 
-- **WHEN** the same bytes are tracked as `docs/sales/x/meeting-notes/2026-07-17-copilot-raw-part1.jsonl`
+- **WHEN** the same bytes are tracked as `notes/kept-copy.jsonl`
 - **THEN** back-fill does not list the recording
 
 #### Scenario: A live transcript of a running capture is left alone
 
 - **WHEN** a `transcript.jsonl` sits in a directory whose capture is alive
 - **THEN** back-fill neither lists nor reads it
+
+#### Scenario: A replayed scenario is not a recording
+
+- **WHEN** a runtime dir holds `transcript.jsonl` next to `replay-run.json`
+- **THEN** back-fill neither lists nor hands it over
 
 #### Scenario: A recording handed to a project command is not re-listed
 
@@ -75,24 +83,29 @@ review what project commands reported.
 
 ### Requirement: Back-fill keeps a machine-local record of what it did
 
-Back-fill (and every stop-time hand-off) SHALL record successful hand-offs in a ledger, and back-fill
-SHALL write a marker recording when it last ran and which recordings it handed over, by what route,
-to where. Both SHALL live under the user-level config directory, keyed by the project's root path,
-and never inside the project's work tree.
+Back-fill (and every stop-time hand-off) SHALL record successful hand-offs as `handover` steps in
+the project's recovery ledger (`.set/copilot/recovery-log.jsonl`, the one content-keyed ledger the
+engine keeps), and back-fill SHALL write a marker, `.set/copilot/backfill-last.json`, recording when
+it last ran and which recordings it handed over, by what route, to where. Both are runtime state
+beside the recordings they describe: per machine, and never a tracked path. `handover` SHALL NOT be a
+step `recovery claim` or `recovery mark` accepts.
 
 #### Scenario: The marker names the last run
 
 - **WHEN** `backfill` hands over two recordings
-- **THEN** the marker under the user-level config directory records the run's time and both
-  recordings with their route, and no file under the project root records it
+- **THEN** `.set/copilot/backfill-last.json` records the run's time and both recordings with their
+  route, and no tracked file changes because of it
 
 ### Requirement: A dry run and a session-start check report without writing
 
 `backfill --dry-run` SHALL list each unsaved recording with its kind, date, size and where it would
-go, and SHALL write nothing — no artifact, no ledger entry, no marker, no file in the work tree.
+go, and SHALL write nothing — no artifact, no ledger entry, no marker, no file in the work tree, and
+no config file: for `--dry-run` and `--check` the config preflight only reports, it does not apply a
+pending migration.
 `backfill --check` SHALL be the same scan, SHALL print nothing when every recording is saved and one
 summary line otherwise (the counts by kind, the commands to list and to save them, and when back-fill
-last ran on this machine), and SHALL always exit 0.
+last ran on this machine), and SHALL always exit 0 — also when the config cannot be loaded, in which
+case it prints nothing.
 
 `init` SHALL install `hooks/recordings-check.sh` and register it as a `SessionStart` hook. The script
 SHALL run `backfill --check` in the project directory using a `set-copilot` found on `PATH` or in the
@@ -102,8 +115,7 @@ SHALL exit 0 in every case, and SHALL work under both macOS and Linux.
 #### Scenario: A dry run writes nothing
 
 - **WHEN** `backfill --dry-run` runs in a project with unsaved recordings
-- **THEN** each is listed, and the work tree, the runtime dirs and the user-level config directory
-  are unchanged
+- **THEN** each is listed, and the work tree, the runtime dirs and both config files are unchanged
 
 #### Scenario: The check is silent when everything is saved
 

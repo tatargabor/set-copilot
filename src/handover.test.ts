@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runDictationHandoverCommand } from "./handover.js";
+import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runRecordingHandover } from "./handover.js";
 import type { CopilotConfig } from "./config.js";
 
 let dir: string;
@@ -14,6 +14,7 @@ let cfg: CopilotConfig;
 function makeConfig(runtimeDir: string): CopilotConfig {
   return {
     runtimeDir,
+    projectRoot: runtimeDir,
     dictationOutput: join(runtimeDir, "dictation.jsonl"),
   } as CopilotConfig;
 }
@@ -22,6 +23,13 @@ function makeConfig(runtimeDir: string): CopilotConfig {
 // wrote, so lastTranscript() follows it instead of the dictation default.
 function markMeetingOutput(path: string): void {
   writeFileSync(join(dir, "capture.output"), path);
+}
+
+/** A tiny script that writes the named env vars, `|`-joined, to argv[2] — no shell quoting games. */
+function envDumper(): string {
+  const path = join(dir, "dump-env.cjs");
+  writeFileSync(path, "require('fs').writeFileSync(process.argv[2], process.argv.slice(3).map((k) => process.env[k]).join('|'))");
+  return path;
 }
 
 function archives(): string[] {
@@ -215,37 +223,63 @@ describe("printTranscriptOnce (dictation path)", () => {
   });
 });
 
-describe("runDictationHandoverCommand (the dictation hand-off seam)", () => {
+describe("runRecordingHandover — the dictation hand-off (protected stdout)", () => {
   /** A config carrying just the one key the dictation seam reads. */
   function withCommand(command?: string): CopilotConfig {
     return { ...cfg, copilot: { dictationHandoverCommand: command } } as unknown as CopilotConfig;
   }
 
-  it("does nothing when the project configured no command", () => {
+  it("with no command, runs no command and reports the built-in target on stderr only", () => {
+    // `dir` is not a git work tree, so the built-in target declines — loudly, on stderr.
+    const archived = join(dir, "dictation-x.jsonl");
+    writeFileSync(archived, '{"text":"szia"}\n');
     const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    runDictationHandoverCommand(withCommand(undefined), join(dir, "dictation-x.jsonl"));
+    const out = runRecordingHandover(withCommand(undefined), { archived }, "dictation", { protectStdout: true });
+    expect(out).toMatchObject({ via: "default", written: [], skipped: "not inside a git work tree" });
     expect(write).not.toHaveBeenCalled();
-    expect(err).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
+    expect(err.mock.calls.flat().join("\n")).toContain("Not saved to the repo");
   });
 
-  it("passes the archived transcript and the runtime dir through the ENVIRONMENT", () => {
-    const archived = join(dir, "dictation-x.jsonl");
+  it("passes the archive, the derived files, the dir and the KIND through the ENVIRONMENT", () => {
+    const archived = join(dir, "dictation-2026-10-05T17-27-54-794Z.jsonl");
+    writeFileSync(archived, '{"text":"szia"}\n');
     const proof = join(dir, "env-proof.txt");
-    runDictationHandoverCommand(
-      withCommand(`node -e "require('fs').writeFileSync(process.argv[1], process.env.SET_COPILOT_TRANSCRIPT + '|' + process.env.SET_COPILOT_DIR)" ${JSON.stringify(proof)}`),
-      archived,
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    runRecordingHandover(
+      withCommand(`node ${JSON.stringify(envDumper())} ${JSON.stringify(proof)} SET_COPILOT_TRANSCRIPT SET_COPILOT_TRANSCRIPT_MD SET_COPILOT_TRANSCRIPT_JSONL SET_COPILOT_DIR SET_COPILOT_KIND SET_COPILOT_RECORDED_AT`),
+      { archived, markdown: join(dir, "x.md"), structured: join(dir, "x-stitched.jsonl") },
+      "dictation",
+      { protectStdout: true },
     );
-    expect(readFileSync(proof, "utf-8")).toBe(`${archived}|${dir}`);
+    expect(readFileSync(proof, "utf-8")).toBe(
+      `${archived}|${join(dir, "x.md")}|${join(dir, "x-stitched.jsonl")}|${dir}|dictation|2026-10-05T17:27:54.794Z`,
+    );
+  });
+
+  it("records a successful command hand-off in the recovery ledger, a failed one not", () => {
+    const archived = join(dir, "dictation-x.jsonl");
+    writeFileSync(archived, '{"text":"szia"}\n');
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    runRecordingHandover(withCommand(`node -e "process.exit(3)"`), { archived }, "dictation", { protectStdout: true });
+    expect(existsSync(join(dir, ".set", "copilot", "recovery-log.jsonl"))).toBe(false);
+    runRecordingHandover(withCommand(`node -e "0"`), { archived }, "dictation", { protectStdout: true });
+    const entries = readFileSync(join(dir, ".set", "copilot", "recovery-log.jsonl"), "utf-8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ step: "handover", state: "done", outcome: { via: "command", kind: "dictation", key: "copilot.dictationHandoverCommand" } });
   });
 
   it("NEVER lets the command's stdout reach stdout — that channel carries the user's dictated message", () => {
     const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    runDictationHandoverCommand(
+    const archived = join(dir, "dictation-x.jsonl");
+    writeFileSync(archived, '{"text":"szia"}\n');
+    runRecordingHandover(
       withCommand(`node -e "console.log('CONTAMINATION')"`),
-      join(dir, "dictation-x.jsonl"),
+      { archived }, "dictation", { protectStdout: true },
     );
 
     // The whole point: a hand-off that announces where it saved the file must not be able to
@@ -258,11 +292,12 @@ describe("runDictationHandoverCommand (the dictation hand-off seam)", () => {
   it("forwards the command's stderr too, and reports a non-zero exit without throwing", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const archived = join(dir, "dictation-x.jsonl");
+    writeFileSync(archived, '{"text":"szia"}\n');
 
     expect(() =>
-      runDictationHandoverCommand(
+      runRecordingHandover(
         withCommand(`node -e "console.error('lift failed'); process.exit(3)"`),
-        archived,
+        { archived }, "dictation", { protectStdout: true },
       ),
     ).not.toThrow();
 
@@ -271,5 +306,32 @@ describe("runDictationHandoverCommand (the dictation hand-off seam)", () => {
     // The archive is the invariant: a broken hand-off must say where the transcript still is.
     expect(said).toContain("copilot.dictationHandoverCommand failed (exited with 3)");
     expect(said).toContain(archived);
+  });
+});
+
+describe("runRecordingHandover — the command is chosen per kind", () => {
+  const both = (meeting?: string, dictation?: string) =>
+    ({ ...cfg, copilot: { handoverCommand: meeting, dictationHandoverCommand: dictation } }) as unknown as CopilotConfig;
+
+  it("a meeting-only command does not receive a dictation (the keys do not cross)", () => {
+    const archived = join(dir, "dictation-x.jsonl");
+    writeFileSync(archived, '{"text":"szia"}\n');
+    const proof = join(dir, "ran.txt");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const out = runRecordingHandover(both(`node ${JSON.stringify(envDumper())} ${JSON.stringify(proof)} SET_COPILOT_KIND`), { archived }, "dictation", { protectStdout: true });
+    expect(existsSync(proof)).toBe(false);
+    expect(out.via).toBe("default");
+  });
+
+  it("a meeting gets SET_COPILOT_KIND=meeting from handoverCommand", () => {
+    const archived = join(dir, "transcript-x.jsonl");
+    writeFileSync(archived, '{"text":"hello"}\n');
+    const proof = join(dir, "kind.txt");
+    const out = runRecordingHandover(
+      both(`node ${JSON.stringify(envDumper())} ${JSON.stringify(proof)} SET_COPILOT_KIND`, undefined),
+      { archived }, "meeting",
+    );
+    expect(out).toEqual({ via: "command", key: "copilot.handoverCommand", ok: true });
+    expect(readFileSync(proof, "utf-8")).toBe("meeting");
   });
 });

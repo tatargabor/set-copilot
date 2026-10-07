@@ -136,14 +136,17 @@ export interface CopilotPromptConfig {
    * A project command `stop` runs AFTER the transcript is archived and the derived
    * artifacts are written — the seam that lets a project hand its transcript on
    * (out of the gitignored runtime dir, into its own inputs) without forking the
-   * meeting-copilot skill. Absent by default; absent means today's handover exactly.
+   * meeting-copilot skill. Absent by default; absent means the built-in target: the raw
+   * `.jsonl`, `.md` and `-stitched.jsonl` are copied into `docs/inputs/copilot/` of the git work
+   * tree (recording-handover). A no-op command (`"true"`) opts a project out of any copy.
    *
    * It cannot fail the handover: a non-zero exit, a missing executable or a timeout is
    * reported and the archived path still returned, on the same reasoning `stitchOnStop`
    * follows — the `renameSync` is the invariant, everything after it is convenience.
    *
    * The paths arrive as environment variables (`SET_COPILOT_TRANSCRIPT`,
-   * `…_TRANSCRIPT_MD`, `…_TRANSCRIPT_JSONL`, `SET_COPILOT_DIR`) rather than as
+   * `…_TRANSCRIPT_MD`, `…_TRANSCRIPT_JSONL`, `SET_COPILOT_DIR`, plus `SET_COPILOT_KIND` and
+   * `SET_COPILOT_RECORDED_AT`; `SET_COPILOT_BACKFILL=1` from `backfill`) rather than as
    * placeholders: the values are file paths, and substituting them into a shell string
    * is a quoting bug waiting for the first space. `COPILOT_HANDOVER_SLUG` is passed
    * through when set, because the meeting's topic is the session's knowledge, not the
@@ -151,10 +154,11 @@ export interface CopilotPromptConfig {
    */
   handoverCommand?: string;
   /**
-   * The project's own hand-off for a DICTATION stop (`stop --print`), run after the
-   * transcript was printed and archived. Same contract as `handoverCommand` — same
-   * environment, same "cannot fail the handover" posture — with one difference that is
-   * the whole reason it is a separate key rather than a reuse of that one:
+   * The project's own hand-off for a DICTATION (`stop --print`, or any stop that archives a
+   * `dictation*` file), run after the transcript was printed, archived and stitched. Same
+   * contract as `handoverCommand` — same environment (`SET_COPILOT_KIND=dictation`), same "cannot
+   * fail the handover" posture; absent means the built-in target, as there — with one difference
+   * that is the whole reason it is a separate key rather than a reuse of that one:
    *
    * **The child's stdout is NOT inherited here.** On the dictation path stdout carries the
    * user's spoken message to the model, so a project script printing "saved to docs/inputs/…"

@@ -41,6 +41,12 @@ beside it.
 
 ## Phase 2 — the five faults
 
+First, the cheap census of recordings that never reached the repo (it reads and hashes, writes
+nothing): `npx set-copilot backfill --dry-run`. Anything it lists is saved by
+`npx set-copilot backfill` — through the project's hand-off command for that kind, or into
+`docs/inputs/copilot/` — which copies and never moves, so it does not touch the "handed over
+exactly once" invariant below. Report the command; it writes files into the work tree.
+
 **1. Orphaned `capture.pid`.** The file exists and the process does not.
 
 - Evidence: the PID, and that `kill -0` fails for it.

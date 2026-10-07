@@ -8,14 +8,18 @@
   stderr.
 - A kind with no configured command persists to the built-in target `docs/inputs/copilot/`,
   de-duplicated by SHA-256, never committed.
-- A successful command hand-off is recorded in a machine-local ledger.
+- A successful command hand-off is recorded as a `handover` step in the project's recovery ledger.
+- The kind comes from the recording's file name, not from the stop path.
+- `transcript.stitchOnStop` keeps governing the derived artifacts; the built-in target then copies
+  the raw file alone.
 
 ## OUT OF SCOPE
 
 - Routing dictations into `copilot.handoverCommand` (design D1).
 - Committing, pushing or `git add`-ing anything.
 - Changing what a dictation stop prints on stdout.
-- A config key to disable the built-in target or to move it.
+- A config key to disable the built-in target or to move it (a no-op command, `true`, opts out).
+- Moving `stop --print`'s own process lines (`Stopped capture …`) off stdout — reported, not changed.
 
 ## MODIFIED Requirements
 
@@ -51,8 +55,8 @@ other recording.
 #### Scenario: Dictation still prints and archives once
 
 - **WHEN** a dictation stop requests the contents (the `/dd` path)
-- **THEN** the contents are emitted and the transcript is archived exactly once, and stdout carries
-  nothing but the dictated text
+- **THEN** the contents are emitted and the transcript is archived exactly once, and nothing the
+  derived-artifact step or the hand-off reports reaches stdout
 
 #### Scenario: Dictation emits reassembled text, not raw lines
 
@@ -77,7 +81,7 @@ other recording.
 
 - **WHEN** a dictation stop archives a non-empty transcript with `transcript.stitchOnStop` enabled
 - **THEN** the `.md` and `-stitched.jsonl` are written beside the archive, their paths appear on
-  stderr, and stdout is exactly the dictated text
+  stderr prefixed `[set-copilot]`, and neither appears on stdout
 
 ### Requirement: A project command may run after the handover
 
@@ -88,7 +92,9 @@ the project's own inputs) needs no fork of the shared skill. The command SHALL r
 environment, `SET_COPILOT_TRANSCRIPT` (the archive), `SET_COPILOT_TRANSCRIPT_MD` and
 `SET_COPILOT_TRANSCRIPT_JSONL` (when produced), `SET_COPILOT_DIR`, `SET_COPILOT_KIND=meeting`, and
 `SET_COPILOT_RECORDED_AT` (the recording's ISO timestamp), plus `COPILOT_HANDOVER_SLUG` when the
-caller's environment carries it. Absent configuration SHALL leave the archive and the derived
+caller's environment carries it. The kind SHALL be the recording's own — `dictation` for a file
+named `dictation*`, `meeting` otherwise — whichever stop path archived it: a plain `stop` (the
+SessionEnd hook) that archives a dictation left open SHALL hand it on as a dictation. Absent configuration SHALL leave the archive and the derived
 artifacts exactly as they are today and SHALL persist the recording to the built-in target instead
 of running a command.
 
@@ -98,8 +104,8 @@ artifacts already follow — the archive is the invariant, everything after it i
 what makes the shared skill sufficient for a project that would otherwise keep its own copy; without
 it, measured 2026-07-30, six transcripts stayed unhanded under `.set/copilot/`, the largest 18 500
 words, with no input record anywhere pointing at them. A command that exits 0 SHALL be recorded as a
-successful hand-off of that recording's content in the machine-local hand-off ledger
-(`recording-backfill`); a failed one SHALL NOT be.
+successful hand-off of that recording's content — a `handover` step in the project's recovery
+ledger (`recording-backfill`); a failed one SHALL NOT be.
 
 #### Scenario: The configured command runs after archival
 
@@ -134,8 +140,8 @@ a value that is not a string SHALL be ignored with a warning naming the key.
 The command SHALL NOT be able to fail the handover: a non-zero exit, a missing executable, or
 exceeding its 60-second limit SHALL be reported with the archived path, and the archive SHALL stay
 intact — the same posture `copilot.handoverCommand` takes, because the rename is the invariant and
-everything after it is a convenience. A command that exits 0 SHALL be recorded in the machine-local
-hand-off ledger, as for a meeting.
+everything after it is a convenience. A command that exits 0 SHALL be recorded in the recovery
+ledger, as for a meeting.
 
 Dictation transcripts land in the gitignored runtime directory, and lifting them into a project's
 inputs was left to a later manual step. Measured in a consumer project: the lift script existed and
@@ -149,6 +155,12 @@ where nobody dictated.
   transcript
 - **THEN** the dictated text is emitted, the transcript is archived, and only then is the command run
   with `SET_COPILOT_TRANSCRIPT` naming the archived file and `SET_COPILOT_KIND=dictation`
+
+#### Scenario: A dictation archived by a plain stop is still a dictation
+
+- **WHEN** a session ends during a dictation and the SessionEnd hook's plain `stop` archives
+  `dictation.jsonl`, with only `copilot.handoverCommand` configured
+- **THEN** the meeting command does not run, and the recording is handed on as kind `dictation`
 
 #### Scenario: Nothing archived, nothing run
 
@@ -167,6 +179,25 @@ where nobody dictated.
 - **THEN** a report naming `copilot.dictationHandoverCommand`, the failure, and the intact archived
   path is emitted, and the transcript remains archived
 
+### Requirement: Stop-time stitching is configurable
+
+Producing the derived artifacts at stop SHALL be controlled by configuration
+(`transcript.stitchOnStop`), defaulting to enabled, for a meeting and a dictation stop alike.
+Disabling it SHALL write no derived artifacts at stop, and SHALL NOT affect the standalone
+`set-copilot transcript` command. The hand-off still runs: a project command receives no derived
+paths, and the built-in target copies the raw recording alone.
+
+#### Scenario: Stitching disabled at stop
+
+- **WHEN** `transcript.stitchOnStop` is set to false and a meeting capture stops
+- **THEN** only the archived transcript is produced beside the archive and its path reported, no
+  derived artifacts are written, and a built-in target copy, if made, holds the raw file alone
+
+#### Scenario: The command works regardless of the stop setting
+
+- **WHEN** `transcript.stitchOnStop` is false and `set-copilot transcript` is run explicitly
+- **THEN** the derived artifacts are produced
+
 ## ADDED Requirements
 
 ### Requirement: A recording with no configured command persists to the built-in target
@@ -174,27 +205,32 @@ where nobody dictated.
 When a stop hands over a recording of a kind whose command key (`copilot.handoverCommand` for a
 meeting, `copilot.dictationHandoverCommand` for a dictation) is not configured, the system SHALL copy
 the recording into `docs/inputs/copilot/` of the git work tree that contains the project root,
-creating the directory if needed: the raw archive byte for byte as `<YYYY-MM-DD>-<kind>-part<N>.jsonl`,
-and, when they were produced, the readable transcript as `<…>-part<N>.md` and the structured
-transcript as `<…>-part<N>-stitched.jsonl`, where `<kind>` is `dictation` or `meeting`, the date is the
-recording's local date, and `N` is the lowest number for which none of the three names exists in the
-work tree, in `HEAD`, or in the current branch's upstream tree.
+creating the directory if needed: the raw archive byte for byte as `<base>.jsonl`, and, when they
+were produced, the readable transcript as `<base>.md` and the structured transcript as
+`<base>-stitched.jsonl`. `<base>` SHALL be `<YYYY-MM-DD>-<kind>-part<N>-<sha8>`, where `<kind>` is
+`dictation` or `meeting`, the date is the recording's local date, `N` is the lowest part number of
+that date and kind not used by any name on disk, in `HEAD`, or in the current branch's upstream tree
+(read locally, without fetching), and `<sha8>` is the first eight hex digits of the raw file's
+SHA-256 — so two machines that each save a different recording as `part1` before pulling never meet
+in a git conflict. Each file SHALL be written under a temporary name and renamed into place.
 
 The copy SHALL be skipped when a file byte-identical to the raw archive (equal SHA-256) is already
-present in the work tree among tracked or untracked-but-not-ignored files; identity SHALL NOT be
-decided by file name. Outside a git work tree the copy SHALL be skipped with a note naming the
-archive. The system SHALL NOT stage or commit anything; it SHALL report the paths it wrote and the
-`git add` command for them — on stdout for a meeting, on stderr for a dictation. A failure of the copy
-SHALL be reported and SHALL NOT fail the stop. A configured command for that kind SHALL replace the
-built-in target entirely.
+present in the work tree among tracked or untracked-but-not-ignored files, or anywhere under
+`docs/inputs/copilot/`; files under any `.set/` directory SHALL NOT count, and identity SHALL NOT be
+decided by file name. It SHALL be skipped when the recording holds no line of speech, and outside a
+git work tree, with a note naming the archive. The system SHALL NOT stage or commit anything; it SHALL
+report the paths it wrote and the `git add` command for them, each line prefixed `[set-copilot]` — on
+stdout for a meeting, on stderr for a dictation stop. A failure of the copy SHALL be reported and
+SHALL NOT fail the stop. A configured command for that kind SHALL replace the built-in target
+entirely; a project that wants no copy at all configures a command that does nothing (`true`).
 
 #### Scenario: A dictation in a project with no dictation command is saved with its readable file
 
 - **WHEN** a dictation stop runs in a git work tree with no `copilot.dictationHandoverCommand` and a
   non-empty transcript, on 2026-10-07 with no earlier copies that day
-- **THEN** `docs/inputs/copilot/2026-10-07-dictation-part1.jsonl` is byte-identical to the archive,
-  `…-part1.md` and `…-part1-stitched.jsonl` exist beside it, nothing is staged, and the paths are
-  reported on stderr while stdout carries only the dictated text
+- **THEN** `docs/inputs/copilot/2026-10-07-dictation-part1-<sha8>.jsonl` is byte-identical to the
+  archive, `…-part1-<sha8>.md` and `…-part1-<sha8>-stitched.jsonl` exist beside it, nothing is staged,
+  and the paths are reported on stderr, prefixed `[set-copilot]`, never on stdout
 
 #### Scenario: A content-identical copy is not saved twice
 
@@ -204,9 +240,20 @@ built-in target entirely.
 
 #### Scenario: Part numbers do not collide
 
-- **WHEN** `2026-10-07-meeting-part1.jsonl` already exists and a different 2026-10-07 meeting is
-  handed over
-- **THEN** it is written as `2026-10-07-meeting-part2.*`
+- **WHEN** `2026-10-07-meeting-part1-<sha8>.jsonl` already exists and a different 2026-10-07
+  meeting is handed over
+- **THEN** it is written as `2026-10-07-meeting-part2-<its sha8>.*`
+
+#### Scenario: Runtime state is never a saved copy
+
+- **WHEN** a project does not ignore `.set/` and a dictation is handed over to the built-in target
+- **THEN** the archive under `.set/copilot/` does not count as an existing copy, and the copy is
+  written
+
+#### Scenario: A recording with no speech is not copied
+
+- **WHEN** a dictation stop archives a transcript holding only a `silence` event
+- **THEN** nothing is written to `docs/inputs/copilot/`
 
 #### Scenario: A configured command replaces the default
 

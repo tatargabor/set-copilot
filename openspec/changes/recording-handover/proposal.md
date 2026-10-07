@@ -33,17 +33,18 @@ the raw file.
   not start receiving dictations).
 - **A built-in default target.** When the key for that kind is not configured, the stop copies the
   raw `.jsonl`, the readable `.md` and the stitched `.jsonl` into `docs/inputs/copilot/` of the
-  git work tree as `<YYYY-MM-DD>-<kind>-part<N>.jsonl` / `.md` / `-stitched.jsonl`. It is skipped
-  when a byte-identical copy of the raw file is already present in the work tree (SHA-256 over
-  tracked and untracked-not-ignored files, never by name). It never commits; it prints what to
-  commit. A configured command overrides the default.
+  git work tree as `<YYYY-MM-DD>-<kind>-part<N>-<sha8>.jsonl` / `.md` / `-stitched.jsonl`. It is
+  skipped when a byte-identical copy of the raw file is already present in the work tree (SHA-256
+  over tracked and untracked-not-ignored files, `.set/` excluded, never by name), and when nothing
+  was said. It never commits; it prints what to commit. A configured command overrides the default
+  (a no-op command, `true`, opts out).
 - **Back-fill.** `set-copilot backfill` scans this project's `.set/copilot/` for recordings
   (`dictation-*.jsonl`, `transcript-*.jsonl`, and a live-named `transcript.jsonl` /
   `dictation.jsonl` with no capture running), finds those with no content-identical copy in the
-  work tree and no successful command hand-off recorded on this machine, stitches them, and hands
-  each over through the same seam. `--dry-run` lists without writing; `--check` prints one line
-  only when something is unsaved. Idempotent; never commits; records a machine-local marker
-  (last run, what was handed over) under the user config directory.
+  work tree and no successful command hand-off recorded in the project's recovery ledger, stitches
+  them, and hands each over through the same seam. `--dry-run` lists without writing; `--check`
+  prints one line only when something is unsaved. Idempotent; never commits; records a machine-local
+  marker (last run, what was handed over) at `.set/copilot/backfill-last.json`.
 - **Session-start check.** `init` registers a `SessionStart` hook (`hooks/recordings-check.sh`)
   that runs `backfill --check`, so a session is told when this machine holds unsaved recordings.
 
@@ -63,8 +64,9 @@ the raw file.
 
 ## Impact
 
-- `src/handover.ts` (the seam, the default target), a new `src/recording-backfill.ts` (scan,
-  identity, ledger/marker), `src/cli.ts` (`stop`, `backfill`, `init`, help), `hooks/recordings-check.sh`,
+- `src/handover.ts` (the seam), a new `src/recording-store.ts` (identity, the default target, the
+  ledger step and marker), a new `src/recording-backfill.ts` (scan, classify, run),
+  `src/recovery-ledger.ts` (the engine-owned `handover` step), `src/cli.ts` (`stop`, `backfill`, `init`, help), `hooks/recordings-check.sh`,
   `skills/dd/SKILL.md`, `skills/meeting-copilot/SKILL.md`, `skills/set-repair/SKILL.md`, README, CLAUDE.md.
 - Consumer projects: a project with both commands configured sees only two new environment
   variables and, on a dictation, two new ones it may ignore (`…_MD`, `…_JSONL`). A project with the
@@ -75,4 +77,6 @@ the raw file.
   "Handover persists…" requirement. This change carries its text forward and adds a scenario, so
   archiving that change afterwards fails loudly (it would drop the scenario) instead of silently
   reverting this one; its delta must be refreshed before it archives.
+- Sibling change `machine-local-audio-and-speaker` also edits `cmdInit` in `src/cli.ts` and MODIFIES a
+  different `skill-installation` requirement; apply order: that change's commit first, then this one.
 - Review: touches `src/`, `hooks/`, `skills/`; goes through `/opsx:review`.

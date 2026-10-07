@@ -10,6 +10,7 @@
  *                            (skips inputs already recorded in the recovery ledger)
  *   recovery <sub>           the recovery ledger: status [--json] | claim | mark | abandon
  *   status                   is capture running? how many lines captured?
+ *   backfill [--dry-run|--check]  save recordings that never reached the repo
  *   digest                   (re)build the knowledge index/context/digest
  *   prompt                   print the copilot policy (alert categories + instructions)
  *   poll [seconds]           long-poll the transcript for the copilot monitor
@@ -44,7 +45,8 @@ import {
 } from "./config.js";
 import { capturePidPath, captureAlive } from "./runtime-dir.js";
 import { reportPreflight, runConfigPreflight } from "./config-preflight.js";
-import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runDictationHandoverCommand, runHandoverCommand } from "./handover.js";
+import { handoverTranscriptOnce, lastTranscript, printTranscriptOnce, runRecordingHandover } from "./handover.js";
+import { kindOf } from "./recording-store.js";
 import {
   applySkillInstall, destLinkTarget, inspectDest, planSkillInstall, resolveInstallMode, skillNames,
 } from "./skill-install.js";
@@ -71,8 +73,22 @@ async function main(): Promise<void> {
   // `init` is exempt because it CREATES these files, and `help` reads none. `doctor`
   // sees the fatal but keeps going: being unable to load the config is precisely
   // what someone runs doctor to find out, and it reports parse errors per file.
+  //
+  // `backfill --check` / `--dry-run` promise to write nothing — and `--check` runs from a
+  // SessionStart hook in every project — so for them the preflight only LOOKS (dry run): a
+  // migration is left to the next ordinary command, never applied by a hook in passing. A
+  // config that cannot be loaded makes `--check` silent (exit 0): a session start is not the
+  // place to fail, and the next real command reports it.
   if (cmd && cmd !== "init" && cmd !== "help") {
-    if (!reportPreflight(runConfigPreflight()) && cmd !== "doctor") process.exit(1);
+    const readOnly = cmd === "backfill" && (args.includes("--check") || args.includes("--dry-run"));
+    const pre = runConfigPreflight(process.cwd(), { dryRun: readOnly });
+    if (readOnly) {
+      if (pre.fatal) {
+        if (args.includes("--check")) process.exit(0);
+        console.error(`[set-copilot] ${pre.fatal}`);
+        process.exit(1);
+      }
+    } else if (!reportPreflight(pre) && cmd !== "doctor") process.exit(1);
   }
 
   // `capture --detach` / `wall --detach`: outlive the tool call that started them (detach.ts).
@@ -92,6 +108,19 @@ async function main(): Promise<void> {
     case "transcript": return cmdTranscript(args);
     case "recovery": return cmdRecovery(args);
     case "status": return cmdStatus();
+    case "backfill": {
+      const { runBackfill } = await import("./recording-backfill.js");
+      const mode = args.includes("--check") ? "check" : args.includes("--dry-run") ? "dry-run" : "run";
+      let code: number;
+      try {
+        code = runBackfill(loadConfig(), mode);
+      } catch (err) {
+        if (mode === "check") return; // never fail a session start
+        throw err;
+      }
+      if (code) process.exit(code);
+      return;
+    }
     case "deck": {
       // The extraction has to be readable before a meeting depends on it. An extraction
       // nobody has looked at fails in the worst direction: the copilot stays silent, and
@@ -373,16 +402,27 @@ async function main(): Promise<void> {
 // ---- init ------------------------------------------------------------------
 
 /**
- * Idempotently add a `Stop` command hook to a Claude Code `settings.json`, preserving
- * every other setting and hook. Returns true if it added the hook, false if an identical
- * command was already registered (so a re-run of `init` neither duplicates nor clobbers).
+ * Idempotently add a `Stop` command hook to a Claude Code `settings.json` — `registerHook` for
+ * the `Stop` event, matched by the exact command (its historical contract).
+ */
+export function registerStopHook(settingsPath: string, command: string): boolean {
+  return registerHook(settingsPath, "Stop", command);
+}
+
+/**
+ * Idempotently add a command hook for `event` to a Claude Code `settings.json`, preserving
+ * every other setting and hook. Returns true if it added the hook, false if it was already
+ * registered (so a re-run of `init` neither duplicates nor clobbers). "Already registered"
+ * means an identical command, or — when `scriptBasename` is given — any command under that
+ * event invoking that script: `init` writes a different string for a project
+ * (`$CLAUDE_PROJECT_DIR/...`) than for `--global`, and a user may have wrapped it.
  *
  * The merge is deliberately conservative: it parses the existing JSON (or starts from
- * `{}`), touches ONLY `hooks.Stop`, and re-serializes. A malformed settings.json is left
+ * `{}`), touches ONLY `hooks.<event>`, and re-serializes. A malformed settings.json is left
  * untouched (returns false with a warning) rather than overwritten — a user's hook config
  * is not something to lose to a parse error.
  */
-export function registerStopHook(settingsPath: string, command: string): boolean {
+export function registerHook(settingsPath: string, event: string, command: string, scriptBasename?: string): boolean {
   let settings: Record<string, unknown> = {};
   if (existsSync(settingsPath)) {
     try {
@@ -393,14 +433,17 @@ export function registerStopHook(settingsPath: string, command: string): boolean
     }
   }
   const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
-  const stop = (hooks.Stop ??= []) as { matcher?: string; hooks?: { type: string; command: string }[] }[];
-  // Already present anywhere under Stop? Then this is a re-run — do nothing.
-  for (const group of stop) {
-    if (group.hooks?.some((h) => h.command === command)) return false;
+  const groups = (hooks[event] ??= []) as { matcher?: string; hooks?: { type: string; command: string }[] }[];
+  // Already present anywhere under this event? Then this is a re-run — do nothing.
+  for (const group of groups) {
+    if (group.hooks?.some((h) => h.command === command
+      || (scriptBasename !== undefined && typeof h.command === "string" && h.command.includes(scriptBasename)))) {
+      return false;
+    }
   }
   // Reuse the empty-matcher group if one exists, else create it.
-  let group = stop.find((g) => (g.matcher ?? "") === "");
-  if (!group) { group = { matcher: "", hooks: [] }; stop.push(group); }
+  let group = groups.find((g) => (g.matcher ?? "") === "");
+  if (!group) { group = { matcher: "", hooks: [] }; groups.push(group); }
   (group.hooks ??= []).push({ type: "command", command });
   mkdirSync(dirname(settingsPath), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
@@ -552,6 +595,16 @@ async function cmdInit(global = false, forceCopy = false): Promise<void> {
       console.log(`✓ Installed recovery-guard Stop hook into ${join(claudeBase, "settings.json")}`);
     } else {
       console.log(`• recovery-guard Stop hook already registered — left untouched`);
+    }
+    // The recordings check runs at SessionStart (recording-handover): a recording that never
+    // reached the repo is invisible from inside it, so the session is told, once, at the start.
+    const checkCmd = global
+      ? `bash "${join(hooksDest, "recordings-check.sh")}"`
+      : `bash "$CLAUDE_PROJECT_DIR/.claude/hooks/recordings-check.sh"`;
+    if (registerHook(join(claudeBase, "settings.json"), "SessionStart", checkCmd, "recordings-check.sh")) {
+      console.log(`✓ Installed recordings-check SessionStart hook into ${join(claudeBase, "settings.json")}`);
+    } else {
+      console.log(`• recordings-check SessionStart hook already registered — left untouched`);
     }
   }
 
@@ -781,23 +834,26 @@ async function cmdStop(print = false): Promise<void> {
  * post-meeting step at the saved artifact.
  */
 function handoverAtStop(cfg: CopilotConfig, print: boolean): void {
-  // Dictation returns here: the raw text IS the user's message, not a document, so it
-  // gets no derived artifacts. It does get the project hand-off, on its own entry point —
-  // the transcript still lands in a gitignored runtime dir, and until 2026-09-05 nothing
-  // lifted it out unless a human remembered to. See `runDictationHandoverCommand` for why
-  // that one may not inherit stdout.
+  // Dictation: the text is the user's message, so it is printed first and stdout carries
+  // nothing else. Then — like a meeting — the readable artifacts are produced from the archive
+  // and the recording is handed on (recording-handover): a dictation kept only in the gitignored
+  // runtime dir is a dictation lost, silently. Every report on this path goes to stderr.
   if (print) {
     const dictated = printTranscriptOnce(cfg);
-    if (dictated) runDictationHandoverCommand(cfg, dictated);
+    if (!dictated) return;
+    const derived = cfg.transcript.stitchOnStop ? stitchAtStop(cfg, dictated, console.error) : undefined;
+    runRecordingHandover(cfg, { archived: dictated, ...derived }, kindOf(dictated), { protectStdout: true });
     return;
   }
   const saved = handoverTranscriptOnce(cfg);
   if (!saved) { console.log("[set-copilot] Nothing to hand over"); return; }
   console.log(`[set-copilot] Transcript saved: ${saved}`);
   const derived = cfg.transcript.stitchOnStop ? stitchAtStop(cfg, saved) : undefined;
-  // Last, and only on this path: for a dictation the text is the user's message, not a
-  // document, so there is nothing for a project to hand on.
-  runHandoverCommand(cfg, { archived: saved, markdown: derived?.markdown, structured: derived?.structured });
+  // Last: the project's command for this kind, or the built-in target when it has none. The
+  // kind is the FILE's, not this path's: the SessionEnd hook runs a plain `stop`, so a
+  // dictation whose session ended before `/dd` is archived here — and must still be handed on
+  // as a dictation, never to a meeting-only command.
+  runRecordingHandover(cfg, { archived: saved, ...derived }, kindOf(saved));
 }
 
 /**
@@ -809,13 +865,18 @@ function handoverAtStop(cfg: CopilotConfig, print: boolean): void {
  * source of truth for "handed over exactly once" — and a failure here is reported, never
  * fatal, because the archive is the invariant and these files are the convenience.
  */
-function stitchAtStop(cfg: CopilotConfig, archived: string): { markdown: string; structured: string } | undefined {
+function stitchAtStop(
+  cfg: CopilotConfig,
+  archived: string,
+  report: (msg: string) => void = console.log,
+): { markdown: string; structured: string } | undefined {
   try {
     const out = stitchFile(archived, cfg);
     if (!out) return undefined; // nothing said — no zero-byte artifacts
-    // Aligned with "Transcript saved: " so the three paths read as one block.
-    console.log(`[set-copilot] Readable:         ${out.markdown}`);
-    console.log(`[set-copilot] Structured:       ${out.structured}`);
+    // Aligned with "Transcript saved: " so the three paths read as one block. A dictation
+    // passes `console.error`: its stdout is the user's message.
+    report(`[set-copilot] Readable:         ${out.markdown}`);
+    report(`[set-copilot] Structured:       ${out.structured}`);
     return { markdown: out.markdown, structured: out.structured };
   } catch (err) {
     console.error(
@@ -1320,6 +1381,13 @@ set-copilot — voice dictation + meeting copilot for Claude Code
   set-copilot recovery abandon <file> --step review [--reason <text>]
                                    resolve a claim without completing it
   set-copilot status               capture state + transcript line count
+  set-copilot backfill [--dry-run | --check]
+                                   save the recordings under .set/copilot/ that have no
+                                   content-identical copy in the repo, through the stop-time
+                                   hand-off (the project command for the kind, else
+                                   docs/inputs/copilot/). Copies, never moves; never commits.
+                                   --dry-run lists, --check prints one line only when
+                                   something is unsaved (the SessionStart hook runs it)
   set-copilot deck                 print the slides and numeric facts extracted from
                                    knowledge.deck — read this before a meeting relies on
                                    it; an unread extraction fails as silence

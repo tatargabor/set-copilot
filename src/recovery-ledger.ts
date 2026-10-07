@@ -45,10 +45,17 @@ import type { CopilotConfig } from "./config.js";
  */
 export const STITCH_VERSION = 1;
 
-/** The recovery steps a transcript passes through. */
-export type RecoveryStep = "stitch" | "review";
+/**
+ * The recovery steps a transcript passes through. `handover` is engine-owned (written by the
+ * stop-time hand-off and by back-fill, recording-handover) and deliberately NOT in
+ * `RECOVERY_STEPS`, so `recovery claim/mark` cannot assert one by hand.
+ */
+export type RecoveryStep = "stitch" | "review" | "handover";
 
 export const RECOVERY_STEPS: readonly RecoveryStep[] = ["stitch", "review"];
+
+/** Every step an entry may carry — what `readLedger` keeps. `handover` is written only by the engine. */
+const LEDGER_STEPS: readonly RecoveryStep[] = [...RECOVERY_STEPS, "handover"];
 
 export function isRecoveryStep(s: string): s is RecoveryStep {
   return (RECOVERY_STEPS as readonly string[]).includes(s);
@@ -114,7 +121,7 @@ export function readLedger(path: string): LedgerEntry[] {
     try {
       const o = JSON.parse(s) as Partial<LedgerEntry>;
       if (typeof o.fingerprint !== "string" || !o.fingerprint) continue;
-      if (typeof o.step !== "string" || !isRecoveryStep(o.step)) continue;
+      if (typeof o.step !== "string" || !(LEDGER_STEPS as readonly string[]).includes(o.step)) continue;
       const state: EntryState =
         o.state === "claimed" || o.state === "abandoned" ? o.state : "done";
       out.push({

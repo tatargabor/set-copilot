@@ -443,9 +443,13 @@ is off, or if nothing was said.)
 
 **If the project configured `copilot.handoverCommand`**, `stop` runs it after the archive and the
 derived artifacts — that is where a project lifts the transcript out of the gitignored runtime dir
-into its own inputs. It cannot fail the handover: a failure is printed and the archive stays intact,
-so if you see that line, report it rather than claiming a clean hand-off. The paths reach it as
-`SET_COPILOT_TRANSCRIPT` / `_MD` / `_JSONL`; the one thing it cannot know is what the meeting was
+into its own inputs. **If it configured none**, `stop` copies the raw `.jsonl`, the `.md` and the
+`-stitched.jsonl` into `docs/inputs/copilot/` (`<date>-meeting-part<N>-<sha8>.*`), skips it when the
+same content is already in the repo, and prints `Saved to the repo:` lines and a `To commit:` line —
+nothing is committed for you; include those paths in the summary. Either way the hand-off cannot fail
+the stop: a failure is printed and the archive stays intact, so if you see that line, report it
+rather than claiming a clean hand-off. The paths reach a command as `SET_COPILOT_TRANSCRIPT` / `_MD` /
+`_JSONL`, with `SET_COPILOT_KIND=meeting`; the one thing it cannot know is what the meeting was
 *about*, so name the topic on the stop line when the project's command wants one:
 
 ```bash

@@ -14,9 +14,13 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, renameSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import type { CopilotConfig } from "./config.js";
+import {
+  DEFAULT_TARGET_DIR, gitAddLine, persistToDefaultTarget, recordHandover, recordedAt, sha256File,
+  type ContentIndex, type DefaultTargetResult, type RecordingKind, type RecordingPaths,
+} from "./recording-store.js";
 import { stitchText } from "./transcript-build.js";
 
 /**
@@ -47,97 +51,145 @@ export function handoverTranscriptOnce(cfg: CopilotConfig): string | null {
 }
 
 /** Where the handover's artifacts landed — what the project command is told about. */
-export interface HandoverPaths {
-  /** The archived raw transcript. Always present: it is the invariant. */
-  archived: string;
-  /** The readable transcript, when the stitch produced one. */
-  markdown?: string;
-  /** The sentence-level JSONL, when the stitch produced one. */
-  structured?: string;
+export type HandoverPaths = RecordingPaths;
+
+export interface RecordingHandoverOptions {
+  /**
+   * The stdout of this process is the user's dictated message (a `/dd` stop): nothing the
+   * hand-off says may reach it. The command's output is captured and re-emitted on stderr,
+   * prefixed, and the built-in target reports on stderr too. False for a meeting stop and for
+   * back-fill, where stdout is an ordinary report.
+   */
+  protectStdout?: boolean;
+  /** `SET_COPILOT_DIR` for the command; defaults to `cfg.runtimeDir`. Back-fill passes the recording's own dir. */
+  runtimeDir?: string;
+  /** Set by back-fill: exported to the command as `SET_COPILOT_BACKFILL=1` and noted in the record. */
+  backfill?: boolean;
+  /** Back-fill's work-tree index, shared across one run so a duplicate within the run is caught. */
+  index?: ContentIndex;
 }
 
+export type HandoverOutcome =
+  | { via: "command"; key: string; ok: boolean }
+  | ({ via: "default" } & DefaultTargetResult & { error?: string });
+
 /**
- * Run the project's own hand-off, after the archive and the derived artifacts.
+ * Hand a recording on — the one seam both kinds and back-fill go through (recording-handover).
  *
- * This is the seam that lets a project stop forking the meeting-copilot skill: its
- * transcript hand-off (lifting the file out of the gitignored runtime dir into the
- * project's inputs) is project knowledge, and had nowhere else to live. Measured
- * 2026-07-30, without it: six transcripts stayed unhanded under `.set/copilot/`, the
- * largest 18 500 words, with nothing anywhere pointing at them.
+ * This is what lets a project stop forking the meeting-copilot skill: its hand-off (lifting the
+ * file out of the gitignored runtime dir into the project's inputs) is project knowledge, and
+ * had nowhere else to live. Measured 2026-07-30, without it: six transcripts stayed unhanded
+ * under `.set/copilot/`, the largest 18 500 words, with nothing anywhere pointing at them.
  *
- * **It cannot fail the handover.** Non-zero exit, missing executable, or exceeding the
- * limit is reported and the caller carries on — the same posture `stitchAtStop` takes, for
- * the reason stated there: the `renameSync` is the invariant, everything after it is
- * convenience. A project script that throws must not be able to make a meeting look
- * unhanded.
+ * **The command is chosen per kind, from the existing keys** — `copilot.handoverCommand` for a
+ * meeting, `copilot.dictationHandoverCommand` for a dictation — and a kind with no command goes
+ * to the built-in target (`docs/inputs/copilot/`), so a project that configured nothing still
+ * keeps what was said. A meeting-only command does NOT start receiving dictations: a script
+ * written before `SET_COPILOT_KIND` existed cannot tell one from the other, and the one known
+ * instance would file every dictation as an internal meeting part after a `git fetch`. A project
+ * that wants one script for both points both keys at it and branches on `SET_COPILOT_KIND`.
  *
- * Context arrives through the ENVIRONMENT, not through placeholder substitution: the values
- * are file paths, and substituting them into a shell string is a quoting bug waiting for the
- * first space in a path. `COPILOT_HANDOVER_SLUG` is passed through when the caller's
- * environment carries it — the meeting's topic is the session's knowledge, not the
- * capture's, so the skill supplies it on the stop line.
+ * **It cannot fail the handover.** Non-zero exit, missing executable, a time-out or a failed
+ * copy is reported and the caller carries on — the `renameSync` is the invariant, everything
+ * after it is convenience. A project script that throws must not make a meeting look unhanded.
  *
- * stdio is inherited rather than captured, so the project's own report of where the
- * transcript landed reaches the operator instead of vanishing into a buffer.
+ * Context arrives through the ENVIRONMENT, not through placeholder substitution: the values are
+ * file paths, and substituting them into a shell string is a quoting bug waiting for the first
+ * space in a path. `COPILOT_HANDOVER_SLUG` passes through when the caller's environment carries
+ * it — the meeting's topic is the session's knowledge, not the capture's.
+ *
+ * A command that exits 0 is recorded as a `handover` step in the recovery ledger: a command may
+ * keep the recording in a shape the engine cannot recognise, and back-fill must not hand the
+ * same recording to it again and again.
  */
-export function runHandoverCommand(cfg: CopilotConfig, paths: HandoverPaths): void {
-  runProjectHandover(cfg.copilot.handoverCommand, "copilot.handoverCommand", cfg, paths, true);
+export function runRecordingHandover(
+  cfg: CopilotConfig,
+  paths: RecordingPaths,
+  kind: RecordingKind,
+  opts: RecordingHandoverOptions = {},
+): HandoverOutcome {
+  const key = kind === "dictation" ? "copilot.dictationHandoverCommand" : "copilot.handoverCommand";
+  const command = kind === "dictation" ? cfg.copilot?.dictationHandoverCommand : cfg.copilot?.handoverCommand;
+  const report = opts.protectStdout ? console.error : console.log;
+  let sha: string | undefined;
+  const fingerprint = () => (sha ??= sha256File(paths.archived));
+
+  if (command) {
+    const ok = runProjectHandover(command, key, cfg, paths, kind, opts);
+    if (ok) {
+      recordHandover(cfg.projectRoot ?? process.cwd(), fingerprint(), paths.archived, {
+        via: "command", kind, key, ...(opts.backfill ? { backfill: true } : {}),
+      });
+    }
+    return { via: "command", key, ok };
+  }
+
+  try {
+    const result = persistToDefaultTarget(cfg.projectRoot ?? process.cwd(), paths, kind, opts.index);
+    if (result.existing) {
+      report(`[set-copilot] Already saved:      ${result.existing} (same content)`);
+    } else if (result.skipped) {
+      report(`[set-copilot] Not saved to the repo (${result.skipped}) — the recording stays at ${paths.archived}`);
+    } else if (result.top) {
+      for (const f of result.written) report(`[set-copilot] Saved to the repo: ${relative(result.top, f)}`);
+      report(`[set-copilot] To commit:         ${gitAddLine(result.top, result.written)}`);
+    }
+    if (!result.skipped) {
+      recordHandover(cfg.projectRoot ?? process.cwd(), fingerprint(), paths.archived, {
+        via: "default", kind,
+        ...(result.written.length ? { targets: result.written } : {}),
+        ...(result.existing ? { existing: result.existing } : {}),
+        ...(opts.backfill ? { backfill: true } : {}),
+      });
+    }
+    return { via: "default", ...result };
+  } catch (err) {
+    const error = (err as Error).message;
+    console.error(
+      `[set-copilot] could not save the recording to ${DEFAULT_TARGET_DIR} (${error})\n` +
+      `              The recording is intact at ${paths.archived}`,
+    );
+    return { via: "default", written: [], error };
+  }
 }
 
 /**
- * The same seam for a DICTATION stop — with the child's stdout deliberately NOT inherited.
+ * Run a project hand-off command. Returns true when it exited 0.
  *
- * This is the one difference that makes it a separate entry point rather than a second call
- * to `runHandoverCommand`, and it is not a style choice. On the dictation path stdout is the
- * channel the user's spoken words travel on: `printTranscriptOnce` has just written the
- * stitched message there, and whatever the consumer reads next it reads as part of that
- * message. A project script announcing "saved to docs/inputs/dictation/…" on stdout would
- * therefore splice a sentence the user never said into the user's own instruction — a
- * corruption with no recording to go back to, exactly the failure `printTranscriptOnce`'s
- * own comment describes for a bad word join.
- *
- * So it is captured and re-emitted on stderr, prefixed. Visible to the operator, invisible to
- * the message. Everything else — the environment, the timeout, the "cannot fail the handover"
- * posture — is shared with the meeting path, because it is literally the same function.
- *
- * A dictation has no derived artifacts (the text is a message, not a document), so the
- * command is told only `SET_COPILOT_TRANSCRIPT` and `SET_COPILOT_DIR`.
- */
-export function runDictationHandoverCommand(cfg: CopilotConfig, archived: string): void {
-  runProjectHandover(cfg.copilot.dictationHandoverCommand, "copilot.dictationHandoverCommand", cfg, { archived }, false);
-}
-
-/**
- * Run a project hand-off command. Shared by both paths; `inheritStdout` is the only knob,
- * and the reason it exists is written on `runDictationHandoverCommand`.
- *
- * stdio for the meeting path is inherited, so the project's own report of where the
- * transcript landed reaches the operator instead of vanishing into a buffer. For dictation
- * the same output is captured and forwarded to stderr instead.
+ * stdio for a meeting (and for back-fill) is inherited, so the project's own report of where
+ * the transcript landed reaches the operator instead of vanishing into a buffer. On a dictation
+ * stop stdout is the channel the user's spoken words travel on — `printTranscriptOnce` has just
+ * written the message there — so a script announcing "saved to docs/inputs/dictation/…" would
+ * splice a sentence the user never said into their own instruction. There the output is
+ * captured and re-emitted on stderr, prefixed: visible to the operator, invisible to the message.
  */
 function runProjectHandover(
-  command: string | undefined,
+  command: string,
   key: string,
   cfg: CopilotConfig,
-  paths: HandoverPaths,
-  inheritStdout: boolean,
-): void {
-  if (!command) return;
+  paths: RecordingPaths,
+  kind: RecordingKind,
+  opts: RecordingHandoverOptions,
+): boolean {
+  const protect = !!opts.protectStdout;
   const result = spawnSync(command, {
     shell: true,
-    stdio: inheritStdout ? "inherit" : ["ignore", "pipe", "pipe"],
+    stdio: protect ? ["ignore", "pipe", "pipe"] : "inherit",
     encoding: "utf-8",
     timeout: HANDOVER_COMMAND_TIMEOUT_MS,
     cwd: process.cwd(),
     env: {
       ...process.env,
-      SET_COPILOT_DIR: cfg.runtimeDir,
+      SET_COPILOT_DIR: opts.runtimeDir ?? cfg.runtimeDir,
       SET_COPILOT_TRANSCRIPT: paths.archived,
+      SET_COPILOT_KIND: kind,
+      SET_COPILOT_RECORDED_AT: recordedAt(paths.archived).toISOString(),
       ...(paths.markdown ? { SET_COPILOT_TRANSCRIPT_MD: paths.markdown } : {}),
       ...(paths.structured ? { SET_COPILOT_TRANSCRIPT_JSONL: paths.structured } : {}),
+      ...(opts.backfill ? { SET_COPILOT_BACKFILL: "1" } : {}),
     },
   });
-  if (!inheritStdout) forwardToStderr(result.stdout, result.stderr);
+  if (protect) forwardToStderr(result.stdout, result.stderr);
   const failure =
     result.error ? result.error.message
     : result.signal === "SIGTERM" ? `timed out after ${HANDOVER_COMMAND_TIMEOUT_MS / 1000}s`
@@ -148,7 +200,9 @@ function runProjectHandover(
       `[set-copilot] ${key} failed (${failure}): ${command}\n` +
       `              The transcript is handed over and intact at ${paths.archived}`,
     );
+    return false;
   }
+  return true;
 }
 
 /**

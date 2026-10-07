@@ -74,8 +74,10 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
 
   `stop` runs it on the **archived** file, after the rename — the `renameSync` stays the sole
   source of truth for "handed over exactly once", and a stitch failure is reported, never fatal.
-  The `--print` (dictation) path produces nothing derived — no `.md`, no `-stitched.jsonl` —
-  because there the text is the user's **message**, not a document. But it *is* stitched
+  The `--print` (dictation) path *prints* nothing derived — its stdout is the user's **message**,
+  not a document. Since `recording-handover` (2026-10-07) it does write the `.md` and
+  `-stitched.jsonl` beside the archive afterwards (reported on stderr), because a dictation that is
+  persisted must be findable by a text search like any other recording. But it *is* stitched
   (`dictation-stitched-output`): the distinction that matters is artifacts vs. text, and
   conflating the two once left the worse half of the problem in place. `dd/SKILL.md` used to
   say "concatenate the `text` fields", which asks a consumer to supply a separator it cannot
@@ -321,6 +323,8 @@ Two rules are load-bearing and were each fixed after a real failure; don't regre
 Three rules the installer follows, each from that measurement: it **declares** which mode it used (silence about it produces the same failure in the opposite direction — "why is my fix not taking effect?"), it never creates or keeps a **dangling** link (the skill then vanishes from the list with no error at any layer), and it **archives** an existing real directory to `<name>.bak-<timestamp>` rather than deleting it, with the backup's `SKILL.md` renamed so the archive cannot shadow the install. And note a same-named skill in `~/.claude/skills/` **shadows** the project's `.claude/skills/` one, so patching a project copy of a shipped skill is silently inert.
 
 A project that needs something the shared skill does not do should reach for a config seam, not a fork: `copilot.handoverCommand` exists because a forked `meeting-copilot` was the only way a project could hand its own transcript on, and a fork of a skill that already drifts silently is that failure twice.
+
+**Every recording is handed on, and back-fill finds the ones that were not** (`recording-handover`, 2026-10-07 — a content-hash survey found 15 dictations in one project and 14 meetings in another with no copy in their repos). One seam, `runRecordingHandover`, for both kinds and for back-fill: the command for the recording's kind (`handoverCommand` / `dictationHandoverCommand`, kind taken from the *file name*, because the SessionEnd `stop` archives an open dictation on the meeting path), with `SET_COPILOT_KIND`; with no command, the built-in target copies raw + `.md` + `-stitched.jsonl` into `docs/inputs/copilot/<date>-<kind>-part<N>-<sha8>.*` (content-deduplicated by SHA-256 over the work tree, `.set/` excluded; the hash in the name keeps two machines' `part1`s from colliding; never committed; a no-op command `true` opts out). A meeting-only command never receives dictations — a script predating `SET_COPILOT_KIND` cannot tell them apart. A successful command hand-off is a `handover` step in the recovery ledger (engine-owned, not claimable), because a command may keep the recording in a shape no hash can recognise. `set-copilot backfill [--dry-run|--check]` scans `.set/copilot/` and hands over what is unsaved through the same seam — copying, never moving, so `stop`'s `renameSync` stays the only archive step; `--check` runs from the `recordings-check.sh` SessionStart hook with a read-only preflight and always exits 0.
 
 `transcript-recover` and `set-repair` are two halves of recovery, split because their **costs** differ. `set-repair` is mechanical, cheap, safe to run often: orphaned `capture.pid`, a transcript nothing ever handed over (a real project held a 539-line one — an entire meeting — found by accident), a stale `wall.pid`, an archive with no stitched artifacts. It never repairs by a new mechanism — an unconsumed transcript is handed over by `stop`, reusing the one `renameSync` — and reports anything destructive rather than running it. `transcript-recover` is a *content* pass costing a model read per transcript, and it ends by handing off in the other direction. `doctor` probes the audio chain; `set-repair` inspects runtime state; they do not overlap.
 

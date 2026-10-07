@@ -99,7 +99,7 @@ const isArtifact = (name: string): boolean => name.endsWith("-stitched.jsonl");
  * emphatically not a transcript. A glob is taken at its word instead: the user named
  * what they meant.
  */
-const isCaptureOutput = (name: string): boolean =>
+export const isCaptureOutput = (name: string): boolean =>
   /\.jsonl$/i.test(name) && /^(transcript|dictation)/i.test(name) && !isArtifact(name);
 
 /**
