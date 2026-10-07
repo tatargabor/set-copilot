@@ -13,8 +13,9 @@ The transcript page SHALL be served only when `wall.transcriptPage.route` is a s
 with `/`. With no route (the default) or an invalid one, neither the page at that route nor
 `/api/transcript` SHALL be served: both SHALL answer 404. The page title SHALL come from
 `wall.transcriptPage.title` (non-blank, trimmed; default `Live transcript`), and speaker labels
-SHALL come from `transcript.speakers` — the same map the stitched transcript uses — falling back
-to the raw speaker tag.
+SHALL come from the line's recorded `speakerName` when it carries one — the same rule the
+stitched transcript follows — falling back to `transcript.speakers` and then the raw speaker
+tag.
 
 #### Scenario: No route, no endpoint
 
@@ -27,6 +28,12 @@ to the raw speaker tag.
 - **WHEN** `wall.transcriptPage.route` is `"/transcript"` and `transcript.speakers` maps `mic`
   to `Us`
 - **THEN** `/transcript` serves the transcript page and a `mic` line arrives labelled `Us`
+
+#### Scenario: A recorded label outranks the serving machine's map
+
+- **WHEN** a mic line carries `"speakerName": "gazda"` and the serving machine's
+  `transcript.speakers` maps `mic` to `Us`
+- **THEN** that line arrives on the page labelled `gazda`
 
 ### Requirement: Lines are read by byte offset from the file the capture is writing
 
