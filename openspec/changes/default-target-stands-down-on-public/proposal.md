@@ -56,10 +56,13 @@ override for the case the rule cannot see (a private repository on a public host
   decision), beside the built-in-target facts it already owns.
 - `src/handover.ts` (`runRecordingHandover`): the stand-down check in the default-target branch —
   the one seam both kinds and back-fill already go through.
-- `src/recording-backfill.ts`: suppressed recordings counted separately, one summary line.
+- `src/recording-backfill.ts`: suppressed recordings counted separately (neither handed over nor
+  failed, exit 0 when nothing else failed), one summary line.
 - `src/config.ts`: the `copilot.defaultHandover` key (default `"auto"`, invalid value warns and
   falls back, like `validHandoverCommand`).
+- Skills: one sentence each in `set-repair` (kept recordings are expected state on a suppressed
+  repo, and the fix is the cache mark or the config key, not a hand copy), `meeting-copilot` and
+  `dd` (the stand-down line means kept — report it, do not retry).
+- README: the new key and the `repo-visibility.json` cache (path, shape, advisory on corrupt).
 - Tests: `src/recording-store.test.ts` (or a new `handover-policy.test.ts`), `src/handover.test.ts`,
   `src/recording-backfill.test.ts`, `src/config.test.ts`.
-- No skill change: the built-in target is the no-command path; the skills describe commands and
-  the ledger, neither of which changes.

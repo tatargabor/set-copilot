@@ -52,17 +52,22 @@ The built-in target SHALL also stand down — before any copy is attempted, with
 shape and the archive left in place — when `copilot.defaultHandover` (default `"auto"`) does not
 permit it. Under `"auto"` the target stands down when the work tree has a git remote on a known
 public hosting host — github.com, gitlab.com, codeberg.org, bitbucket.org, sr.ht, framagit.org,
-gitea.com — unless the machine-local visibility cache (`repo-visibility.json` beside the user
-config, keyed by absolute work-tree top) marks that work tree `private`. A work tree with no
-remote, a remote on any other host, or a `private` cache mark SHALL keep the default behaviour.
-`"on"` SHALL force the copy and `"off"` SHALL force the stand-down, whatever the remotes say. The
-decision SHALL be made from local reads only — `git remote -v` and the cache file — and SHALL NOT
-make a network call. A suppressed recording SHALL be reported once, prefixed `[set-copilot]`, on
-the stream the built-in target's own report uses (stderr for a dictation stop, stdout for a
-meeting and back-fill), naming the reason and the offending host, and SHALL NOT be recorded as a
-`handover` step in the recovery ledger; the recording stays at its archived path. Back-fill SHALL
-count a suppressed recording as deliberately kept — not as unsaved and needing attention — and
-SHALL report the suppression once per run rather than once per recording.
+gitea.com — where a remote's host matches when it equals or is a subdomain of a listed one
+(`git.sr.ht` matches `sr.ht`; a dedicated GitHub Enterprise host such as `github.company.com`
+matches too, which is the protected reading) — unless the machine-local visibility cache
+(`repo-visibility.json` beside the user config, keyed by the work tree's canonical top —
+`realpathSync` of `git rev-parse --show-toplevel`, so a symlink or an alternative spelling still
+finds its mark) marks that work tree `private`. A work tree with no remote, a remote on any other
+host, or a `private` cache mark SHALL keep the default behaviour. `"on"` SHALL force the copy and
+`"off"` SHALL force the stand-down, whatever the remotes say. The decision SHALL be made from
+local reads only — `git remote -v` and the cache file — and SHALL NOT make a network call. A
+suppressed recording SHALL be reported once, prefixed `[set-copilot]`, on the stream the built-in
+target's own report uses (stderr for a dictation stop, stdout for a meeting and back-fill),
+naming the reason, the offending host, and where the fix lives (the cache mark or the config
+key), and SHALL NOT be recorded as a `handover` step in the recovery ledger; the recording stays
+at its archived path. Back-fill SHALL count a suppressed recording as deliberately kept — neither
+as handed over nor as failed — SHALL report the suppression once per run rather than once per
+recording, and a run whose recordings are all suppressed SHALL exit 0.
 
 #### Scenario: A dictation in a project with no dictation command is saved with its readable file
 
@@ -111,8 +116,13 @@ SHALL report the suppression once per run rather than once per recording.
   `git@github.com:owner/repo.git`, with `copilot.defaultHandover` unset (or `"auto"`) and no
   visibility-cache mark
 - **THEN** nothing is written to `docs/inputs/copilot/`, one `[set-copilot]`-prefixed line on the
-  report stream names the stand-down and `github.com`, no `handover` step is recorded in the
-  recovery ledger, and the archived recording is intact in the runtime dir
+  report stream names the stand-down, `github.com`, and where the fix lives, no `handover` step is
+  recorded in the recovery ledger, and the archived recording is intact in the runtime dir
+
+#### Scenario: A subdomain of a listed host matches
+
+- **WHEN** the work tree's remote is `git@git.sr.ht:~user/repo.git` (or `https://git.sr.ht/~user/repo`)
+- **THEN** the host matches the listed `sr.ht` and the target stands down, as for `github.com` itself
 
 #### Scenario: A private mark on a public host keeps the default
 
@@ -141,4 +151,5 @@ SHALL report the suppression once per run rather than once per recording.
 
 - **WHEN** back-fill runs in a work tree the rule suppresses and finds recordings with no copy
 - **THEN** the run reports the suppression once for the whole run rather than once per recording,
-  and `--check` reports no unsaved recording for them
+  no suppressed recording is counted as handed over or as failed, the run exits 0 when nothing
+  else failed, and `--check` reports no unsaved recording for them
