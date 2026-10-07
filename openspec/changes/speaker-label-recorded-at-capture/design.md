@@ -4,10 +4,12 @@
 
 `TranscriptWriter.writeLine` (`src/transcript-writer.ts:315`) builds each line and is the single
 exit for speech lines; `capture.ts:162` constructs the writer and has `cfg`. Downstream,
-`parseTranscript` (`src/transcript-build.ts:160-180`) whitelists the fields it reads, the channel
+`parseLines` (`src/transcript-build.ts:142`) whitelists the fields it reads, the channel
 rebuild groups by `speaker`, `splitSentences` stamps each sentence with its channel's speaker,
-and the renderers resolve the display name once — `const who = opts.speakers[s.speaker] ??
-s.speaker` (`src/transcript-build.ts:513`).
+`renderMarkdown` resolves the display name once — `const who = opts.speakers[s.speaker] ??
+s.speaker` (`src/transcript-build.ts:513`) — and `renderJsonl` never applies the map at all
+today. The wall's live transcript page re-derives labels from the serving machine's map
+(`src/wall/server.ts:1348`).
 
 ## Goals / Non-Goals
 
@@ -15,6 +17,7 @@ s.speaker` (`src/transcript-build.ts:513`).
 
 - Attribution travels with the recording; a second machine's config cannot rewrite it.
 - Recordings without the field are untouched, byte-shape and behaviour.
+- The channel stays the internal grouping key — attribution can never merge or split channels.
 
 **Non-Goals:**
 
@@ -24,33 +27,40 @@ s.speaker` (`src/transcript-build.ts:513`).
 
 ## Decisions
 
-- **Stamp in the writer, resolve in `parseTranscript`, no new render branch.** The writer writes
-  `line.speakerName = names[channel]` when the resolved label is non-empty. At parse time the
-  line's `speaker` IS RESOLVED to the recorded label when present — so the channel rebuild,
-  sentence speaker, overlap marking, `--stats` speaker list and every renderer see the recorded
-  name through the code path that already exists (`opts.speakers[label]` misses, falls back to
-  the label itself). One resolution point, no second rendering path to keep in step. The
-  alternative — carrying `speakerName` on `StitchedSentence` and adding a second `??` at every
-  renderer — would spread the rule across three renderers and leave the rebuild/overlap logic
-  keyed on channels while sentences carried names.
-- **The label replaces the channel key downstream, safely.** A recording has exactly two
-  channels and one label per channel, so grouping by the resolved name cannot merge or split
-  channels that the channel key would not. The pathological case (mic and system configured to
-  the SAME label) merges two channels into one rebuild — the same result today's map produces
-  when both map to one name, and a config error either way.
+- **The label rides beside the channel; the channel stays the grouping key.** `parseLines` reads
+  `speakerName` onto `StitchLine`; the sentence, built per channel, carries the channel's label;
+  every renderer resolves `who = sentence.speakerName ?? opts.speakers[s.speaker] ??
+  s.speaker`. Resolving at RENDER (not by rewriting `line.speaker` at parse) is load-bearing:
+  the rebuild, overlap marking and rotation repair all key on the channel (`transcript-build.ts:323,422,219`),
+  and a parse-time rewrite would merge the two channels' rebuild whenever a config resolves both
+  labels to the same string — a silent cross-channel reassembly, with every overlap mark gone,
+  where today's identical config error degrades cosmetically. One resolution expression, shared
+  by the renderers; the label map is built once at parse.
+- **The recorded label is terminal, even for the operator.** `--speakers gazda=X` and a config
+  entry keyed by the label are both ignored for a labelled line: the whole point is that no
+  later machine's config re-attributes. A label recorded WRONG (a typo in the capturing
+  machine's config) is corrected there and by re-recording, not by re-stitching — the raw
+  recording's `speaker` channel field remains for tooling that wants the channel.
+- **`renderJsonl` gains the same resolution.** It never applied the map — the structured
+  artifact's `speaker` is the raw channel today. New recordings get the recorded label there
+  too, identically to the Markdown (the wall-feed style: both artifacts attribute the same).
 - **`capture.ts` passes `cfg.transcript.speakers` through.** The writer takes
   `speakerNames?: { mic?: string; system?: string }` — the already-resolved per-machine keys
   (`machine-local-audio-and-speaker`), so the writer stays config-free and testable.
-- **The CLI `--speaker` override becomes a fallback, not a veto.** It still maps channels for
-  recordings without the field; it cannot re-attribute a recorded one. That is the point of the
-  change.
+- **The wall transcript page reads the label too.** `transcriptPageLine`
+  (`src/wall/server.ts:1348`) prefers `o.speakerName` over its map — otherwise the live page on
+  a moved recording re-attributes exactly as the stitch did, the failure this change exists to
+  end, in a sibling path.
+- **The CLI `--speakers` override becomes a fallback, not a veto.** It still maps channels for
+  recordings without the field; it cannot re-attribute a recorded one.
 
 ## Risks / Trade-offs
 
-- [A consumer of the structured `.jsonl` keyed on `speaker: "mic"`] → the stitched sentence
-  `.jsonl` now carries the LABEL in its `speaker` field for new recordings. This is the intended
-  change (the label is the identity); a consumer wanting the channel has the raw recording,
-  whose `speaker` field is unchanged.
+- [A consumer of the structured `.jsonl` keyed on `speaker: "mic"`] → for new recordings the
+  structured line's `speaker` now carries the label. This is the intended change (the label is
+  the identity); a consumer wanting the channel has the raw recording, whose `speaker` field is
+  unchanged. Dictation is single-channel, so its structured output changes only when a label is
+  configured.
 - [Old recordings stitched on the capturing machine] → unchanged: the map resolves as today.
 
 ## Migration Plan

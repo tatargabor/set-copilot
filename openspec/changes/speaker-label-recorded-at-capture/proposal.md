@@ -36,18 +36,25 @@ written into the recording then, and the stitch must treat it as the authority.
 - `live-transcript-format`: new requirement — a speech line records who the capturing machine
   says spoke.
 - `transcript-stitch`: new requirement — a recorded speaker label outranks the stitching
-  machine's config; old recordings keep today's channel→config mapping.
+  machine's config; the base "The stitch emits a readable and a structured artifact" is MODIFIED
+  to narrow its configuration scenario to recordings without a recorded label and to pin both
+  artifacts to the same resolution.
+- `wall-transcript-page`: "The transcript page is opt-in by route" is MODIFIED to prefer the
+  recorded label over the serving machine's map.
 
 ## Impact
 
 - `src/transcript-writer.ts`: `TranscriptWriterOptions.speakerNames`, stamped in `writeLine`.
 - `src/capture.ts`: pass `cfg.transcript.speakers` to the writer.
-- `src/transcript-build.ts`: `parseTranscript` reads `speakerName` and resolves the line's
-  speaker to it when present; everything downstream (channel rebuild, sentence speaker, the
-  `who` lookup at `transcript-build.ts:513`) renders the recorded label through the existing
-  `opts.speakers[x] ?? x` fallback.
-- Tests: `src/transcript-writer.test.ts`, `src/transcript-build.test.ts`, and a
-  capture-path check via the CLI for the wiring (`capture.ts` has no unit test — audio/PID
-  paths are verified by running, per CLAUDE.md; here the wiring is covered by a config→writer
-  unit case plus `set-copilot transcript` on a real capture-shaped file).
+- `src/transcript-build.ts`: `parseLines` reads `speakerName` onto the line; the sentence
+  carries its channel's label; the renderers (and `renderJsonl`, which applies no map today)
+  resolve `speakerName ?? opts.speakers[channel] ?? channel`. The channel stays the grouping
+  key.
+- `src/wall/server.ts` (`transcriptPageLine`): the live transcript page prefers the recorded
+  label over the serving machine's map — the same re-attribution, in a sibling path.
+- Tests: `src/transcript-writer.test.ts`, `src/transcript-build.test.ts`, the wall server's
+  transcript-page tests, and a capture-path check via the CLI for the wiring (`capture.ts` has
+  no unit test — audio/PID paths are verified by running, per CLAUDE.md; here the wiring is
+  covered by a config→writer unit case plus `set-copilot transcript` on a real capture-shaped
+  file).
 - No skill or config change: the key exists; only who wins changes.
