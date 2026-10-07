@@ -108,22 +108,33 @@ from the destination entirely.
 
 Besides the skills, `init` SHALL write a config file from the package's example config — into the
 project root, or with `--global` into the user-level config directory — and SHALL leave an existing
-config file untouched (reporting its drift, per `setup-diagnostics`). It SHALL write a `.env` into
-the user-level config directory, containing an empty `SONIOX_API_KEY=` line and readable by the
-owner only (mode `0600`), unless one already exists there, in which case it SHALL leave it
-untouched. The secret lives once per machine, not per project, so dictation works from any working
-directory; a project `.env` still overrides it (`config-resolution-and-migration`).
+config file untouched (reporting its drift, per `setup-diagnostics`). A config written into the
+project root SHALL NOT contain the `audio` section: every `audio` key is per-machine
+(`config-resolution-and-migration`), and a scaffolded empty `audio` block in a committed file is
+both a git-conflict source and the placeholder that once replaced a machine's microphone. With
+`--global` the `audio` section SHALL be written, because there the target is the machine's own
+config. It SHALL write a `.env` into the user-level config directory, containing an empty
+`SONIOX_API_KEY=` line and readable by the owner only (mode `0600`), unless one already exists
+there, in which case it SHALL leave it untouched. The secret lives once per machine, not per
+project, so dictation works from any working directory; a project `.env` still overrides it
+(`config-resolution-and-migration`).
 
 #### Scenario: A fresh project
 
 - **WHEN** `init` runs in a project with no config file and a machine with no user-level `.env`
-- **THEN** the project gets `set-copilot.config.json` copied from the example, and the user-level
-  config directory gets a `.env` with mode `0600` holding an empty `SONIOX_API_KEY`
+- **THEN** the project gets `set-copilot.config.json` written from the example without its
+  `audio` section, and the user-level config directory gets a `.env` with mode `0600` holding an
+  empty `SONIOX_API_KEY`
 
 #### Scenario: Existing files are never overwritten
 
 - **WHEN** `init` runs where both the config file and the user-level `.env` already exist
 - **THEN** both are left byte-identical and the output says so
+
+#### Scenario: A global init keeps the audio section
+
+- **WHEN** `init --global` runs on a machine with no user-level config file
+- **THEN** the user-level config file is written from the example with its `audio` section
 
 ### Requirement: --global installs for every working directory
 
@@ -142,7 +153,7 @@ project root.
 ### Requirement: init installs the shipped hooks and keeps their registration current
 
 `init` SHALL copy the package's `hooks/` directory into the target `.claude/hooks`, and SHALL
-reconcile the `Stop` hook registrations in the target `settings.json`, preserving every other
+reconcile the hook registrations in the target `settings.json`, preserving every other
 setting and hook:
 
 - it SHALL remove every `Stop` hook whose command invokes the retired `wall-mirror.sh`, matched by
@@ -151,7 +162,9 @@ setting and hook:
   double-emit every line next to it;
 - it SHALL register the `recovery-guard.sh` `Stop` hook once — referenced through
   `$CLAUDE_PROJECT_DIR` for a project install and by absolute path for `--global` — and on a re-run
-  SHALL leave an existing registration as it is and report that.
+  SHALL leave an existing registration as it is and report that;
+- it SHALL register the `recordings-check.sh` `SessionStart` hook once, referenced the same way, and
+  on a re-run SHALL leave an existing registration (matched by script name) as it is and report that.
 
 A `settings.json` that is not valid JSON SHALL be left untouched, with a warning, rather than
 overwritten: a user's hook configuration is not something to lose to a parse error.
@@ -172,6 +185,12 @@ overwritten: a user's hook configuration is not something to lose to a parse err
 
 - **WHEN** the target `settings.json` is not valid JSON
 - **THEN** it is left byte-identical and a warning names it
+
+#### Scenario: The recordings check is registered once
+
+- **WHEN** `init` runs twice in the same project
+- **THEN** `settings.json` holds exactly one `SessionStart` hook invoking `recordings-check.sh`, and
+  the second run reports it as already registered
 
 ### Requirement: An archived skill directory cannot register as a skill
 

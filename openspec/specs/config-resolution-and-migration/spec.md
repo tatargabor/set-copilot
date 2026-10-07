@@ -8,6 +8,7 @@ themselves current: validated and migrated before any command reads them, becaus
 against an older meaning of a key fails silently, and nobody edits a config they believe is correct.
 
 ## Requirements
+
 ### Requirement: Configuration resolves in a fixed layer order
 
 The system SHALL resolve its configuration from four layers, later layers winning: built-in
@@ -15,6 +16,13 @@ defaults, then the user-level config file, then the project config file
 (`set-copilot.config.json` in the project root, which is the working directory), then environment
 overrides (`SET_COPILOT_DIR`, `SET_COPILOT_LANGUAGE`, `SONIOX_MODE`, `STT_BACKEND`,
 `WHISPER_BIN`, `WHISPER_MODEL`, `MIC_SOURCE`, `MONITOR_SOURCE`, `COPILOT_MIRROR`).
+
+The per-machine keys — every key of the `audio` section and `transcript.speakers.mic` — SHALL be
+the one exception: for them the user-level config SHALL win over the project config, and a project
+value SHALL apply only when the user-level config does not set that key. They describe the local
+audio chain and the person at the microphone; committed in the project layer they conflict in git
+between machines and silently override every other clone. Environment overrides SHALL still win
+over both files for these keys.
 
 The user-level config directory SHALL be `SET_COPILOT_HOME` when that is set, otherwise
 `set-copilot` under `XDG_CONFIG_HOME`, otherwise `set-copilot` under `~/.config`.
@@ -38,18 +46,32 @@ what happened the first time the preflight ran.
 - **THEN** the user-level config file and the user-level `.env` are read from that directory, and
   `~/.config/set-copilot` is not consulted
 
+#### Scenario: The machine's speaker label wins over the project's
+
+- **WHEN** the user config sets `transcript.speakers.mic` to `Bob` and the project config sets
+  `transcript.speakers` to `{ "mic": "Alice", "system": "Others on the call" }`
+- **THEN** the resolved `mic` label is `Bob` and the resolved `system` label is
+  `Others on the call`
+
+#### Scenario: A project speaker label applies on a machine that declares none
+
+- **WHEN** the user config sets no `transcript.speakers.mic` and the project config sets it to
+  `Alice`
+- **THEN** the resolved `mic` label is `Alice`
+
 ### Requirement: Nested sections merge key by key, audio included
 
 The nested sections `knowledge`, `copilot`, `audio`, `detect`, `wall` and `transcript` SHALL merge
-per key across the user and project layers: a project that sets one key of a section SHALL NOT
-discard the user layer's other keys in that section. The merge is one level deep; a key's value is
-taken whole from the higher layer that sets it.
+per key across the user and project layers: a layer that sets one key of a section SHALL NOT
+discard the other layer's other keys in that section. The merge is one level deep; a key's value is
+taken whole from the higher layer that sets it — for `audio`, the higher layer is the user config
+(see the layer-order requirement).
 
 `audio` SHALL merge per key like every other section. It was the one omission until 2026-08-05,
 and a project that declared only `sampleRate` silently discarded the machine's microphone. In the
 `audio` section of a config **file**, an empty or whitespace-only string SHALL count as "not set"
-rather than as an override: nobody writes `micSource: ""` to mean "use the default" — the key is
-empty because it was scaffolded empty. Measured 2026-08-27: a scaffolded
+rather than as an override, in either layer: nobody writes `micSource: ""` to mean "use the
+default" — the key is empty because it was scaffolded empty. Measured 2026-08-27: a scaffolded
 `audio: { micSource: "", monitorSource: "" }` in a project config replaced the machine's audio
 block, the capture fell back to a digital input delivering noise, and every dictation in that
 project came back empty.
@@ -69,8 +91,15 @@ project came back empty.
 
 #### Scenario: A real project value still overrides
 
-- **WHEN** the project config sets `audio.micSource` to a non-empty device name
-- **THEN** that device name is resolved
+- **WHEN** the project config sets `audio.micSource` to a non-empty device name and the user
+  config sets no `audio.micSource` (or sets it to `""`)
+- **THEN** the project's device name is resolved
+
+#### Scenario: The machine's audio value wins over the project's
+
+- **WHEN** the user config sets `audio.sampleRate` to `16000` and the project config sets it to
+  `48000`
+- **THEN** the resolved `sampleRate` is `16000`
 
 ### Requirement: A device environment variable set but empty means "no device"
 
@@ -193,9 +222,9 @@ must give a moved value a home.
 
 The version-1 migration SHALL move `audio.micSource` and `audio.monitorSource` out of the project
 config into the user-level config. A device name names hardware: committed to a project config it
-wins on every clone — the project layer outranks the user layer — and on a second machine it
-resolves to nothing, producing a zero-byte capture with no error from any layer (measured
-2026-08-05 bringing a Linux-developed project up on macOS).
+reaches every clone — on a machine that declares no device of its own the project's applies — and on
+a second machine it resolves to nothing, producing a zero-byte capture with no error from any layer
+(measured 2026-08-05 bringing a Linux-developed project up on macOS).
 
 The migration SHALL move rather than delete, because on the machine that wrote it the name is
 correct. It SHALL NOT overwrite a device the user config already declares — that one matches the
