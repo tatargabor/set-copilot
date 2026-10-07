@@ -1,0 +1,25 @@
+# Tasks
+
+## 1. One hand-off seam for both kinds, with the kind marker
+
+- [ ] 1.1 Tests first (`src/handover.test.ts`): a meeting hand-off with a command receives `SET_COPILOT_KIND=meeting`, `SET_COPILOT_RECORDED_AT`, and the three paths; a dictation hand-off with `dictationHandoverCommand` receives `SET_COPILOT_KIND=dictation` and the `.md`/`-stitched.jsonl` paths, its stdout still lands on stderr; only `handoverCommand` configured + dictation → that command does not run. Run against unfixed code; record failures. [REQ: A project command may run after the handover] [REQ: A project command may run after a dictation handover]
+- [ ] 1.2 In `src/handover.ts`, replace the two entry points with `runRecordingHandover(cfg, paths, kind, opts)` choosing the command per kind, adding the env vars, and recording a successful (exit 0) command hand-off in the machine-local ledger; keep the failure posture. Update the doc comments. Verify: `npx vitest run src/handover.test.ts src/handover.failopen.test.ts`. [REQ: A project command may run after the handover] [REQ: A project command may run after a dictation handover]
+- [ ] 1.3 In `src/cli.ts` `handoverAtStop`: the dictation path stitches the archive (honouring `stitchOnStop`) with its report on stderr, then calls the seam with kind `dictation`; the meeting path calls it with kind `meeting`. Verify by running the built CLI with `SET_COPILOT_HOME` and `SET_COPILOT_DIR` on a temp git repo holding a fake `dictation.jsonl`: stdout is exactly the dictated text, `.md` + `-stitched.jsonl` exist beside the archive. [REQ: Handover persists a durable, discoverable artifact without reprinting contents]
+
+## 2. The built-in target
+
+- [ ] 2.1 Tests first (`src/recording-backfill.test.ts` or `src/handover.test.ts`, temp git repos): no command → raw/md/stitched copied as `<date>-<kind>-part1.*`, raw byte-identical; second run with the same bytes writes nothing and names the existing copy; a different recording the same day becomes `part2`; a name taken only in `HEAD` is skipped; outside a git work tree nothing is created; the date comes from the archive stamp in local time. [REQ: A recording with no configured command persists to the built-in target]
+- [ ] 2.2 Implement the target (`persistToDefaultTarget`) with the size-prefiltered SHA-256 identity over `git ls-files --cached --others --exclude-standard`, part numbering against work tree + `HEAD` + upstream (no fetch), reporting on stdout/stderr per kind and the `git add` line; never stage. Verify: tests green; CLI run as in 1.3 shows `docs/inputs/copilot/<date>-dictation-part1.*` and `git status` lists them untracked, nothing staged. [REQ: A recording with no configured command persists to the built-in target]
+
+## 3. Back-fill
+
+- [ ] 3.1 Tests first: the scan (depth, name filter, `-stitched` excluded, live name only without a live capture, speechless files skipped); identity by content and by ledger; recording order; dry run writes nothing (hash the temp tree and the temp `SET_COPILOT_HOME` before/after); a second real run hands nothing over; marker contents. [REQ: Back-fill finds the recordings this machine never saved] [REQ: Back-fill hands over through the stop-time seam] [REQ: Back-fill keeps a machine-local record of what it did] [REQ: A dry run and a session-start check report without writing]
+- [ ] 3.2 Implement `src/recording-backfill.ts` (scan, `isSaved`, ledger + marker under `<userConfigDir>/handover/`) and `set-copilot backfill [--dry-run|--check]` in `src/cli.ts` + help text. Verify: tests green; `backfill --dry-run` against the two surveyed consumer projects (read-only, the only runs allowed against other projects) and compare with the 2026-10-07 survey (15 / 14). [REQ: Back-fill finds the recordings this machine never saved] [REQ: Back-fill hands over through the stop-time seam] [REQ: Back-fill keeps a machine-local record of what it did] [REQ: A dry run and a session-start check report without writing]
+
+## 4. Session-start check
+
+- [ ] 4.1 Add `hooks/recordings-check.sh` (PATH, then `node_modules/.bin`, else silent; `cd "$CLAUDE_PROJECT_DIR"`; always exit 0; no `timeout`). Generalise `registerStopHook` to an event parameter and register the hook as `SessionStart` in `cmdInit`. Tests: registering twice yields one entry; malformed settings untouched. Verify: `init` in a temp dir twice (with `SET_COPILOT_HOME`), inspect `settings.json`; run the script with a fake project holding one unsaved dictation and with none. [REQ: A dry run and a session-start check report without writing] [REQ: init installs the shipped hooks and keeps their registration current]
+
+## 5. Skills, docs, whole suite
+
+- [ ] 5.1 `skills/dd/SKILL.md` (stderr lines now also name the saved copy), `skills/meeting-copilot/SKILL.md` stop section (the default target and `SET_COPILOT_KIND`), `skills/set-repair/SKILL.md` (back-fill as the fix for unsaved archives), README + CLAUDE.md (the seam, the default target, back-fill, the ledger location). Run `npm run build && npm test`. [REQ: A recording with no configured command persists to the built-in target] [REQ: Back-fill hands over through the stop-time seam]
