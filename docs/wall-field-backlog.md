@@ -83,6 +83,11 @@ rename, no dead region) are already folded into that change and are **not** repe
 
 ## P2 — smaller / polish
 
+> **Filed separately, 2026-10-08:** [wall-canvas-switching-bugs.md](wall-canvas-switching-bugs.md) —
+> one canvas switching diagram → chart → diagram: the tab strip vanishes under a chart, page open
+> shows the first diagram instead of the director's choice, re-showing a diagram after a chart
+> leaves the canvas blank, chart value labels run into the bars. Two of the four are P1.
+
 10. **Orphaned foreign wall on the fixed default port.** A wall from another project on 4180
     silently served the wrong runtime dir; emits went to the right dir, the screen read the
     wrong one. → Identify a wall by its `runtimeDir`; warn/refuse when the port's wall belongs
