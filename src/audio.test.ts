@@ -20,7 +20,7 @@ const REAL_PAYLOAD = JSON.stringify({
       _name: "coreaudio_device",
       _items: [
         {
-          _name: "Gabor's iPhone Microphone",
+          _name: "Someone's iPhone Microphone",
           coreaudio_device_input: 1,
           coreaudio_device_srate: 48000,
           coreaudio_device_transport: "coreaudio_device_type_unknown",
@@ -53,7 +53,7 @@ describe("parseMacInputDevices", () => {
   it("puts the default input first and marks it", () => {
     const [first, second] = parseMacInputDevices(REAL_PAYLOAD);
     expect(first).toBe("HD Pro Webcam C920  (default input)");
-    expect(second).toBe("Gabor's iPhone Microphone");
+    expect(second).toBe("Someone's iPhone Microphone");
   });
 
   it("keeps the bare device name at the start of the line, copy-pasteable into micSource", () => {

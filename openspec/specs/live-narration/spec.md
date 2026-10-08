@@ -78,14 +78,27 @@ verbosity.
 - **WHEN** narration is disabled in configuration
 - **THEN** the policy output and runtime behavior are byte-for-byte the pre-change reactive behavior
 
-### Requirement: Narration is private by default
+### Requirement: Narration is a redaction-backed lane on the wall
 
-Narration SHALL be emitted to the private view by default. It SHALL NOT reach a public client automatically;
-promotion of narration to a public wall SHALL depend on the zone model and the separate public-redaction
-capability, because live narration in front of an audience is unsafe without redaction.
+Narration SHALL be emitted to the wall's zone-shared lane (`zone:"both"`) and SHALL reach
+the single wall only as the public-redaction funnel renders it safe: the server SHALL
+redact narration at ingest before broadcast or accumulation, and the producer SHALL mark
+internal content `[belső]` or omit it, never forwarding the raw transcript. Narration's
+cadence, verbosity, and no-filler rules SHALL be unchanged by this routing.
 
-#### Scenario: Narration stays off the public wall
+A private view, where a project configures one, MAY additionally receive narration via
+`zone:"private"` emissions; its presence SHALL NOT be required for the wall lane to
+function.
 
-- **WHEN** the copilot narrates and a public wall is connected
-- **THEN** the public wall receives no narration line unless an explicit, redaction-gated promotion path is
-  configured
+#### Scenario: Narration reaches the wall redaction-backed
+
+- **WHEN** the copilot narrates and the wall (a public-audience client) is connected
+- **THEN** the narration line arrives through the ingest-funnel redactor — internal
+  segments are scrubbed or withheld, and the line renders in the wall's narration box
+
+#### Scenario: Internal narration content is marked or dropped at the source
+
+- **WHEN** the narration line would carry internal detail (a contradiction citing private
+  material, a named client)
+- **THEN** the producer marks it `[belső]` or drops the line, and the redactor's
+  marker-based pattern catches what was marked

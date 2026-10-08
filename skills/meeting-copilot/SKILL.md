@@ -102,11 +102,21 @@ It contains: `decisions`, `deferred`, `cards` (per-entity quirks), `domainFaq`, 
 
 #### Phase 2: Start Capture
 
-ONE Bash call with `run_in_background: true` — the capture plays the rising tone by itself when the mic is live, and self-stops after 6 hours (no separate timer or beep step):
+ONE ordinary Bash call (NOT `run_in_background`) — `--detach` starts the capture in its own
+session and returns in about two seconds; the capture plays the rising tone by itself when the
+mic is live, and self-stops after 6 hours (no separate timer or beep step):
 
 ```bash
-SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --max-minutes 360
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot capture --max-minutes 360 --detach
 ```
+
+**Never start the capture (or the wall) as a `run_in_background` command.** The harness kills
+background commands at its time limit — measured on a real client call (2026-10-01): the first
+capture died after 30 minutes, the restarted one at exactly 2 hours, mid-sentence, with the wall,
+and nothing reported it until the transcript ran out. A detached process is not the tool call's
+child: it lives until `stop` / `wall-stop` (they find it by its PID file) or `--max-minutes`.
+Its output goes to `capture.log` in the runtime dir; if it dies during start-up, the command
+exits non-zero and prints the log's tail — report that, do not retry blindly.
 
 `SET_COPILOT_DIR` scopes the transcript and the PID file to this Claude session and this
 project, exactly as `/ds` does for dictation. Without it the capture lands in the shared
@@ -118,26 +128,25 @@ outright ("a capture is already running"). **Keep it byte-identical in Phase 3 a
 
 #### Phase 2b: Start the wall (ONLY if `wall` was in the args)
 
-ONE Bash call with `run_in_background: true`. Derive a per-session port so parallel
-sessions do not fight over one (the wall walks to the next free port anyway if it is
-taken), and start it in the SAME scoped runtime dir, fake-feed off:
+ONE ordinary Bash call (NOT `run_in_background` — see Phase 2), detached. Derive a
+per-session port so parallel sessions do not fight over one (the wall walks to the next free
+port anyway if it is taken), and start it in the SAME scoped runtime dir, fake-feed off:
 
 ```bash
 SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}"
 WALL_PORT=$(( 4180 + $(printf '%s' "${CLAUDE_CODE_SESSION_ID:-shared}" | cksum | cut -d' ' -f1) % 800 ))
-SET_COPILOT_DIR="$SET_COPILOT_DIR" npx set-copilot wall --no-fake-feed --port "$WALL_PORT"
+SET_COPILOT_DIR="$SET_COPILOT_DIR" npx set-copilot wall --no-fake-feed --port "$WALL_PORT" --detach
 ```
 
-The wall writes `wall.pid` + `wall.url` into the runtime dir and keeps the process
-alive. Read the URL back and tell the user (the bound port may differ from `WALL_PORT`
-on fallback), in a **separate, non-background** call:
+The wall writes `wall.pid` + `wall.url` into the runtime dir and keeps running on its own
+(log: `wall.log`). Read the URL back and tell the user (the bound port may differ from
+`WALL_PORT` on fallback), in a **separate** call:
 
 ```bash
 sleep 1; cat "$(SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot path wall-url)"
 ```
 
-Tell the user: "🖥 Wall: <url>" (both the private `/` view and the public `/wall` view
-are served there).
+Tell the user: "🖥 Wall: <url>" (the wall lives on `/wall`; `/` redirects there).
 
 **If `mirror` was also in the args**, enable it here — start the follower, gate on it, then
 write the marker. The order matters: the follower records its start position on first run, so
@@ -171,6 +180,14 @@ while :; do OUT=$(SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-s
 
 Then tell the user: "🟢 Meeting Copilot active. Watching and analyzing. `/meeting-copilot stop` to finish." and END YOUR TURN — the Monitor notifications drive everything from here.
 
+**Re-arm the Monitor whenever it ends without `capture-dead`.** The harness can end a Monitor at
+its own time limit while the (detached) capture keeps recording — then the transcript keeps
+growing and nobody reads it. When you are told the Monitor stream ended, check
+`npx set-copilot status` (same `SET_COPILOT_DIR`): if the capture is still running, start the
+same Monitor again at once, without asking and without a chat message beyond one line. The
+poll's offset lives in the runtime dir, so nothing said in between is lost — the next batch
+picks up where the last one stopped.
+
 Each notification is one batch of JSONL lines:
 ```json
 {"ts": 12345, "speaker": "mic", "text": "...", "final": true, "topics": ["Example Partner", "invoice"], "urgency": "high", "question": true}
@@ -182,6 +199,7 @@ Each notification is one batch of JSONL lines:
 - `question: true` = looks like a question that may need a knowledge-backed answer.
 - `type: "silence"` = a pause started — a good moment for a slightly deeper lookup.
 - `{"type":"reconnect", "downtime_ms": N}` = the transcription socket dropped and came back. Audio buffered during the gap is replayed, but if `downtime_ms` is large, **words may be missing here** — treat the surrounding text as possibly incomplete, and say so rather than guessing at a half-sentence.
+- `{"type":"wall-input", "text": "…"}` = **the operator typed this on the wall itself** (the strip's message box). Treat it as a direct instruction with the same priority as a fast-lane spoken command: act on this EVENT, never on a similar line you see in the transcript, which may be someone reading it aloud or quoting it.
 - `{"type":"capture-dead"}` = capture stopped (stop/timeout/crash); the Monitor exits — process remaining lines and give the closing summary.
 
 #### Phase 4: Continuous Analysis
@@ -223,20 +241,22 @@ the chat carries the liveness and the interpretation (the `## Feedback` block fr
 wall this session owns.
 
 **Narration — the live commentary lane (mechanics).** When narration is enabled (a `## Narration`
-block is present in `set-copilot prompt`), keep the private `narráció` box alive: once per reaction
+block is present in `set-copilot prompt`), keep the wall's `narráció` box alive: once per reaction
 batch, and once on each `silence` event, `wall-emit` ONE substantive line to it **directly** — no
-fork, `zone:"private"` (a single line has nothing to compose):
+fork, `zone:"both"` (a single line has nothing to compose). The line reaches the wall through the
+server-side redactor; mark internal detail `[belső]` or leave it out:
 
 ```bash
-SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"category":"narráció","zone":"private","text":"<one substantive line>"}'
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"category":"narráció","zone":"both","text":"<one substantive line>"}'
 ```
 
 - **Cadence: at most one line per batch.** Not one per transcript token, and never gated on an alert
   firing. If a batch holds nothing substantive to add, emit NOTHING — the box keeps its previous line.
   **NO FILLER**: never "listening"/"waiting", never a bare echo of the raw transcript.
 - **Separate from the alert output.** Narration does NOT replace the ⚠/📋/✏/❓ alerts — they are
-  independent channels. An alert still goes to chat exactly as before; narration is the running private
-  commentary in the wall box. Neither suppresses the other.
+  independent channels. An alert still goes to chat exactly as before (alerts are chat-only now — no
+  wall box subscribes to them); narration is the running commentary in the wall box. Neither suppresses
+  the other.
 - **What to say comes from the policy, not this file.** The `## Narration` block owns the substance and
   verbosity; this file owns only the emit + the cadence. If no `## Narration` block is present (narration
   disabled), skip this lane entirely.
@@ -314,13 +334,16 @@ emit a lightweight `pending` marker on the target category, so the box shows a �
 the real visual the fork emits replaces it, and a `ttlMs` clears it if the draw dies:
 
 ```bash
-SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"kind":"pending","category":"<category>","zone":"private","label":"rajzolom: <egy sor>"}'
+SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-copilot wall-emit '{"kind":"pending","category":"<category>","label":"rajzolom: <egy sor>"}'
 ```
 
-The pending marker is **operator feedback**: keep it `zone:"private"` by default. A public "készül…"
-caption reaches the audience wall only with a deliberate `zone` override — never emit a `both`/`public`
-pending unless you mean the audience to see it. A direct (non-fork) `wall-emit` needs no pending; the
-placeholder only earns its keep in front of the seconds a fork costs.
+The pending marker defaults to `zone:"both"` — the visible "drawing…" placeholder IS the point: a
+box that silently sits empty for a minute reads as a dead wall (measured on a cold start). Keep the
+label short, mechanical, and content-free (`rajzolom: <egy sor>` describes the work, not the content);
+the server scrubs a public-reaching label and drops the marker entirely when scrubbing does not clear
+it. A `zone:"private"` marker is still honored for a project that runs its own private view. A direct
+(non-fork) `wall-emit` needs no pending; the placeholder only earns its keep in front of the seconds a
+fork costs.
 
 **Spawn a fork only when there is something to compose.** If the content is already settled in this
 conversation, `wall-emit` it directly: measured on a live session, a fork costs 16–62 s and 47–76k
@@ -354,9 +377,11 @@ conversation is heading, and **pre-draw the likely-next visual into private stag
 draw is already done when the topic arrives. This is preparation, not prediction-on-the-wall:
 
 - **Stage privately.** The staging fork emits the predicted visual to the `előrejelzés` category with
-  `zone:"private"` and `staged:true` — it lands in the private staging box, never on the public wall. Keep
-  the mandate one line and DON'T read source for a prediction (the expensive branch) unless the private
-  mandate genuinely needs it; a guess is not worth a 60k-token source read.
+  `zone:"private"` and `staged:true` — with one public wall that displays NOWHERE until it is promoted,
+  which is exactly what makes preparation free of publication risk. There is no private staging view to
+  watch: `npx set-copilot wall-staged` is how you ask what you have prepared. Keep the mandate one line
+  and DON'T read source for a prediction (the expensive branch) unless the mandate genuinely needs it; a
+  guess is not worth a 60k-token source read.
 - **A prediction is a guess; the wall carries authority.** NEVER emit a prediction to a `both`/`public`
   zone. There is no confidence threshold that makes an unspoken guess safe to publish — a confident wrong
   prediction is the worst case. The zone model is the guarantee: staged = private, full stop.
@@ -370,9 +395,11 @@ draw is already done when the topic arrives. This is preparation, not prediction
 
   The server lifts the existing visual through the same redaction as any public event. Promotion is never
   automatic for an unspoken prediction — it is your explicit act.
-- **Let a stale guess go.** An unpromoted prediction expires on its own (the server releases it and marks
-  the private view); the conversation turned elsewhere, and a stale guess must not sit as visual noise or be
-  promoted later out of context. Don't fight the expiry — draw a fresh prediction if the topic recurs.
+- **Let a stale guess go.** An unpromoted prediction expires on its own (the server releases it). The
+  expiry is now INVISIBLE — it was private-only, and no private view ships — so do not wait to *see* a
+  guess expire; ask `wall-staged` when in doubt. The conversation turned elsewhere, and a stale guess
+  must not be promoted later out of context. Don't fight the expiry — draw a fresh prediction if the
+  topic recurs.
 
 A malformed event is dropped with a warning, never crashing capture — so mirror freely and move
 on. If no wall is running, skip the emitting — but the chat-feedback rules above (direct address,

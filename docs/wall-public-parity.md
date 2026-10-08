@@ -1,5 +1,15 @@
 # A nyilvános fal: közönség és zóna két külön tengely
 
+> **Shipped 2026-09 (`single-wall-default`).** The default config now ships ONE window —
+> the public wall on `/wall`; the private operator view is gone from the default (the
+> Claude Code session is the operator's internal view). Everything on this page about the
+> zone/audience MECHANISM still holds, and the machinery stays for a project that declares
+> its own private window (`wall.windows` still overrides wholesale). Narration is emitted
+> `zone:"both"` and arrives redaction-backed; pending markers default to `both` (visible
+> placeholder, scrubbed label); alerts are chat-only; staged predictions display nowhere
+> until promoted (`wall-staged` lists them). Option B below is now the shipped starting
+> point, not an alternative.
+
 Ez a lap arról szól, hogyan mutass **többet** a megosztott falon anélkül, hogy bármi
 biztonsági jellegűhöz hozzányúlnál. Röviden: a `boxes` a "mit mutat", a `zones` a "mit
 _szabad_ mutatnia", és az `audience` a "ki nézi". A háromból csak az utolsó kettő kapcsol

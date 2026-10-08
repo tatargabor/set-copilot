@@ -13,7 +13,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 
 import type { CategoryRegistry } from "./categories.js";
@@ -23,12 +23,13 @@ import {
 } from "./director.js";
 import { normalizeEvent, normalizePending, normalizePromote } from "./emit.js";
 import type { EventSource } from "./event-source.js";
+import { normalizeWallInput, wallInputPath } from "./input.js";
 import { compileRedactor, splitForZones, type CompiledRedactor, type EventVariants } from "./redaction.js";
 import { resolveEventCategory, windowCats, zoneMatches } from "./routing.js";
 import {
   type Audience, type DisplayEvent, type GraphDelta, type GraphEdge, type GraphNode, type Heartbeat, type LayoutSwitch, type Pacing,
   type Pending, type Promote, type RedactionConfig, type ResolvedWindow, type ShowCommand, type StageExpired,
-  type WallLayout, type WireMessage, type Zone,
+  type TranscriptPage, type WallLayout, type WallPresentation, type WireMessage, type Zone,
   isHeartbeat, isLayoutSwitch, isPending, isPromote, isShowCommand, isStageExpired, reachesPrivate, reachesPublic,
 } from "./types.js";
 
@@ -129,6 +130,8 @@ interface ZoneAccum {
   redacted: boolean;
   /** At least one delta fed this slice (an empty slice is not replayed). */
   present: boolean;
+  /** The visual's human name (wall-presentation tabs), as it reached this zone. */
+  title?: string;
 }
 
 /** The server's running accumulation of one visual, split by zone. */
@@ -193,6 +196,8 @@ export interface WallServerOptions {
   redaction?: RedactionConfig;
   /** Recent lines per `scroll` category kept for connect-time replay (default 20). */
   scrollHistory?: number;
+  /** Chrome-only presentation settings, handed to the client in the bootstrap (wall-presentation). */
+  presentation?: WallPresentation;
   /**
    * The runtime dir this wall serves (wall-liveness D1). Enables the server-derived
    * heartbeat: the capture PID lives at `<runtimeDir>/capture.pid`, checked exactly as
@@ -214,6 +219,12 @@ export interface WallServerOptions {
    * behavior, never a leak of anything.
    */
   dictationPath?: string;
+  /**
+   * The live transcript page (wall-transcript). Served only when `route` is set. Lines
+   * come from the transcript the running capture writes (`activeTranscript`), labelled
+   * by `speakers` (channel → display name, the same map the stitched transcript uses).
+   */
+  transcriptPage?: TranscriptPage & { speakers: Record<string, string> };
   /** How often the liveness heartbeat is broadcast. Default 1000 ms. */
   heartbeatMs?: number;
   /**
@@ -224,6 +235,25 @@ export interface WallServerOptions {
   stagingTtlMs?: number;
   /** How often to sweep for expired staged predictions. Default 5000 ms. */
   stagingSweepMs?: number;
+  /**
+   * Where `POST /api/input` appends (wall-input). Derived from `runtimeDir` when absent;
+   * injectable so a test can point the append at a temp file without a runtime dir.
+   */
+  inputPath?: string;
+}
+
+/** The first read of a transcript page starts this far from the end of a long meeting. */
+const TRANSCRIPT_PAGE_MAX_INITIAL_BYTES = 1_000_000;
+/** One poll never reads more than this; the page asks again for the rest. */
+const TRANSCRIPT_PAGE_MAX_CHUNK_BYTES = 2_000_000;
+
+interface TranscriptPageLine {
+  ts: number;
+  speaker: string;
+  label: string;
+  text: string;
+  cont: boolean;
+  midWord: boolean;
 }
 
 export class WallServer {
@@ -545,6 +575,7 @@ export class WallServer {
       zone,
       visual: p.visual,
       graph: { op: "reset", nodes: [...g.private.nodes.values()], edges: g.private.edges },
+      ...(g.private.title ? { title: g.private.title } : {}),
     });
   }
 
@@ -643,10 +674,33 @@ export class WallServer {
     // event, but is NOT accumulated: it is transient placeholder feedback, not replayable
     // state, so a late join never reconstructs a stale spinner (D3). Re-validated here
     // because the JSONL tailer reaches ingest without passing through `wall-emit`.
+    //
+    // Its label is producer text, and the default marker now rides `zone:"both"` — so the
+    // label passes the redactor's scrutiny here, the same guarantee the funnel below gives
+    // every display event (single-wall-default closed the last bypass). Fail-closed: a
+    // label the redactor withholds — still matching after scrubbing, or scrubbing threw —
+    // drops the MARKER, not the privacy. A vanished spinner is recoverable; a published
+    // label is not. A private-only marker keeps its raw label: its audience is the
+    // operator, and redaction observability lives there.
     if (isPending(msg)) {
       const p = normalizePending(msg);
       if (!p.ok) {
         console.warn(`[set-copilot] wall: dropping invalid pending (${p.reason})`);
+        return;
+      }
+      if (reachesPublic(p.pending.zone) && this.redactor) {
+        let label = p.pending.label;
+        try {
+          label = this.redactor.scrub(label);
+          if (this.redactor.matches(label)) {
+            console.warn(`[set-copilot] wall: dropping pending label the redactor withheld`);
+            return;
+          }
+        } catch {
+          console.warn(`[set-copilot] wall: dropping pending label — redaction failed (fail-closed)`);
+          return;
+        }
+        this.broadcastPending({ ...p.pending, label });
         return;
       }
       this.broadcastPending(p.pending);
@@ -737,8 +791,14 @@ export class WallServer {
       if (!byVisual) this.graphs.set(priv.category, (byVisual = new Map()));
       let g = byVisual.get(priv.visual);
       if (!g) byVisual.set(priv.visual, (g = { private: emptyAccum(), public: emptyAccum() }));
-      if (reachesPrivate(priv.zone)) applyDelta(g.private, priv.graph, variants.redacted);
-      if (pub?.graph && reachesPublic(pub.zone)) applyDelta(g.public, pub.graph, false);
+      if (reachesPrivate(priv.zone)) {
+        applyDelta(g.private, priv.graph, variants.redacted);
+        if (priv.title) g.private.title = priv.title;
+      }
+      if (pub?.graph && reachesPublic(pub.zone)) {
+        applyDelta(g.public, pub.graph, false);
+        if (pub.title) g.public.title = pub.title; // the scrubbed copy, never the original
+      }
       return; // graphs replay through the accumulated-visual path, not `latest`
     }
 
@@ -947,9 +1007,24 @@ export class WallServer {
     }
 
     // Current graph per paced category: the shown visual's accumulated slice as one add.
+    // The category's OTHER visuals go first, unshown, so a reloading client rebuilds its
+    // canvas tabs (wall-presentation) in arrival order; the same zone slice and the same
+    // id guard apply to each, so nothing reaches a public client that live delivery would
+    // not have sent it.
     for (const [cat, canvas] of this.canvases) {
       const shown = canvas.current?.id;
       if (!shown) continue;
+      for (const [vid, other] of this.graphs.get(cat) ?? []) {
+        if (vid === shown) continue;
+        const oacc = isPub ? other.public : other.private;
+        if (!oacc.present || (isPub && this.idMatchesRedaction(vid))) continue;
+        const oev: DisplayEvent = {
+          category: cat, zone: isPub ? "public" : "private", visual: vid, priority: "immediate",
+          graph: { op: "add", nodes: [...oacc.nodes.values()], edges: oacc.edges },
+        };
+        if (oacc.title) oev.title = oacc.title;
+        if (reaches(oev)) client.res.write(`data: ${JSON.stringify(oev)}\n\n`);
+      }
       const g = this.graphs.get(cat)?.get(shown);
       if (!g) continue;
       const acc = isPub ? g.public : g.private;
@@ -967,6 +1042,7 @@ export class WallServer {
         category: cat, zone, visual: shown, priority: "immediate",
         graph: { op: "add", nodes: [...acc.nodes.values()], edges: acc.edges },
       };
+      if (acc.title) ev.title = acc.title;
       if (!isPub && acc.redacted) ev.redaction = "redacted"; // private-view marker
       if (reaches(ev)) {
         client.res.write(`data: ${JSON.stringify(ev)}\n\n`);
@@ -985,6 +1061,66 @@ export class WallServer {
 
   private windowFor(route: string): ResolvedWindow | undefined {
     return this.opts.windows.find((w) => w.route === route);
+  }
+
+  /** Where viewer input appends: the injected test path, or the runtime dir's file. */
+  private inputPath(): string | undefined {
+    return this.opts.inputPath ?? (this.opts.runtimeDir ? wallInputPath(this.opts.runtimeDir) : undefined);
+  }
+
+  /**
+   * Receive one operator message from the wall page (wall-input).
+   *
+   * SECURITY NOTE: the wall binds 127.0.0.1 (`host ?? "127.0.0.1"` at the listen call),
+   * and that loopback bind is the WHOLE security story of this endpoint — anyone who can
+   * reach it is on the operator's machine. A future `--host 0.0.0.0` would expose a write
+   * path into the session's input file and must be a deliberate decision, not a flag flip.
+   *
+   * The append is safe without a lock: a single-process server, `appendFileSync` is
+   * O_APPEND, and nothing else writes this file (the poll only reads it and advances its
+   * own offset sidecar). The input is the viewer seam, NOT a display event: it is never
+   * broadcast to wall clients and never enters `wall-events.jsonl` — the producer's
+   * canonical log stays producers-only.
+   */
+  private handleInput(req: IncomingMessage, res: ServerResponse): void {
+    const status = (code: number, text: string) => {
+      res.writeHead(code, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(text);
+    };
+    if (req.method !== "POST") return status(405, "method not allowed — /api/input is POST-only");
+    const inputPath = this.inputPath();
+    if (!inputPath) return status(503, "no runtime dir — nowhere to append the input");
+
+    // Byte cap BEFORE parsing: a huge body is refused without ever reaching validation.
+    const MAX_BODY = 4096; // the client sends ~450; 4096 is generous room for any encoding
+    let size = 0;
+    const chunks: Buffer[] = [];
+    let overflow = false;
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > MAX_BODY) { overflow = true; chunks.length = 0; return; }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (overflow) return status(413, `body exceeds ${MAX_BODY} bytes`);
+      let text: unknown;
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf-8")) as { text?: unknown };
+        text = body.text;
+      } catch {
+        return status(400, "body is not valid JSON");
+      }
+      const checked = normalizeWallInput(text);
+      if (!checked.ok) return status(400, checked.reason);
+      try {
+        appendFileSync(inputPath, `${JSON.stringify({ ts: Date.now(), route: this.opts.windows[0]?.route ?? "/", text: checked.text })}\n`);
+      } catch (e) {
+        console.warn(`[set-copilot] wall: could not append wall input: ${(e as Error).message}`);
+        return status(500, "could not append the input");
+      }
+      res.writeHead(204);
+      res.end();
+    });
   }
 
   private handle(req: IncomingMessage, res: ServerResponse): void {
@@ -1018,18 +1154,125 @@ export class WallServer {
         window: publicWindowShape(shaped),
         categories: this.opts.registry.list(),
         heartbeatMs,
+        presentation: this.opts.presentation ?? null,
       });
+    }
+    const tp = this.opts.transcriptPage;
+    if (tp?.route) {
+      if (path === tp.route) return this.serveFile(res, join(this.opts.publicDir, "transcript.html"));
+      if (path === "/api/transcript") return this.handleTranscript(url, res, tp);
     }
     if (path === "/api/staged") {
       // Read-only (D2): the producer asks what it may promote; nothing here changes state.
       return this.json(res, { staged: this.promotable() });
     }
+    // The viewer seam (wall-input): the one route a human at the wall can write through.
+    // Everything above is GET-shaped by construction; this is the server's first POST.
+    if (path === "/api/input") return this.handleInput(req, res);
     if (path === "/media") {
       return this.serveMedia(res, url.searchParams.get("src") ?? "");
     }
     // A declared window route serves the static shell; other paths are assets.
     if (this.windowFor(path)) return this.serveFile(res, join(this.opts.publicDir, "index.html"));
+    // The root reaches the wall (single-wall-default): when no window claims `/`, serving
+    // the shell there would bootstrap-fail — the client derives its route from the
+    // pathname and no window would match. Redirect to a declared window instead, so the
+    // operator's untyped host:port lands on the wall. A window that DOES claim `/` was
+    // served above.
+    if (path === "/" && this.opts.windows.length) {
+      res.writeHead(302, { Location: this.opts.windows[0].route });
+      res.end();
+      return;
+    }
     this.serveFile(res, join(this.opts.publicDir, "." + path));
+  }
+
+  /**
+   * New transcript lines since a byte offset (wall-transcript).
+   *
+   * Polled, not streamed: the page is a reader of one append-only file, and an offset
+   * cursor makes every request idempotent — a reload, a sleep, a dropped connection all
+   * recover by asking again. `id` names the file (path + inode); when the capture starts
+   * a new one, the id changes and the page starts over instead of reading a stale cursor
+   * into the wrong file. A trailing line without its newline is still being written and
+   * is left for the next poll.
+   */
+  private handleTranscript(url: URL, res: ServerResponse, tp: TranscriptPage & { speakers: Record<string, string> }): void {
+    const file = this.activeTranscript();
+    // The page's own chrome: the wall's theme (so a studio-dark wall gets a matching
+    // transcript) and the reading order. Sent on every poll, so a config change is picked
+    // up on the next wall start without a page-side setting.
+    const view = { theme: this.opts.presentation?.theme ?? "default", order: tp.order ?? "oldest-first" };
+    const empty = { id: null, offset: 0, title: tp.title, ...view, lines: [] };
+    if (!file || !existsSync(file)) return this.json(res, empty);
+    let size: number;
+    let id: string;
+    try {
+      const st = statSync(file);
+      size = st.size;
+      id = `${file}:${st.ino}`;
+    } catch {
+      return this.json(res, empty);
+    }
+    let offset = Number(url.searchParams.get("offset") ?? "0");
+    if (!Number.isFinite(offset) || offset < 0 || offset > size || url.searchParams.get("id") !== id) offset = 0;
+    let start = offset;
+    let skipFirst = false;
+    if (start === 0 && size > TRANSCRIPT_PAGE_MAX_INITIAL_BYTES) {
+      start = size - TRANSCRIPT_PAGE_MAX_INITIAL_BYTES;
+      skipFirst = true; // a mid-line start: the first fragment is unparseable
+    }
+    const lines: TranscriptPageLine[] = [];
+    let next = start;
+    if (size > start) {
+      let buf: Buffer;
+      try {
+        const fd = openSync(file, "r");
+        try {
+          buf = Buffer.alloc(Math.min(size - start, TRANSCRIPT_PAGE_MAX_CHUNK_BYTES));
+          readSync(fd, buf, 0, buf.length, start);
+        } finally { closeSync(fd); }
+      } catch (e) {
+        console.warn(`[set-copilot] wall: transcript page could not read ${file}: ${(e as Error).message}`);
+        return this.json(res, { ...empty, id, offset });
+      }
+      const end = buf.lastIndexOf(0x0a);
+      if (end >= 0) {
+        next = start + end + 1;
+        const raw = buf.subarray(0, end).toString("utf-8").split("\n");
+        if (skipFirst) raw.shift();
+        for (const l of raw) {
+          const line = this.transcriptPageLine(l, tp);
+          if (line) lines.push(line);
+        }
+      }
+    }
+    return this.json(res, { id, offset: next, title: tp.title, ...view, lines });
+  }
+
+  /** One transcript JSONL line → what the page shows, redacted when the page asks for it. */
+  private transcriptPageLine(raw: string, tp: TranscriptPage & { speakers: Record<string, string> }): TranscriptPageLine | null {
+    let o: Record<string, unknown>;
+    try { o = JSON.parse(raw); } catch { return null; }
+    if (!o || typeof o.text !== "string" || o.final === false) return null;
+    let text = o.text;
+    if (tp.redact && this.redactor) {
+      try {
+        text = this.redactor.scrub(text);
+        if (this.redactor.matches(text)) text = this.redactor.replacement;
+      } catch {
+        text = this.redactor.replacement; // fail closed: an unscrubbable line is withheld
+      }
+    }
+    const speaker = typeof o.speaker === "string" ? o.speaker : "";
+    return {
+      ts: typeof o.ts === "number" ? o.ts : 0,
+      speaker,
+      label: tp.speakers[speaker] ?? speaker,
+      text,
+      cont: o.cont === true,
+      midWord: o.midWord === true,
+    };
   }
 
   /**

@@ -5,7 +5,9 @@ How the copilot's content mandate is scoped to an individual box — the instruc
 categories, engagement level, and drawing conventions that govern what a box emits — layered over
 the session-global `copilot.*` policy and rendered as one section per box by `set-copilot prompt`.
 A box's mandate is independent of the window-level zone that routes where its events may appear.
+
 ## Requirements
+
 ### Requirement: Policy is scopable to a box
 
 Content policy — the instructions, the alert categories, the engagement level, and the drawing
@@ -33,22 +35,23 @@ NOT require editing `src/` or a skill.
 
 ### Requirement: A box's mandate is independent of its zone
 
-A box's *mandate* (what it is for, what is worth emitting to it) SHALL be a property of the box
-(`WallBox.policy`), independent of *zone*. Zone is a property of the *window* (`WallWindow.zones`),
-not of the box: it governs where a window's events may appear. The shipped default expresses this
-through the private hint box: it checks what the speaker says against known information and surfaces
-what they may not know — contradictions, relevant context, decisions worth recording.
+A box's *mandate* (what it is for, what is worth emitting to it) SHALL be a property of the
+box (`WallBox.policy`), independent of *zone*. Zone is a property of the *window*
+(`WallWindow.zones`), not of the box: it governs where a window's events may appear. The
+shipped default expresses this through the wall's narration box: its policy says what is
+worth emitting for an audience — summarize, never raw transcript, mark internal content —
+while the window's `zones` decide where those events may appear.
 
-Zone routing SHALL remain the mechanism that decides *where* an event may appear; box policy decides
-*what is worth emitting* for that box. The two SHALL be independent: changing the zone of the window
-a box lives in SHALL NOT change the box's mandate, and changing a box's mandate SHALL NOT change any
-zone.
+Zone routing SHALL remain the mechanism that decides *where* an event may appear; box
+policy decides *what is worth emitting* for that box. The two SHALL be independent: changing
+the zone of the window a box lives in SHALL NOT change the box's mandate, and changing a
+box's mandate SHALL NOT change any zone.
 
-> A public *narration* box — the private box's counterpart, rendering the conversation for an
-> audience — was specified here originally. It moved to `wall-public-redaction`: a narration box is
-> only safe once the public zone is redacted, and that capability was deferred after an adversarial
-> pass found the redactor leaky. The independence requirement below is what that future box will
-> rely on.
+> A public *narration* box was specified here originally and moved to
+> `wall-public-redaction` once the redactor was hardened; with a single shipped wall it is
+> the default surface's text box. A private hint box (check-and-surface) remains reachable
+> by config for projects that declare a private window — as policy plus zone, never as one
+> implying the other.
 
 #### Scenario: Zone and mandate are independent
 
@@ -58,10 +61,17 @@ zone.
 
 #### Scenario: The private box's mandate is carried by policy, not by its zone
 
-- **WHEN** the private hint box is defined with an instruction to check and surface, inside a window
-  zoned `private`
-- **THEN** its instruction governs what it emits, and the window's zone governs only which display
-  clients receive it
+- **WHEN** a private hint box is defined with an instruction to check and surface, inside a
+  project-declared window zoned `private`
+- **THEN** its instruction governs what it emits, and the window's zone governs only which
+  display clients receive it
+
+#### Scenario: The wall's narration box carries an audience-facing mandate
+
+- **WHEN** the shipped wall's narration box is defined with an audience-facing instruction,
+  inside the public-audience window
+- **THEN** its instruction governs what it emits, and the window's zone governs only which
+  display clients receive it
 
 ### Requirement: The prompt renderer composes one section per box
 
@@ -83,7 +93,6 @@ today, so the output stays compact for the common case.
 
 - **WHEN** no box declares its own policy
 - **THEN** `set-copilot prompt` emits one global policy section, unchanged from today's output
-
 
 ### Requirement: A public narration box narrates processed output
 

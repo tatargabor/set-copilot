@@ -250,6 +250,57 @@ describe("capture rotation", () => {
   });
 });
 
+describe("clocks that restarted many times (transcription reconnects)", () => {
+  // Measured on a two-hour call: the mic channel's clock restarted at every reconnect and
+  // stale lines from the old stream kept arriving, while the system channel ran steadily.
+  // Sorting by those timestamps interleaved two hours into four minutes, out of order.
+  const broken = jsonl([
+    { ts: 10_000, speaker: "system", text: "Good morning." },
+    { ts: 300_000, speaker: "mic", text: "Hello everyone." },
+    { ts: 320_000, speaker: "system", text: "Let us start." },
+    { ts: 2_000, speaker: "mic", text: "First point." },
+    { ts: 600_000, speaker: "system", text: "Agreed." },
+    { ts: 900_000, speaker: "mic", text: "Stale old stream." },
+    { ts: 4_000, speaker: "mic", text: "Second point." },
+    { ts: 1_000, speaker: "mic", text: "Third point." },
+    { ts: 950_000, speaker: "mic", text: "Another stale one." },
+    { ts: 3_000, speaker: "mic", text: "Fourth point." },
+    { ts: 900_000, speaker: "system", text: "Goodbye." },
+  ]);
+
+  it("falls back to recording order and says so", () => {
+    const r = stitchText(broken, OPTS)!;
+    expect(r.sentences.map((s) => s.text)).toEqual([
+      "Good morning.", "Hello everyone.", "Let us start.", "First point.", "Agreed.",
+      "Stale old stream.", "Second point.", "Third point.", "Another stale one.", "Fourth point.",
+      "Goodbye.",
+    ]);
+    expect(r.stats.clockRepairs).toBeGreaterThan(2);
+    expect(r.markdown).toContain("Timeline repaired");
+    expect(r.markdown).not.toContain("capture rotation");
+  });
+
+  it("reads the times off the steadiest channel, so the length stays real", () => {
+    const r = stitchText(broken, OPTS)!;
+    const starts = r.sentences.map((s) => s.startTs);
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
+    expect(Math.max(...starts)).toBe(900_000);
+  });
+
+  it("leaves a single capture rotation to the ordinary repair", () => {
+    const once = jsonl([
+      { ts: 100_000, speaker: "mic", text: "Before." },
+      { ts: 110_000, speaker: "system", text: "Also before." },
+      { ts: 500, speaker: "mic", text: "After." },
+      { ts: 900, speaker: "system", text: "Also after." },
+    ]);
+    const r = stitchText(once, OPTS)!;
+    expect(r.stats.clockRepairs).toBe(2);
+    expect(r.markdown).toContain("capture rotation");
+    expect(r.markdown).not.toContain("Timeline repaired");
+  });
+});
+
 describe("edge cases", () => {
   it("is a no-op on an empty transcript", () => {
     expect(stitchText("", OPTS)).toBeNull();

@@ -29,6 +29,7 @@
  *   path <name>              print a resolved runtime path (skills use this)
  */
 
+import { maybeDetach } from "./detach.js";
 import { spawn, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import {
@@ -74,6 +75,8 @@ async function main(): Promise<void> {
     if (!reportPreflight(runConfigPreflight()) && cmd !== "doctor") process.exit(1);
   }
 
+  // `capture --detach` / `wall --detach`: outlive the tool call that started them (detach.ts).
+  if (await maybeDetach(cmd, args, process.env.SET_COPILOT_DIR || loadConfig().runtimeDir)) return;
   switch (cmd) {
     case "init": return cmdInit(args.includes("--global"), args.includes("--copy"));
     case "capture": {
@@ -1277,7 +1280,7 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    (default from a checkout: symlink, so the repo IS the skill)
                                    (--global: ~/.claude/skills + user config dir,
                                    so /ds works from any directory)
-  set-copilot capture [--mic-only] [--max-minutes N]
+  set-copilot capture [--mic-only] [--max-minutes N] [--detach]
                                    start capture (mic-only = dictation; plays the
                                    rising tone when live, self-stops after N min)
   set-copilot stop [--print]       stop the running capture (--print: also emit the
@@ -1330,7 +1333,7 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    a live capture — the copilot cannot tell. Speed 1
                                    (default) is real time and the ONLY speed whose
                                    latency figures are valid; 0 = as fast as possible
-  set-copilot wall [--port N] [--no-fake-feed]
+  set-copilot wall [--port N] [--no-fake-feed] [--detach]
                                    start the local monitor-wall display (SSE);
                                    prints window URLs. On a taken port it walks to
                                    the next free one; writes wall.pid + wall.url.

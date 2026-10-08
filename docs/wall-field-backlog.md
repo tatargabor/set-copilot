@@ -1,5 +1,13 @@
 # Wall + meeting-copilot — field backlog
 
+> **Shipped 2026-09 (`single-wall-default`).** B2 is now the shipped shape: one public
+> window by default (`/wall`), the private operator view dropped — the terminal is the
+> internal view. Narration reaches the wall `zone:"both"` (redaction-backed), pending
+> markers default to `both` (closing half of #3's placeholder ask — the cold-start
+> "drawing…" indicator), alerts are chat-only, and staged predictions display nowhere
+> until promoted. Item #8 (`wall.windows` overrides wholesale) is deliberately still
+> open — it is exactly why a project's old two-window config keeps working unchanged.
+
 Prioritized backlog distilled from **real-world use of set-copilot** in the `consumer-c`
 project (Claude Code session transcripts, 2026-07, ~4 live meetings + dictation sessions).
 Each item is a candidate `/opsx:propose` change. Ordered by impact × how often it bit.

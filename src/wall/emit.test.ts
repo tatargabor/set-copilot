@@ -208,21 +208,21 @@ describe("wire type guards (wall-liveness / wall-pending-indicator)", () => {
   });
 });
 
-describe("normalizePending (wall-pending-indicator)", () => {
-  it("defaults zone to private and ttl to the module default", () => {
+describe("normalizePending (wall-pending-indicator, single-wall-default)", () => {
+  it("defaults zone to both — the visible placeholder IS the point — and ttl to the module default", () => {
     const r = normalizePending({ kind: "pending", category: "architektúra", label: "rajzolom: adatfolyam" });
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.pending).toEqual({
-        kind: "pending", category: "architektúra", zone: "private",
+        kind: "pending", category: "architektúra", zone: "both",
         label: "rajzolom: adatfolyam", ttlMs: DEFAULT_PENDING_TTL_MS,
       });
     }
   });
 
-  it("honours an explicit zone and positive ttl", () => {
-    const r = normalizePending({ kind: "pending", category: "a", label: "x", zone: "both", ttlMs: 5000 });
-    expect(r.ok && r.pending.zone).toBe("both");
+  it("honours an explicit private zone — a project's own private view still gets one", () => {
+    const r = normalizePending({ kind: "pending", category: "a", label: "x", zone: "private", ttlMs: 5000 });
+    expect(r.ok && r.pending.zone).toBe("private");
     expect(r.ok && r.pending.ttlMs).toBe(5000);
   });
 
@@ -248,7 +248,7 @@ describe("emitWallEvents pending + heartbeat routing", () => {
     expect(res.emitted).toBe(1);
     const line = JSON.parse(readFileSync(join(dir, "wall-events.jsonl"), "utf-8").trim());
     expect(line.kind).toBe("pending");
-    expect(line.zone).toBe("private");
+    expect(line.zone).toBe("both");
     expect(line.ttlMs).toBe(DEFAULT_PENDING_TTL_MS);
   });
 

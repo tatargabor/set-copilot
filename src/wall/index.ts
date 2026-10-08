@@ -5,7 +5,9 @@
  * config windows, and attach event sources. Two sources run concurrently to
  * prove the producer-agnostic seam: the scripted fake-feed (in-process) and a
  * JSONL tailer over the runtime-dir events file (the canonical log a real
- * out-of-process producer appends to). Prints each window's name + URL.
+ * out-of-process producer appends to). Prints each resolved window's name + URL —
+ * one line for the shipped default (the single public wall, single-wall-default),
+ * more if a project declares several.
  *
  * The wall owns a small set of runtime-dir files, mirroring capture's PID
  * discipline: `wall.pid` (so `wall-stop` finds exactly this process) and
@@ -23,6 +25,7 @@ import type { CopilotConfig } from "../config.js";
 import { resolveCategories } from "./categories.js";
 import { fakeFeedSource } from "./feed-script.js";
 import { jsonlTailSource } from "./event-source.js";
+import { wallInputPath } from "./input.js";
 import { resolveWindows } from "./layout.js";
 import { WallServer } from "./server.js";
 
@@ -74,6 +77,26 @@ function rotateEventLog(cfg: CopilotConfig): void {
   console.log(`[set-copilot] wall: rotated event log aside → ${archived}`);
 }
 
+/**
+ * Reset the wall-input seam at every start (wall-input) — not only on `--reset`.
+ *
+ * The input file and its poll offset outlive the wall process in the shared runtime dir,
+ * so an offset left over from a previous meeting would silently swallow every message
+ * typed into the next one: poll would read "already seen" past lines that were never
+ * delivered. The file itself is rotated aside (rename, never truncate — the same
+ * discipline as the event log), and the offset resets to the fresh file's start.
+ */
+function resetWallInput(cfg: CopilotConfig): void {
+  const input = wallInputPath(cfg.runtimeDir);
+  if (existsSync(input) && statSync(input).size > 0) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const archived = input.replace(/\.jsonl$/, "") + `-${stamp}.jsonl`;
+    renameSync(input, archived);
+    console.log(`[set-copilot] wall: rotated wall input aside → ${archived}`);
+  }
+  writeFileSync(join(cfg.runtimeDir, "wall-input-offset"), "0");
+}
+
 /** True when a wall is already live in this runtime dir (a stale PID file does not count). */
 function liveWallPid(cfg: CopilotConfig): number | null {
   const pf = wallPidPath(cfg);
@@ -107,6 +130,9 @@ export async function runWall(cfg: CopilotConfig, opts: RunWallOptions = {}): Pr
   // fresh run. Doing it before the live-check could rotate the log out from under a
   // running wall that is still tailing it — a live log is never disturbed mid-session.
   if (opts.reset) rotateEventLog(cfg);
+  // The input seam resets on EVERY start (wall-input): its stale offset is the one trap
+  // that would silently swallow operator input in the next meeting.
+  resetWallInput(cfg);
 
   // Try the requested port, then walk forward until one binds. Concurrent sessions
   // each derive their own start port, but a collision (or a leftover socket) must
@@ -115,7 +141,7 @@ export async function runWall(cfg: CopilotConfig, opts: RunWallOptions = {}): Pr
   let port = startPort;
   for (let attempt = 0; attempt < PORT_FALLBACK_TRIES; attempt++) {
     port = startPort + attempt;
-    const candidate = new WallServer({ port, windows, layouts: cfg.wall.layouts, registry, publicDir, projectRoot: cfg.projectRoot, redaction: cfg.wall.redaction, scrollHistory: cfg.wall.scrollHistory, runtimeDir: cfg.runtimeDir, transcriptPath: cfg.transcriptOutput, dictationPath: cfg.dictationOutput, stagingTtlMs: cfg.wall.staging.ttlMs });
+    const candidate = new WallServer({ port, windows, layouts: cfg.wall.layouts, registry, publicDir, projectRoot: cfg.projectRoot, redaction: cfg.wall.redaction, scrollHistory: cfg.wall.scrollHistory, runtimeDir: cfg.runtimeDir, transcriptPath: cfg.transcriptOutput, dictationPath: cfg.dictationOutput, stagingTtlMs: cfg.wall.staging.ttlMs, presentation: cfg.wall.presentation, transcriptPage: { ...cfg.wall.transcriptPage, speakers: cfg.transcript.speakers } });
     candidate.addSource(jsonlTailSource(wallEventsPath(cfg)));
     if (opts.fakeFeed !== false) candidate.addSource(fakeFeedSource());
     try {
