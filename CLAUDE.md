@@ -150,10 +150,21 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   The vocabulary is config (`copilot.fastLane`), the mechanism is engine — the `detect.*`
   seam again. Matching is accent- and case-insensitive over Unicode letters and whole-word
   only (`restart` never opens one); the extracted instruction keeps the speaker's own text.
-  A note on the shipped defaults: `copilot` is a word nobody says mid-meeting, while
-  `start`/`stop` are ordinary speech — both bracket styles ship because both were asked
-  for, and a project whose meetings say them should drop them in config. Requiring both
-  words in order is what keeps the risk to a stray pair. The command's words also remain in
+
+  **Only an address opens a command** (`command-trigger-precision`). The original
+  defaults assumed `copilot` was "a word nobody says mid-meeting" — false in any meeting
+  *about* the copilot: one recorded meeting logged 16 `command-abandoned` and 0 commands,
+  every one the product's name used as a noun, and a remote participant's ordinary
+  "start … stop" once *completed* a false command (which the policy
+  says to execute). So an opener now counts only on `channels` (default `["mic"]` — a remote
+  participant is never the operator) and only where it **begins an utterance**
+  (`utteranceStart`): no letter or digit before it since that speaker's last `.`/`?`/`!` or a
+  pause of `utterancePauseMs`. `start` is no longer a default opener. Mic-only alone left 5 of
+  that meeting's false openings; utterance-start alone would still let a remote "Start … stop"
+  through — each rule closes what the other cannot. Measure with
+  `npx tsx scripts/fast-lane-replay.ts <transcript.jsonl> [--legacy]` (a *line*-level replay:
+  a consistent ruler for comparing rules, not the token stream the live engine saw).
+  The command's words also remain in
   the ordinary transcript line (the transcript is a record; editing it would be a lie), so
   the policy tells the copilot to act on the *event*, never on the line — otherwise one
   instruction is carried out twice.

@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_FAST_LANE } from "./config.js";
 import { FastLane, type FastLaneConfig } from "./fast-lane.js";
 
 const CFG: FastLaneConfig = {
@@ -17,6 +18,9 @@ const CFG: FastLaneConfig = {
   end: ["csináld", "stop"],
   maxSpanMs: 30_000,
   maxChars: 600,
+  channels: ["mic"],
+  utteranceStart: true,
+  utterancePauseMs: 1_500,
 };
 
 const lane = (over: Partial<FastLaneConfig> = {}) => new FastLane({ ...CFG, ...over });
@@ -59,8 +63,8 @@ describe("a bracketed command", () => {
     expect(feedAll(lane(), ["Copilot, szerintem ez jó lesz."])).toEqual([]);
   });
 
-  it("takes a command from the system channel too — the marker is explicit", () => {
-    const l = lane();
+  it("takes a command from the system channel only when the project opts it in", () => {
+    const l = lane({ channels: ["mic", "system"] });
     expect(l.feed("system", "copilot foglald össze csináld", 1, 5)).toHaveLength(1);
   });
 });
@@ -99,7 +103,7 @@ describe("an unterminated command dies out loud", () => {
 
 describe("channels and state", () => {
   it("keeps the two channels' spans apart", () => {
-    const l = lane();
+    const l = lane({ channels: ["mic", "system"] });
     l.feed("mic", "copilot rajzolj", 1, 1_000);
     expect(l.feed("system", " csináld", 2, 1_100)).toEqual([]); // not the mic's terminator
     expect(l.isOpen("mic")).toBe(true);
@@ -115,5 +119,78 @@ describe("channels and state", () => {
 
   it("emits nothing at all when the lane is disabled", () => {
     expect(feedAll(lane({ enabled: false }), ["copilot rajzolj csináld"])).toEqual([]);
+  });
+});
+
+/**
+ * Only an address opens a command (command-trigger-precision). The fixtures are invented sentences of the
+ * shapes that caused the false openings in a real meeting — the product's own name used
+ * as a noun, and a remote participant's ordinary "start … stop" — never real speech.
+ */
+describe("only an address opens a command", () => {
+  it("ignores an opener on the system channel by default — a remote speaker is not the operator", () => {
+    const l = lane();
+    expect(l.feed("system", "Copilot, draw the three layers, csináld.", 1, 5)).toEqual([]);
+    expect(l.isOpen("system")).toBe(false);
+  });
+
+  it("never completes a remote participant's ordinary start … stop", () => {
+    const l = lane({ start: ["copilot", "start"] });
+    const out = [" Start the export", " and then", " stop it there."].flatMap((p, i) => l.feed("system", p, i, 5));
+    expect(out).toEqual([]);
+  });
+
+  it("does not open on the name said mid-sentence, so no abandonment follows", () => {
+    const l = lane({ maxSpanMs: 10_000 });
+    expect(l.feed("mic", "Updated it, at the meeting copilot startup.", 1_000, 1_000)).toEqual([]);
+    expect(l.isOpen("mic")).toBe(false);
+    expect(l.feed("mic", " And then we talked for a minute.", 1_500, 70_000)).toEqual([]);
+    expect(l.close(80_000)).toEqual([]);
+  });
+
+  it("opens at the start of a sentence, after the previous one ended", () => {
+    const out = feedAll(lane(), ["Right.", " Copilot, draw the three layers,", " csináld."]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ kind: "command", text: ", draw the three layers," });
+  });
+
+  it("opens after a pause, with the marker split across tokens", () => {
+    const l = lane();
+    expect(l.feed("mic", " we discussed the plan", 1_000, 1_000)).toEqual([]);
+    // No full stop: the recogniser's punctuation is a guess. The 2 s gap is the boundary.
+    const pieces = [" Copi", "lot", " summarise it", " csináld"];
+    const out = pieces.flatMap((p, i) => l.feed("mic", p, 3_000 + i * 100, 3_000));
+    expect(out).toEqual([expect.objectContaining({ kind: "command", text: "summarise it" })]);
+  });
+
+  it("does not treat a short gap inside a sentence as an utterance start", () => {
+    const l = lane();
+    l.feed("mic", " so the meeting", 1_000, 1_000);
+    expect(l.feed("mic", " copilot runs", 1_400, 1_400)).toEqual([]);
+    expect(l.isOpen("mic")).toBe(false);
+  });
+
+  it("finds a sentence-initial opener after a mid-sentence one in the same buffer", () => {
+    const out = feedAll(lane(), ["The copilot is slow. Copilot, check it csináld"]);
+    expect(out).toEqual([expect.objectContaining({ kind: "command", text: ", check it" })]);
+  });
+
+  it("does not read a mid-speech abandonment's next word as an utterance start", () => {
+    const l = lane({ maxSpanMs: 10_000 });
+    l.feed("mic", "Copilot, draw", 1_000, 1_000);
+    expect(l.feed("mic", " and so on", 1_100, 20_000)[0]).toMatchObject({ kind: "abandoned" });
+    expect(l.feed("mic", " copilot again", 1_200, 20_100)).toEqual([]);
+  });
+
+  it("keeps the previous matching when utteranceStart is off", () => {
+    const out = feedAll(lane({ utteranceStart: false }), ["the meeting copilot draws it csináld"]);
+    expect(out).toEqual([expect.objectContaining({ kind: "command", text: "draws it" })]);
+  });
+
+  it("does not open on 'start' in ordinary speech with the shipped defaults", () => {
+    const l = new FastLane(DEFAULT_FAST_LANE);
+    const out = [" Start with the second slide.", " Then we stop."].flatMap((p, i) => l.feed("mic", p, i, 5));
+    expect(out).toEqual([]);
+    expect(l.isOpen("mic")).toBe(false);
   });
 });

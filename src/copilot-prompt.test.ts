@@ -108,7 +108,10 @@ describe("renderCopilotPrompt", () => {
 describe("spoken commands — the fast lane", () => {
   const withLane = (over = {}) => renderCopilotPrompt(cfg({
     alerts: DEFAULT_ALERTS,
-    fastLane: { enabled: true, start: ["copilot"], end: ["csináld"], maxSpanMs: 45_000, maxChars: 600, ...over },
+    fastLane: {
+      enabled: true, start: ["copilot"], end: ["csináld"], maxSpanMs: 45_000, maxChars: 600,
+      channels: ["mic"], utteranceStart: true, utterancePauseMs: 1_500, ...over,
+    },
   } as never));
 
   it("teaches the command event, that it is an instruction, and that it outranks the turn order", () => {
@@ -123,6 +126,13 @@ describe("spoken commands — the fast lane", () => {
     expect(out).toMatch(/FIGYELJ … MEHET/);
     expect(out).toContain("Opening words: figyelj");
     expect(out).not.toContain("csináld");
+  });
+
+  it("names who may open a command and where, so a missed one is explainable (command-trigger-precision)", () => {
+    expect(withLane()).toMatch(/opens only on the mic channel, and only when the opening word BEGINS/);
+    const open = withLane({ channels: ["mic", "system"], utteranceStart: false });
+    expect(open).toMatch(/opens only on the mic \/ system channels\./);
+    expect(open).not.toMatch(/BEGINS/);
   });
 
   it("warns that the raw line still carries the words, so one command is not done twice", () => {

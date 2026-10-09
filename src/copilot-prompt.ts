@@ -104,6 +104,8 @@ function renderFastLane(cfg: FastLaneConfig): string[] {
     "",
     `Opening words: ${cfg.start.join(", ")} · closing words: ${cfg.end.join(", ")}. The text between them is already extracted for you; the markers are gone.`,
     "",
+    `A command opens only on the ${cfg.channels.join(" / ")} channel${cfg.channels.length > 1 ? "s" : ""}${cfg.utteranceStart ? ", and only when the opening word BEGINS what the speaker says (\"Copilot, …\" — not \"…the meeting copilot…\")" : ""}. So if the speaker says they gave you a command and no event arrived, that is the likely reason — tell them, briefly, rather than acting on the transcript line.`,
+    "",
     "The words also stay in the ordinary transcript line that carried them — the transcript is a record of what was said, and editing it would be a lie. **Act on the event, not on the line**: treating both as work is how one instruction gets carried out twice.",
     "",
     "```json",

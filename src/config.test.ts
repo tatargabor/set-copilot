@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   loadConfig, normalizeKeywords, namePattern, isFillerMessage,
-  DEFAULT_ALERTS, DEFAULT_REDACTION, DEFAULT_FILLER_PHRASES, CONFIG_FILENAME,
+  DEFAULT_ALERTS, DEFAULT_REDACTION, DEFAULT_FILLER_PHRASES, DEFAULT_FAST_LANE, CONFIG_FILENAME,
 } from "./config.js";
 
 /** loadConfig() reads the real user config dir — point it at an empty temp dir so
@@ -663,6 +663,38 @@ describe("copilot.dictationHandoverCommand (the dictation hand-off seam)", () =>
     for (const bad of ["", "   ", 42, [], {}]) {
       writeCfg(project, { copilot: { dictationHandoverCommand: bad } });
       expect(loadConfig(project).copilot.dictationHandoverCommand).toBeUndefined();
+    }
+  });
+});
+
+describe("copilot.fastLane — who may open a command (command-trigger-precision)", () => {
+  it("ships mic-only, utterance-initial, with 'copilot' as the only opener", () => {
+    const fl = loadConfig(project).copilot.fastLane;
+    expect(fl).toEqual(DEFAULT_FAST_LANE);
+    expect(fl.start).toEqual(["copilot"]);
+    expect(fl.channels).toEqual(["mic"]);
+    expect(fl.utteranceStart).toBe(true);
+    expect(fl.utterancePauseMs).toBe(1_500);
+  });
+
+  it("lets a project override each new key", () => {
+    writeCfg(project, { copilot: { fastLane: {
+      start: ["copilot", "start"], channels: ["mic", "system"], utteranceStart: false, utterancePauseMs: 900,
+    } } });
+    const fl = loadConfig(project).copilot.fastLane;
+    expect(fl.start).toEqual(["copilot", "start"]);
+    expect(fl.channels).toEqual(["mic", "system"]);
+    expect(fl.utteranceStart).toBe(false);
+    expect(fl.utterancePauseMs).toBe(900);
+  });
+
+  it("falls back to the defaults on malformed values — an empty channel list does not disarm the lane", () => {
+    for (const channels of [[], "mic", [""], [1, null]]) {
+      writeCfg(project, { copilot: { fastLane: { channels, utteranceStart: "yes", utterancePauseMs: -5 } } });
+      const fl = loadConfig(project).copilot.fastLane;
+      expect(fl.channels).toEqual(["mic"]);
+      expect(fl.utteranceStart).toBe(true);
+      expect(fl.utterancePauseMs).toBe(1_500);
     }
   });
 });

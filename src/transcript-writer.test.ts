@@ -247,7 +247,10 @@ describe("addressing the copilot by name", () => {
 describe("the fast lane inside the writer", () => {
   // The lane reads the TOKEN stream, so these tests feed tokens the way Soniox does —
   // a leading space at a word boundary, none inside a word.
-  const LANE = { enabled: true, start: ["copilot"], end: ["csináld"], maxSpanMs: 45_000, maxChars: 600 };
+  const LANE = {
+    enabled: true, start: ["copilot"], end: ["csináld"], maxSpanMs: 45_000, maxChars: 600,
+    channels: ["mic"], utteranceStart: true, utterancePauseMs: 1_500,
+  };
   const typed = (t: string) => lines().filter((l) => (l as unknown as { type?: string }).type === t);
 
   const say = (pieces: string[], speaker: "mic" | "system" = "mic") =>

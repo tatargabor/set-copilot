@@ -698,12 +698,20 @@ function strings(v: unknown): string[] | null {
   return out.length ? out : null;
 }
 
+// `start` is NOT a default opener (command-trigger-precision): it is an ordinary verb in meeting speech,
+// and a remote participant's "start … stop" in ordinary speech once completed a false command.
+// `channels` keeps the lane to the operator's mic; `utteranceStart` keeps the copilot's
+// own name, said mid-sentence, from opening a span. Measured on a recorded meeting
+// with `npx tsx scripts/fast-lane-replay.ts`.
 export const DEFAULT_FAST_LANE: FastLaneConfig = {
   enabled: true,
-  start: ["copilot", "start"],
+  start: ["copilot"],
   end: ["csináld", "stop", "vége"],
   maxSpanMs: 45_000,
   maxChars: 600,
+  channels: ["mic"],
+  utteranceStart: true,
+  utterancePauseMs: 1_500,
 };
 
 export const DEFAULT_DRAWING_CONVENTIONS: string[] = [
@@ -1197,6 +1205,14 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         maxChars: typeof copilot.fastLane?.maxChars === "number" && copilot.fastLane.maxChars > 0
           ? copilot.fastLane.maxChars
           : DEFAULT_FAST_LANE.maxChars,
+        // An empty list falls back like `start`/`end` do: disarming is `enabled: false`.
+        channels: strings(copilot.fastLane?.channels) ?? DEFAULT_FAST_LANE.channels,
+        utteranceStart: typeof copilot.fastLane?.utteranceStart === "boolean"
+          ? copilot.fastLane.utteranceStart
+          : DEFAULT_FAST_LANE.utteranceStart,
+        utterancePauseMs: typeof copilot.fastLane?.utterancePauseMs === "number" && copilot.fastLane.utterancePauseMs > 0
+          ? copilot.fastLane.utterancePauseMs
+          : DEFAULT_FAST_LANE.utterancePauseMs,
       },
       narration: {
         // Absent key → default (on). Only an explicit `false` disables it, mirroring

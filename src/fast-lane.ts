@@ -31,6 +31,14 @@
  *    so, because a command that quietly never happened is indistinguishable from one the
  *    engine never heard, and the operator would debug the microphone.
  *
+ * 4. **Only an ADDRESS opens a command** (command-trigger-precision). In a meeting about the copilot its
+ *    own name is ordinary speech, and a remote participant's "start … stop" is ordinary
+ *    speech too: one recorded meeting logged 16 false openings and no real command.
+ *    So an opener counts only on a configured channel (default: the operator's mic) and
+ *    only where it BEGINS an utterance — nothing but punctuation before it since that
+ *    speaker's last sentence end or last pause. "Copilot, draw …" opens; "…when the
+ *    copilot started" does not.
+ *
  * Matching is accent- and case-insensitive over Unicode letters, so "CSINÁLD", "csinald"
  * and "Csináld" are one marker; the extracted instruction keeps the speaker's own text,
  * accents and all. Markers match as whole words: "restart" never opens a command.
@@ -47,6 +55,12 @@ export interface FastLaneConfig {
   maxSpanMs: number;
   /** An open span longer than this many characters is abandoned. */
   maxChars: number;
+  /** Speakers (channels) that may open a command. Any other speaker is ignored entirely. */
+  channels: string[];
+  /** When true, an opener counts only at the start of an utterance. */
+  utteranceStart: boolean;
+  /** A same-speaker gap at least this long (speech time, ms) starts a new utterance. */
+  utterancePauseMs: number;
 }
 
 export type FastLaneEvent =
@@ -111,6 +125,8 @@ export class FastLane {
   private readonly pending: Record<string, string> = {};
   /** The open span, per speaker. At most one — a second opener restarts it. */
   private readonly open: Record<string, Span | undefined> = {};
+  /** Speech time of the speaker's previous piece — the pause clock for utterance starts. */
+  private readonly lastTs: Record<string, number> = {};
 
   constructor(cfg: FastLaneConfig) {
     this.cfg = cfg;
@@ -127,8 +143,13 @@ export class FastLane {
    */
   feed(speaker: string, text: string, ts: number, now: number): FastLaneEvent[] {
     if (!this.cfg.enabled || !text) return [];
+    // A channel that may not address the copilot touches no state at all: a remote
+    // participant can never be the operator, and a COMPLETED false command is executed.
+    if (!this.cfg.channels.includes(speaker)) return [];
     const out: FastLaneEvent[] = [];
     let span = this.open[speaker];
+    const prevTs = this.lastTs[speaker];
+    this.lastTs[speaker] = ts;
 
     if (span) {
       span.text += text;
@@ -151,7 +172,9 @@ export class FastLane {
           : null;
       if (reason) {
         this.open[speaker] = undefined;
-        this.pending[speaker] = "";
+        // The speaker is mid-speech when a cap fires: their next word is not an
+        // utterance start, so the buffer must not look like one.
+        this.pending[speaker] = MID_SPEECH;
         out.push({ kind: "abandoned", speaker, partial: span.text.trim(), reason, startTs: span.startTs, ts });
       }
       return out;
@@ -159,18 +182,24 @@ export class FastLane {
 
     // No span open: watch for an opener. The pending buffer is bounded so a meeting
     // with no command in it never grows memory — a marker is a word, not a paragraph.
-    const buf = (this.pending[speaker] ?? "") + text;
-    const folded = fold(buf);
-    const opens = findAny(folded, this.cfg.start);
+    // A pause is an utterance boundary: what was said before it cannot precede an opener.
+    const paused = prevTs !== undefined && ts - prevTs >= this.cfg.utterancePauseMs;
+    const buf = (this.cfg.utteranceStart && paused ? "" : this.pending[speaker] ?? "") + text;
+    const opens = this.cfg.utteranceStart
+      ? utteranceOpener(buf, this.cfg.start)
+      : findAny(fold(buf), this.cfg.start) >= 0 ? 0 : -1;
     if (opens >= 0) {
-      this.open[speaker] = { text: cutAfterMarker(buf, this.cfg.start), startTs: ts, openedAt: now };
+      const rest = this.cfg.utteranceStart ? buf.slice(opens) : cutAfterMarker(buf, this.cfg.start);
+      this.open[speaker] = { text: rest, startTs: ts, openedAt: now };
       this.pending[speaker] = "";
       // The opener and closer can arrive in the SAME piece ("copilot rajzolj csináld"),
       // so the just-opened span is examined at once rather than waiting for more speech
       // that may never come.
       return this.closeIfClosed(speaker, ts);
     }
-    this.pending[speaker] = buf.slice(-MAX_PENDING);
+    // Truncating must not manufacture an utterance start: a tail that happens to begin
+    // with the marker was preceded by speech, so a placeholder word stands in for it.
+    this.pending[speaker] = buf.length > MAX_PENDING ? MID_SPEECH + buf.slice(-MAX_PENDING) : buf;
     return out;
   }
 
@@ -201,6 +230,35 @@ export class FastLane {
 
 /** Enough to hold any plausible marker plus the fragments around it. */
 const MAX_PENDING = 200;
+
+/**
+ * A placeholder word standing for speech the buffer no longer holds. Prefixed where the
+ * buffer is reset or truncated MID-utterance, so an opener right after it is correctly
+ * read as mid-sentence. Any letter works; it never reaches an instruction's text.
+ */
+const MID_SPEECH = "x ";
+
+/**
+ * The raw index just past the first start marker that BEGINS an utterance, or -1.
+ *
+ * "Begins" means no letter or digit between the last sentence terminator before it and
+ * the marker itself — punctuation and whitespace ("…kész. — Copilot,") do not count.
+ * Raw words are walked and folded one by one, as `sliceAtMarker` does, so the index is a
+ * raw one. A marker said mid-sentence is skipped, not fatal: the same buffer may still
+ * hold a sentence-initial one further on.
+ */
+function utteranceOpener(raw: string, markers: string[]): number {
+  const folded = markers.map((m) => fold(m).trim()).filter(Boolean);
+  const re = /[\p{L}\p{N}]+/gu;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    if (!folded.includes(fold(m[0]).trim())) continue;
+    const before = raw.slice(0, m.index);
+    const sentenceEnd = Math.max(before.lastIndexOf("."), before.lastIndexOf("?"), before.lastIndexOf("!"));
+    if (!/[\p{L}\p{N}]/u.test(before.slice(sentenceEnd + 1))) return m.index + m[0].length;
+  }
+  return -1;
+}
 
 /** The raw text AFTER the earliest start marker in it. */
 function cutAfterMarker(raw: string, markers: string[]): string {
