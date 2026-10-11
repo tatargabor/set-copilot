@@ -34,6 +34,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set-hook-question-relay",
+            "timeout": 3600
+          }
+        ]
       }
     ],
     "PostToolUse": [],
