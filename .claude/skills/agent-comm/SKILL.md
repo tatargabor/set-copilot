@@ -90,9 +90,9 @@ rested on it.
 
 ## Address a seat, not a project
 
-`to: ["wpc-atlas"]` reaches every session of that project, on every machine — four open sessions
+`to: ["my-project"]` reaches every session of that project, on every machine — four open sessions
 means four interruptions, and at least three of them are not the one you meant. `to:
-["wpc-atlas#3f9c1a20"]` reaches the one you are actually talking to. Use the project name only when
+["my-project#3f9c1a20"]` reaches the one you are actually talking to. Use the project name only when
 you genuinely mean all of them.
 
 A name that is in no room fails the send — it never becomes a message nobody wakes for — and
@@ -133,8 +133,8 @@ interrupt you, so a stale `focus` costs you either way.
 ## A name with `@` is on another machine
 
 ```
-wpc-atlas#3f9c1a20            here    → unforgeable: it is a directory plus a session id
-wpc-atlas@macmini#7b02e5d1    remote  → only as good as the device token behind it
+my-project#3f9c1a20            here    → unforgeable: it is a directory plus a session id
+my-project@macmini#7b02e5d1    remote  → only as good as the device token behind it
 ```
 
 A remote participant sees **none of your files** — do not point it at a path and expect it to

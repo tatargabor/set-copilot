@@ -325,7 +325,7 @@ export interface DetectionConfig {
  * working in Portuguese must be able to replace it without touching `src/`.
  */
 export interface TranscriptConfig {
-  /** Channel → display name in the readable transcript ("mic" → "Gábor") */
+  /** Channel → display name in the readable transcript ("mic" → "Host") */
   speakers: Record<string, string>;
   /** Produce the readable + structured artifacts at stop (default true) */
   stitchOnStop: boolean;

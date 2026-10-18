@@ -63,14 +63,14 @@ SHALL NOT apply a heuristic to a join that carries these fields.
 
 #### Scenario: A mid-word cut is rejoined seamlessly
 
-- **WHEN** a line ending `…az árajánlattól a speci` is followed by a `cont` + `midWord`
-  line starting `fikációig, izé, minden.`
-- **THEN** the joined text reads `…az árajánlattól a specifikációig, izé, minden.` with no
+- **WHEN** a line ending `…a hétfőtől a pénte` is followed by a `cont` + `midWord`
+  line starting `kig, izé, minden.`
+- **THEN** the joined text reads `…a hétfőtől a péntekig, izé, minden.` with no
   separator inserted at the boundary
 
 #### Scenario: A word-boundary cut is rejoined with a space
 
-- **WHEN** a line ending `…nekünk Google Drive-on` is followed by a `cont` line without
+- **WHEN** a line ending `…nálunk a heti tervezésen` is followed by a `cont` line without
   `midWord`
 - **THEN** the two parts are joined with exactly one space
 
@@ -86,7 +86,7 @@ these hold SHALL it join without a separator.
 
 #### Scenario: A complete function word forces a space
 
-- **WHEN** a legacy join has `…van` on one side and `összehalmozva` on the other, and `van`
+- **WHEN** a legacy join has `…van` on one side and `összeállítva` on the other, and `van`
   is in the complete-word list
 - **THEN** the parts are joined with a space, not concatenated
 

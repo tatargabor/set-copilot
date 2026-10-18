@@ -23,30 +23,30 @@
 A `consumer-f` projektben egy ügyfél-tény **elveszett a feldolgozási láncban**, és csak
 két héttel később, véletlenül került elő.
 
-A 2026-07-14-i ügyfélhívásban a másik fél (`system` csatorna) elmondta, hogy hol tárolják a
-céges anyagaikat. A capture ezt **hat sorra darabolva** írta ki, közé ékelve a `mic` csatorna
+A 2026-07-14-i ügyfélhívásban a másik fél (`system` csatorna) elmondott egy, a projekt
+szempontjából fontos tényt. A capture ezt **hat sorra darabolva** írta ki, közé ékelve a `mic` csatorna
 párhuzamos mondatait:
 
 ```
-56520 system  cuccot, mert ugye nekünk Google Drive-on
-58560 system  izé, több gigányi iz
-60540 system  é, doksi van összehalmozva,
+56520 system  dolgot, mert ugye nálunk a heti tervezésen
+58560 system  izé, sok apró fel
+60540 system  adat, ötlet kerül elő,
 62520 system  hogy teljesen vegyesen, teh
-64560 system  át így az árajánlattól a speci
-66180 system  fikációig, izé, minden.
+64560 system  át így a hétfőtől a pénte
+66180 system  kig, izé, minden.
 ```
 
-Összefűzve ez egyetlen mondat:
+Összefűzve ez egyetlen mondat (szemléltető, kitalált szöveg — az eredeti ügyfél-mondat nem
+kerül a repóba, csak a darabolás alakja):
 
-> „…mert ugye nekünk Google Drive-on több gigányi doksi van összehalmozva, teljesen vegyesen,
-> tehát így az árajánlattól a specifikációig, minden."
+> „…mert ugye nálunk a heti tervezésen sok apró feladat, ötlet kerül elő, teljesen vegyesen,
+> tehát így a hétfőtől a péntekig, minden."
 
 A jegyzetelő lépés (LLM, nyers `.jsonl`-ből) ezt **nem ismerte fel** — se a szűrt
 meeting-jegyzetbe, se a knowledge-wikibe nem került be. Két hét múlva ugyanennek a projektnek
-a demója **pont ezen a kérdésen állt** („van-e valódi minta-dokumentum az ügyféltől, vagy mock
-adaton fut a demó"), miközben a válasz végig ott volt a felvételben.
+a demója **pont ezen a tényen állt**, miközben a válasz végig ott volt a felvételben.
 
-Figyeld meg a `speci` + `fikációig` határt: ez **szó közbeni vágás**, tehát az összefűzésnek
+Figyeld meg a `pénte` + `kig` határt: ez **szó közbeni vágás**, tehát az összefűzésnek
 szeparátor nélkül kell ragasztania. A `hogy teljesen vegyesen, teh` + `át` ugyanez.
 
 ### A hiba nem a capture-ben van (már)
@@ -84,7 +84,7 @@ Nyers `.jsonl` → olvasható, AI-barát `.md`. Minimum felület:
 
 ```bash
 set-copilot transcript [--input <jsonl|mappa>] [--out <md>]
-                       [--speakers mic=Gábor,system=Robi] [--redact <json>] [--stats]
+                       [--speakers mic=Host,system=Partner] [--redact <json>] [--stats]
 ```
 
 - `--input` elhagyható: alapból a runtime dir utolsó archivált transzkriptje (a `handover.ts`
@@ -153,7 +153,7 @@ Ez a `consumer-c` projektben készült ad hoc, és pontosan ezt a három dolgot 
    a régi felvételekhez akkor is kell.)
 
 További, átvehető képességek ugyanonnan: `markOverlaps()` (átfedő megszólalás jelölése `⇄`),
-`hhmmss` időbélyeges markdown-render `**[00:01:05] Gábor:**` formában, redakciós ablakok
+`hhmmss` időbélyeges markdown-render `**[00:01:05] Host:**` formában, redakciós ablakok
 (`--redact`) kivágása indoklással.
 
 **Portolási feladat:** `src/transcript-build.ts` (TS, strict), a `cli.ts`-be egy `case
@@ -170,7 +170,7 @@ További, átvehető képességek ugyanonnan: `markOverlaps()` (átfedő megszó
    `meeting-copilot` skill `stop` szakasza is a `.md`-re mutasson.
 2. **Egycsatornás (`--mic-only`) felvételre is fusson.** A diktálásnál is darabolódnak a
    mondatok (80 token / 3 mp csend), csak nincs keresztcsatornás vágás.
-3. **A `speakers` térkép jöjjön configból** (`transcript.speakers: {"mic": "Gábor"}`), CLI-ből
+3. **A `speakers` térkép jöjjön configból** (`transcript.speakers: {"mic": "Host"}`), CLI-ből
    felülírhatóan — a `mic`/`system` címke önmagában olvashatatlan egy jegyzetben.
 4. **Ne veszítsen információt.** A `.md` mellett érdemes megfontolni egy stitchelt `.jsonl`-t
    is (mondatonként egy sor, `startTs`/`endTs`/`speaker`/`overlap`), hogy a gépi fogyasztók ne
@@ -194,15 +194,15 @@ További, átvehető képességek ugyanonnan: `markOverlaps()` (átfedő megszó
   csatornánál nem a beszéd sorrendje.
 - **Ne kerüljön ügyfél-transzkript a repóba.** A `docs/PRE-PUBLISH.md` szellemében a
   regressziós fixture legyen **szintetikus**, a fenti hibaalakot reprodukálva
-  (`…a speci` + `fikációig…` szó közbeni határ, keresztcsatornás beékelődéssel). A valódi
+  (`…a pénte` + `kig…` szó közbeni határ, keresztcsatornás beékelődéssel). A valódi
   felvételek a `consumer-f` / `set-promo` repókban maradnak.
 
 ---
 
 ## 6. Elfogadási kritériumok
 
-1. A szintetikus fixture-ön a hat töredékből **egy** mondat áll elő, a `speci|fikációig`
-   határon **szeparátor nélkül**, a `Drive-on|több` határon szóközzel.
+1. A szintetikus fixture-ön a hat töredékből **egy** mondat áll elő, a `pénte|kig`
+   határon **szeparátor nélkül**, a `tervezésen|sok` határon szóközzel.
 2. `--stats` kiírja az egzakt vs. tippelt szóhatárok számát; a `cont`/`midWord`-öt hordozó
    (fix utáni) bemeneten a **tippelt = 0**.
 3. Kétcsatornás bemeneten a mondatok `startTs` szerint vannak időrendben, nem `ts` szerint.
@@ -228,7 +228,7 @@ További, átvehető képességek ugyanonnan: `markOverlaps()` (átfedő megszó
 | Mi | Hol |
 |---|---|
 | Referencia-implementáció | `~/code/consumer-c/scripts/meeting-transcript-build.mjs` |
-| Kiváltó felvétel (nyers, ügyfél-adat) | `~/code2/set-promo/docs/sales/clients/black-belt/meeting-notes/2026-07-14-csakany-robi-copilot-raw-part1.jsonl` |
+| Kiváltó felvétel (nyers, ügyfél-adat) | `<consumer>/meeting-notes/2026-07-14-<meeting>-copilot-raw-part1.jsonl` |
 | Fix utáni mért felvétel | `~/code/consumer-c/.set/copilot/326821d8-…/transcript-2026-07-27T07-28-35-205Z.jsonl` |
 | A hiba felfedezése (meeting) | `~/code/consumer-f/.set/copilot/6384c1bc-…/transcript-2026-07-27T12-22-47-907Z.jsonl` |
 | Érintett forrásfájlok | `src/cli.ts` (`cmdStop`), `src/handover.ts`, `src/transcript-writer.ts`, `src/config.ts` |

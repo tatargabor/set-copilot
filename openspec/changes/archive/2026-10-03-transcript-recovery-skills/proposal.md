@@ -5,7 +5,7 @@
 the lost knowledge was judgement, and it lived entirely in one operator's head:
 
 - **Finding the inputs.** The originating recording was named
-  `2026-07-14-csakany-robi-copilot-raw-part1.jsonl` — not `transcript*`, so the directory
+  `2026-07-14-<meeting>-copilot-raw-part1.jsonl` — not `transcript*`, so the directory
   scan skips it and only a glob finds it.
 - **Reading the quality signal.** `guessed=0` means the reconstruction is exact.
   `guessed=322, glued=136` means most word boundaries were inferred and the result should be

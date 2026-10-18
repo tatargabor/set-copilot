@@ -14,15 +14,15 @@ const jsonl = (rows: unknown[]): string => rows.map((r) => JSON.stringify(r)).jo
  * so the sentence is invented; only the boundary shape is reproduced.
  */
 const SIX_FRAGMENTS: unknown[] = [
-  { ts: 56520, startTs: 54000, speaker: "system", text: "cuccot, mert ugye nekünk Google Drive-on", final: true, partial: true },
+  { ts: 56520, startTs: 54000, speaker: "system", text: "dolgot, mert ugye nálunk a heti tervezésen", final: true, partial: true },
   { ts: 57000, speaker: "mic", text: "Aha.", final: true },
-  { ts: 58560, startTs: 57200, speaker: "system", text: "több gigányi ir", final: true, partial: true, cont: true },
+  { ts: 58560, startTs: 57200, speaker: "system", text: "sok apró fel", final: true, partial: true, cont: true },
   { ts: 59000, speaker: "mic", text: "Mhm.", final: true },
-  { ts: 60540, startTs: 59100, speaker: "system", text: "at, doksi van összehalmozva,", final: true, partial: true, cont: true, midWord: true },
+  { ts: 60540, startTs: 59100, speaker: "system", text: "adat, ötlet kerül elő,", final: true, partial: true, cont: true, midWord: true },
   { ts: 62520, startTs: 60900, speaker: "system", text: "hogy teljesen vegyesen, teh", final: true, partial: true, cont: true },
   { ts: 63000, speaker: "mic", text: "Igen, értem.", final: true },
-  { ts: 64560, startTs: 62800, speaker: "system", text: "át így az árajánlattól a speci", final: true, partial: true, cont: true, midWord: true },
-  { ts: 66180, startTs: 64800, speaker: "system", text: "fikációig, izé, minden.", final: true, cont: true, midWord: true },
+  { ts: 64560, startTs: 62800, speaker: "system", text: "át így a hétfőtől a pénte", final: true, partial: true, cont: true, midWord: true },
+  { ts: 66180, startTs: 64800, speaker: "system", text: "kig, izé, minden.", final: true, cont: true, midWord: true },
 ];
 
 /** The same six fragments as a pre-`a30d12f` recording: no cont/midWord/startTs at all. */
@@ -42,14 +42,14 @@ describe("the six fragments become one sentence", () => {
   });
 
   it("joins the mid-word cuts with NO separator", () => {
-    expect(system[0]!.text).toContain("specifikációig");
-    expect(system[0]!.text).toContain("irat");
+    expect(system[0]!.text).toContain("péntekig");
+    expect(system[0]!.text).toContain("feladat");
     expect(system[0]!.text).toContain("tehát");
-    expect(system[0]!.text).not.toContain("speci fikációig");
+    expect(system[0]!.text).not.toContain("pénte kig");
   });
 
   it("joins the word-boundary cut with a single space", () => {
-    expect(system[0]!.text).toContain("Drive-on több");
+    expect(system[0]!.text).toContain("tervezésen sok");
   });
 
   it("keeps the interleaved backchannel as separate mic sentences", () => {
@@ -118,9 +118,9 @@ describe("the heuristic fallback (recordings without cont/midWord)", () => {
 
   it("still heals the mid-word cut it has no evidence for", () => {
     const result = stitchText(jsonl(legacy(SIX_FRAGMENTS)), OPTS)!;
-    // "speci" + "fikációig": ends in a letter, resumes lowercase, short pause, neither
+    // "pénte" + "kig": ends in a letter, resumes lowercase, short pause, neither
     // half is a complete word — the only case the heuristic glues.
-    expect(result.sentences.find((s) => s.speaker === "system")!.text).toContain("specifikációig");
+    expect(result.sentences.find((s) => s.speaker === "system")!.text).toContain("péntekig");
   });
 
   const twoFragments = (a: string, b: string, gapMs: number): string =>
@@ -130,8 +130,8 @@ describe("the heuristic fallback (recordings without cont/midWord)", () => {
     ]);
 
   it("a complete function word on either side forces a space", () => {
-    const r = stitchText(twoFragments("a doksi van", "összehalmozva.", 500), OPTS)!;
-    expect(r.sentences[0]!.text).toBe("a doksi van összehalmozva.");
+    const r = stitchText(twoFragments("a lista van", "összeállítva.", 500), OPTS)!;
+    expect(r.sentences[0]!.text).toBe("a lista van összeállítva.");
   });
 
   it("a pause of at least pauseGapMs forces a space", () => {
@@ -155,15 +155,15 @@ describe("the heuristic fallback (recordings without cont/midWord)", () => {
 
   it("an empty completeWords list means 'never guess' — every unmarked join takes a space", () => {
     const r = stitchText(jsonl(legacy(SIX_FRAGMENTS)), { completeWords: [], pauseGapMs: 0 })!;
-    expect(r.sentences.find((s) => s.speaker === "system")!.text).toContain("speci fikációig");
+    expect(r.sentences.find((s) => s.speaker === "system")!.text).toContain("pénte kig");
     expect(r.stats.healed).toBe(0);
   });
 
   it("matches accented words as whole words (Unicode boundaries, not \\b)", () => {
     // "illetve" is in the list; if `\b` or a Latin-only class were used, the accented
     // neighbour would break the match and the pair would glue.
-    const r = stitchText(twoFragments("végül illetve", "árajánlat.", 500), OPTS)!;
-    expect(r.sentences[0]!.text).toBe("végül illetve árajánlat.");
+    const r = stitchText(twoFragments("végül illetve", "ábra.", 500), OPTS)!;
+    expect(r.sentences[0]!.text).toBe("végül illetve ábra.");
   });
 });
 
@@ -198,10 +198,10 @@ describe("ordering across two channels", () => {
         { ts: 10000, startTs: 1000, speaker: "system", text: "Hosszan beszélek." },
         { ts: 5000, startTs: 4000, speaker: "mic", text: "Közbevágok." },
       ]),
-      { ...OPTS, speakers: { mic: "Gábor" } },
+      { ...OPTS, speakers: { mic: "Host" } },
     )!;
     expect(r.sentences.every((s) => s.overlap)).toBe(true);
-    expect(r.markdown).toContain("Gábor ⇄");
+    expect(r.markdown).toContain("Host ⇄");
     // An unmapped channel falls back to its raw name rather than vanishing.
     expect(r.markdown).toContain("system ⇄");
   });

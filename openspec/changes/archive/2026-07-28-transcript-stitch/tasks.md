@@ -50,11 +50,11 @@
 ## 4. Unit tests (`src/transcript-build.test.ts`)
 
 - [x] 4.1 Write the synthetic fixture reproducing the failure shape: six `system` fragments
-      with `mic` lines interleaved, including a `cont`+`midWord` join (`…a speci` +
-      `fikációig`) and a `cont`-without-`midWord` join (`…Drive-on` + `több`). Synthetic
+      with `mic` lines interleaved, including a `cont`+`midWord` join (`…a pénte` +
+      `kig`) and a `cont`-without-`midWord` join (`…tervezésen` + `sok`). Synthetic
       only — no client transcript in the repo.
-- [x] 4.2 The six fragments produce ONE sentence; `speci|fikációig` joins with no separator,
-      `Drive-on|több` joins with a space.
+- [x] 4.2 The six fragments produce ONE sentence; `pénte|kig` joins with no separator,
+      `tervezésen|sok` joins with a space.
 - [x] 4.3 On the `cont`/`midWord`-carrying fixture, guessed boundaries = 0.
 - [x] 4.4 Legacy fixture (no `cont`/`midWord`): the complete-word rule forces a space, a gap
       ≥ `pauseGapMs` forces a space, an uppercase/digit start forces a space, and only the

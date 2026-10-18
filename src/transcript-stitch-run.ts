@@ -131,7 +131,7 @@ export function resolveInputs(pattern: string, cwd = process.cwd()): string[] {
   return [abs];
 }
 
-/** `mic=Gábor,system=Robi` → a speaker map. Malformed pairs are skipped, not fatal. */
+/** `mic=Host,system=Partner` → a speaker map. Malformed pairs are skipped, not fatal. */
 export function parseSpeakerMap(spec: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const pair of spec.split(",")) {

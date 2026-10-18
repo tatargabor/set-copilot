@@ -24,7 +24,7 @@ to run it.
 - **New `set-copilot transcript` command** — post-processes raw transcript JSONL into a
   readable, AI-friendly Markdown transcript plus a sentence-level structured JSONL:
   `--input` (file, directory, or glob; defaults to the runtime dir's last archived
-  transcript), `--out`, `--speakers mic=Gábor,system=Robi`, `--redact <json>`, `--stats`.
+  transcript), `--out`, `--speakers mic=Host,system=Partner`, `--redact <json>`, `--stats`.
 - **New `src/transcript-build.ts`** — the reconstruction engine, ported from the proven
   reference implementation in `consumer-c`: per-channel rebuild → sentence split →
   chronological merge on `startTs`, exact word-boundary decisions from `cont`/`midWord`

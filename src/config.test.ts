@@ -575,22 +575,22 @@ describe("transcript config (the stitch seam)", () => {
 
   it("a project replaces completeWords and speakers without restating the rest", () => {
     writeCfg(project, {
-      transcript: { completeWords: ["e", "o", "que"], speakers: { mic: "Gábor", system: "Robi" } },
+      transcript: { completeWords: ["e", "o", "que"], speakers: { mic: "Host", system: "Partner" } },
     });
     const t = loadConfig(project).transcript;
     expect(t.completeWords).toEqual(["e", "o", "que"]);
-    expect(t.speakers).toEqual({ mic: "Gábor", system: "Robi" });
+    expect(t.speakers).toEqual({ mic: "Host", system: "Partner" });
     // untouched keys keep their defaults
     expect(t.stitchOnStop).toBe(true);
     expect(t.pauseGapMs).toBe(2500);
   });
 
   it("merges key by key over the user-level config", () => {
-    writeCfg(userHome, { transcript: { speakers: { mic: "Gábor" }, pauseGapMs: 4000 } });
+    writeCfg(userHome, { transcript: { speakers: { mic: "Host" }, pauseGapMs: 4000 } });
     writeCfg(project, { transcript: { stitchOnStop: false } });
     const t = loadConfig(project).transcript;
     expect(t.stitchOnStop).toBe(false);
-    expect(t.speakers).toEqual({ mic: "Gábor" });
+    expect(t.speakers).toEqual({ mic: "Host" });
     expect(t.pauseGapMs).toBe(4000);
   });
 
@@ -608,12 +608,12 @@ describe("transcript config (the stitch seam)", () => {
 
   it("drops malformed entries back to defaults", () => {
     writeCfg(project, {
-      transcript: { completeWords: "nem lista", pauseGapMs: -1, speakers: { mic: 42, system: "Robi" } },
+      transcript: { completeWords: "nem lista", pauseGapMs: -1, speakers: { mic: 42, system: "Partner" } },
     });
     const t = loadConfig(project).transcript;
     expect(t.completeWords).toContain("illetve");
     expect(t.pauseGapMs).toBe(2500);
-    expect(t.speakers).toEqual({ system: "Robi" });
+    expect(t.speakers).toEqual({ system: "Partner" });
   });
 });
 

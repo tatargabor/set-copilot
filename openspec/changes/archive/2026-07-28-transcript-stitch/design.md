@@ -178,7 +178,7 @@ argument parsing live in `cli.ts`. That split is what keeps the module testable 
   *time-window* cut supplied per run — deliberately not the wall's pattern-based
   `wall.redaction`, which solves a different problem (an open payload published live).
 - **Regression fixtures could leak client data** → The fixture is synthetic, hand-written to
-  reproduce the failure shape (`…a speci` + `fikációig…` mid-word boundary with cross-channel
+  reproduce the failure shape (`…a pénte` + `kig…` mid-word boundary with cross-channel
   interleaving). Real recordings stay in the `consumer-f` / `set-promo` repos.
 
 ## Migration Plan
