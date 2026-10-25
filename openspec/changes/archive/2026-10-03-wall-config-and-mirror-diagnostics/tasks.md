@@ -8,7 +8,7 @@
 
 ## 2. Tests for the pure layer
 
-- [x] 2.1 `src/diagnostics.test.ts`: keywords declared 15 / effective 0 (the real 2026-07-28 `set-promo` value) reports both counts and the expected shape.
+- [x] 2.1 `src/diagnostics.test.ts`: keywords declared 15 / effective 0 (the real 2026-07-28 `consumer-p` value) reports both counts and the expected shape.
 - [x] 2.2 Unknown key by name; a config with only known keys yields no finding.
 - [x] 2.3 `runtimeDir` in file + env set → one `info` finding naming env as the winner; env unset → no finding.
 - [x] 2.4 Missing `wall` section is `info`, never `warn`.
@@ -38,6 +38,6 @@
 ## 6. Verify
 
 - [x] 6.1 `npm run build` clean under `tsc` strict; `npm test` green.
-- [x] 6.2 Run `set-copilot doctor` against `~/code2/set-promo` (the project that failed) and confirm it reports: stale mtime, missing `wall` section, keywords 15→0, `runtimeDir` overridden, and hook not registered.
+- [x] 6.2 Run `set-copilot doctor` against the consumer project `consumer-p` (the project that failed) and confirm it reports: stale mtime, missing `wall` section, keywords 15→0, `runtimeDir` overridden, and hook not registered.
 - [x] 6.3 Run `set-copilot doctor --mirror` in the same project and confirm a non-zero exit with the install command in the message; then in a project with the hook installed confirm exit 0. (This repo turned out to have no `.claude/hooks/` either — `init` was never run here — so the exit-0 branch was verified against a scratch project rather than by installing the hook into this one, which task 6.4 requires to stay unmodified.)
 - [x] 6.4 Confirm no config or `settings.json` file was modified by any of the above (`git status` + mtime check on the user-level files).

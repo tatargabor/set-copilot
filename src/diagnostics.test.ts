@@ -18,7 +18,7 @@ const file = (path: string, data: Record<string, unknown>) => ({ path, data });
 
 describe("diagnoseConfig — keywords", () => {
   it("reports declared and effective counts when a flat string list normalizes to zero", () => {
-    // The real 2026-07-28 set-promo value: 15 bare strings, none with topic/stems.
+    // The real 2026-07-28 consumer-p value: 15 bare strings, none with topic/stems.
     const keywords = [
       "raketa", "promo", "kampány", "ügyfél", "árazás", "határidő", "szállítás",
       "raktár", "számla", "ajánlat", "szerződés", "partner", "termék", "kedvezmény", "logisztika",

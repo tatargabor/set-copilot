@@ -1,7 +1,7 @@
 ## Why
 
 `transcript-stitch` shipped the mechanism. Running it for real — across `consumer-f` and
-`set-promo` — showed that the mechanism is the easy part. The work that actually recovered
+`consumer-p` — showed that the mechanism is the easy part. The work that actually recovered
 the lost knowledge was judgement, and it lived entirely in one operator's head:
 
 - **Finding the inputs.** The originating recording was named

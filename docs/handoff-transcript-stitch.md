@@ -119,7 +119,7 @@ legyen. Nagyságrend (5 projekt, 2026-07-27-i állapot):
 | Projekt | Transzkript-fájl |
 |---|---|
 | `consumer-a` | 179 |
-| `set-promo` | 38 |
+| `consumer-p` | 38 |
 | `consumer-c` | 29 |
 | `set-designer` | 8 |
 | `consumer-f` | 4 |
@@ -195,7 +195,7 @@ További, átvehető képességek ugyanonnan: `markOverlaps()` (átfedő megszó
 - **Ne kerüljön ügyfél-transzkript a repóba.** A `docs/PRE-PUBLISH.md` szellemében a
   regressziós fixture legyen **szintetikus**, a fenti hibaalakot reprodukálva
   (`…a pénte` + `kig…` szó közbeni határ, keresztcsatornás beékelődéssel). A valódi
-  felvételek a `consumer-f` / `set-promo` repókban maradnak.
+  felvételek a `consumer-f` / `consumer-p` repókban maradnak.
 
 ---
 

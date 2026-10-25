@@ -4,7 +4,7 @@ Two live meetings degraded silently on 2026-07-28, and in both cases the machine
 *could* have said so. Evidence in `docs/wall-field-backlog.md` §A1–A2, verified against
 the project that ran the wall:
 
-- `set-promo/set-copilot.config.json` is dated 2026-07-13, has **no `wall` section**,
+- `consumer-p/set-copilot.config.json` is dated 2026-07-13, has **no `wall` section**,
   pins `"runtimeDir": "/tmp/set-copilot"` (which the `/ds`, `/dd` and `/meeting-copilot`
   skills override with a session-scoped `SET_COPILOT_DIR` anyway), and lists its
   `knowledge.keywords` as a flat array of **plain strings**. That last one is not merely

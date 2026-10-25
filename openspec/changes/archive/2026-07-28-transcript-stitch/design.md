@@ -179,7 +179,7 @@ argument parsing live in `cli.ts`. That split is what keeps the module testable 
   `wall.redaction`, which solves a different problem (an open payload published live).
 - **Regression fixtures could leak client data** → The fixture is synthetic, hand-written to
   reproduce the failure shape (`…a pénte` + `kig…` mid-word boundary with cross-channel
-  interleaving). Real recordings stay in the `consumer-f` / `set-promo` repos.
+  interleaving). Real recordings stay in the `consumer-f` / `consumer-p` repos.
 
 ## Migration Plan
 
