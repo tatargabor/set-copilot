@@ -6,7 +6,7 @@
 
 import {
   gridTemplate, boxesForCategory, renderForEvent, connectionState, applyViewportOverride,
-  dragPairShares, stripState,
+  dragPairShares, splitterSegments, stripState,
 } from "./wall-core.mjs";
 import { parseWallText } from "./text-format.mjs";
 import { appendBlocks } from "./text-render.mjs";
@@ -258,10 +258,12 @@ function resolvedTracks(root, axis) {
 }
 
 /**
- * One handle per internal boundary, on both axes.
+ * Handles for every internal boundary, on both axes — one per segment where the boundary
+ * really separates two regions (splitterSegments), so no handle crosses a box that spans
+ * the boundary.
  *
  * Grid children can be placed by line number even under named areas, so a column handle is
- * a full-height item in the column left of the boundary, pinned to its trailing edge and
+ * an item in the column left of the boundary, spanning its segment's rows, pinned to its trailing edge and
  * pulled over the gap by a negative margin (see wall.css for the arithmetic — the sign
  * there is what centers the visible bar on the gap). That is what keeps the handles out of
  * the layout arithmetic entirely: they occupy no track of their own, and as grid items
@@ -273,8 +275,12 @@ function buildHandles(root) {
   const cols = currentLayout.areas[0]?.length ?? 1;
   const rows = currentLayout.areas.length;
 
-  for (let i = 0; i < cols - 1; i++) root.appendChild(makeHandle("columns", i, rows, cols));
-  for (let i = 0; i < rows - 1; i++) root.appendChild(makeHandle("rows", i, rows, cols));
+  for (let i = 0; i < cols - 1; i++) {
+    for (const seg of splitterSegments(currentLayout.areas, "columns", i)) root.appendChild(makeHandle("columns", i, seg));
+  }
+  for (let i = 0; i < rows - 1; i++) {
+    for (const seg of splitterSegments(currentLayout.areas, "rows", i)) root.appendChild(makeHandle("rows", i, seg));
+  }
 }
 
 /**
@@ -290,13 +296,14 @@ function syncHandles(root) {
   if (!root || !currentLayout) return;
   const cols = currentLayout.areas[0]?.length ?? 1;
   const rows = currentLayout.areas.length;
-  const shape = `${currentLayout.id}:${cols}x${rows}`;
+  // The areas, not just the counts: the handle segments follow which cells span a boundary.
+  const shape = `${currentLayout.id}:${cols}x${rows}:${JSON.stringify(currentLayout.areas)}`;
   if (shape === handlesShape) return;
   handlesShape = shape;
   buildHandles(root);
 }
 
-function makeHandle(axis, index, rows, cols) {
+function makeHandle(axis, index, seg) {
   const h = document.createElement("div");
   h.className = `splitter splitter-${axis === "columns" ? "v" : "h"}`;
   h.dataset.axis = axis;
@@ -306,10 +313,10 @@ function makeHandle(axis, index, rows, cols) {
   h.title = "Húzd el a határt · dupla kattintás: alaphelyzet";
   if (axis === "columns") {
     h.style.gridColumn = `${index + 1}`;
-    h.style.gridRow = `1 / ${rows + 1}`;
+    h.style.gridRow = `${seg.start} / ${seg.end}`;
   } else {
     h.style.gridRow = `${index + 1}`;
-    h.style.gridColumn = `1 / ${cols + 1}`;
+    h.style.gridColumn = `${seg.start} / ${seg.end}`;
   }
   h.addEventListener("pointerdown", (ev) => startDrag(ev, axis, index));
   // A double-click on a boundary resets that axis — the affordance you reach for while

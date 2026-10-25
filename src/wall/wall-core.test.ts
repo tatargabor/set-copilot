@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 // directly so the same code the browser runs is what the test exercises.
 import {
   applyPairToTracks, applyViewportOverride, boxesForCategory, connectionState, dragPairShares,
-  gridTemplate, MIN_TRACK_SHARE, renderForEvent, stripState, zoneMatches,
+  gridTemplate, MIN_TRACK_SHARE, renderForEvent, splitterSegments, stripState, zoneMatches,
 } from "./public/wall-core.mjs";
 
 const stacked = { id: "stacked", areas: [["pinned"], ["stream"], ["canvas"]] };
@@ -437,5 +437,35 @@ describe("stripState (wall-viewport-and-activity D6)", () => {
   it("carries the age through so the renderer can humanise it without re-deriving anything", () => {
     expect(stripState(hb(heard(12_345), heard(null))).mic.msAgo).toBe(12_345);
     expect(stripState(hb(heard(12_345), heard(null))).system.msAgo).toBeNull();
+  });
+});
+
+describe("splitterSegments", () => {
+  it("draws a full-length handle when every cell along the boundary separates two regions", () => {
+    const areas = [["pinned", "canvas", "text"]];
+    expect(splitterSegments(areas, "columns", 0)).toEqual([{ start: 1, end: 2 }]);
+    expect(splitterSegments(areas, "columns", 1)).toEqual([{ start: 1, end: 2 }]);
+  });
+
+  it("leaves out the part of a boundary that runs through a spanning box", () => {
+    // The canvas spans both rows: the row boundary separates a/b only in column 1.
+    const areas = [["a", "canvas"], ["b", "canvas"]];
+    expect(splitterSegments(areas, "rows", 0)).toEqual([{ start: 1, end: 2 }]);
+    expect(splitterSegments(areas, "columns", 0)).toEqual([{ start: 1, end: 3 }]);
+  });
+
+  it("returns no segment when a box spans the whole boundary", () => {
+    const areas = [["canvas", "canvas"], ["log", "side"]];
+    expect(splitterSegments(areas, "columns", 0)).toEqual([{ start: 2, end: 3 }]);
+    expect(splitterSegments([["wide", "wide"]], "columns", 0)).toEqual([]);
+  });
+
+  it("splits a boundary into separate runs around a spanning box in the middle", () => {
+    const areas = [["a", "b"], ["c", "c"], ["d", "e"]];
+    expect(splitterSegments(areas, "columns", 0)).toEqual([{ start: 1, end: 2 }, { start: 3, end: 4 }]);
+  });
+
+  it("treats two empty cells as no boundary", () => {
+    expect(splitterSegments([[".", "."], ["a", "b"]], "columns", 0)).toEqual([{ start: 2, end: 3 }]);
   });
 });

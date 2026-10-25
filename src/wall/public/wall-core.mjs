@@ -44,6 +44,38 @@ export function gridTemplate(layout, boxes = []) {
 }
 
 /**
+ * Where a splitter for one boundary may be drawn: the runs of cells along it that
+ * actually separate two different regions.
+ *
+ * A boundary between two tracks is not a boundary everywhere. In
+ * `[["a","canvas"],["b","canvas"]]` the row boundary separates `a` from `b` but runs
+ * straight through the middle of `canvas`; a full-length handle there draws a line across
+ * the canvas and lets a drag start inside it. So the handle is cut into segments: one per
+ * contiguous run of cells where the two sides name different areas. Returns grid lines,
+ * 1-based and end-exclusive (`{start, end}` for `grid-row`/`grid-column: start / end`).
+ * Two `.` cells are not a boundary — there is nothing on either side to resize.
+ */
+export function splitterSegments(areas, axis, index) {
+  const rows = areas.length;
+  const cols = areas[0]?.length ?? 0;
+  const along = axis === "columns" ? rows : cols;
+  const sides = (i) =>
+    axis === "columns" ? [areas[i]?.[index], areas[i]?.[index + 1]] : [areas[index]?.[i], areas[index + 1]?.[i]];
+  const segments = [];
+  let start = -1;
+  for (let i = 0; i <= along; i++) {
+    const [a, b] = i < along ? sides(i) : [null, null];
+    const cut = i < along && a !== b && !(a === "." && b === ".");
+    if (cut && start < 0) start = i;
+    if (!cut && start >= 0) {
+      segments.push({ start: start + 1, end: i + 1 });
+      start = -1;
+    }
+  }
+  return segments;
+}
+
+/**
  * The smallest share of an axis a single region may be dragged down to.
  *
  * A region dragged to zero is not "small", it is *gone*: its content becomes unreachable
