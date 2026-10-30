@@ -83,6 +83,11 @@ rename, no dead region) are already folded into that change and are **not** repe
 
 ## P2 — smaller / polish
 
+> **Filed separately, 2026-10-08:** [wall-canvas-switching-bugs.md](wall-canvas-switching-bugs.md) —
+> one canvas switching diagram → chart → diagram: the tab strip vanishes under a chart, page open
+> shows the first diagram instead of the director's choice, re-showing a diagram after a chart
+> leaves the canvas blank, chart value labels run into the bars. Two of the four are P1.
+
 10. **Orphaned foreign wall on the fixed default port.** A wall from another project on 4180
     silently served the wrong runtime dir; emits went to the right dir, the screen read the
     wrong one. → Identify a wall by its `runtimeDir`; warn/refuse when the port's wall belongs
@@ -125,7 +130,7 @@ rename, no dead region) are already folded into that change and are **not** repe
 
 # Second field pass — 2026-07-28
 
-A second mining round over the Claude Code sessions of 2026-07-25…28 (`set-promo`,
+A second mining round over the Claude Code sessions of 2026-07-25…28 (`consumer-p`,
 `consumer-c`, `set-core`, `consumer-f`, `consumer-a`), plus the operator's own dictated
 feature list of 2026-07-28. Section **A** is what the field produced; section **B** is what the
 operator explicitly asked for. Items marked *(dup)* are the same defect as an item above and
@@ -141,7 +146,7 @@ the operator sees. Most of section B follows from that one gap.
 ### A1. `init` is an invisible prerequisite; a stale project config silently degrades the wall (P0)
 
 Verified, not inferred, on the project that ran a live wall on 2026-07-28:
-`~/code2/set-promo/set-copilot.config.json` is dated **2026-07-13** and
+`<consumer-p>/set-copilot.config.json` is dated **2026-07-13** and
 
 - has **no `wall` section at all** — so no layout/box/redaction config could be applied to it;
 - sets `"runtimeDir": "/tmp/set-copilot"`, a fixed global dir that directly fights the
@@ -157,7 +162,7 @@ will be overridden by the skills' env var.
 ### A2. The chat→wall mirror silently no-ops when the Stop hook was never installed (P0)
 
 Same session, verified: the project has **no `.claude/hooks/` directory**, no `Stop` entry
-pointing at `wall-mirror.sh` in either `set-promo/.claude/settings.json` or
+pointing at `wall-mirror.sh` in either `consumer-p/.claude/settings.json` or
 `~/.claude/settings.json`, and **no `wall-mirror.enabled` marker** in any runtime dir. The hook is
 *both* opt-in (marker) *and* self-gating (silent exit) — so the two independent failure modes are
 each invisible. The operator's *"a mirror alapvetően nem működött, ugyanezen okból, vagy nem volt

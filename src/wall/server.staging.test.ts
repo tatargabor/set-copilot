@@ -6,9 +6,13 @@
  */
 
 import http from "node:http";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildRegistry } from "./categories.js";
+import { jsonlTailSource } from "./event-source.js";
 import { WallServer } from "./server.js";
 import type { RedactionConfig, ResolvedWindow, WireMessage } from "./types.js";
 
@@ -66,8 +70,22 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const graphs = (sse: Sse) => sse.msgs.filter((m) => "graph" in (m as Record<string, unknown>));
 const kinds = (sse: Sse, k: string) => sse.msgs.filter((m) => (m as { kind?: string }).kind === k);
 
+function get(port: number, path: string): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port, path }, (res) => {
+      let b = "";
+      res.setEncoding("utf-8");
+      res.on("data", (c: string) => { b += c; });
+      res.on("end", () => { try { resolve(JSON.parse(b)); } catch (e) { reject(e); } });
+    }).on("error", reject);
+  });
+}
+const listOf = (j: Record<string, unknown>) => j.staged as { category: string; visual: string; expiresInMs: number }[];
+
 function stage(visual: string, label = "adatfolyam"): WireMessage {
-  return { category: "előrejelzés", zone: "private", staged: true, visual,
+  // Stamped like the append path stamps it (staged-expiry-survives-restart): the gate
+  // decides by the log's own emission time, so an unstaged-timed delta is not promotable.
+  return { category: "előrejelzés", zone: "private", staged: true, visual, emittedAt: Date.now(),
     graph: { op: "reset", nodes: [{ id: "a", label }], edges: [] } } as WireMessage;
 }
 
@@ -115,7 +133,7 @@ describe("promote: an explicit zone-lift of the prepared visual", () => {
     await sleep(20);
     expect(graphs(pub)).toHaveLength(0); // still private
 
-    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" } as WireMessage);
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public", emittedAt: Date.now() } as WireMessage);
     await sleep(30);
 
     const g = graphs(pub) as Array<{ graph: { nodes: Array<{ label: string }> } }>;
@@ -133,7 +151,7 @@ describe("promote: an explicit zone-lift of the prepared visual", () => {
 
     s.ingest(stage("v1", "titok terv")); // a sensitive node label
     await sleep(20);
-    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "both" } as WireMessage);
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "both", emittedAt: Date.now() } as WireMessage);
     await sleep(30);
 
     expect(pub.raw).not.toContain("titok");
@@ -172,7 +190,7 @@ describe("expiry: an unused prediction is released and no longer promotable", ()
     expect(kinds(pub, "stage-expired")).toHaveLength(0);
 
     // A promote after expiry is refused — nothing reaches the public wall.
-    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" } as WireMessage);
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public", emittedAt: Date.now() } as WireMessage);
     await sleep(30);
     expect(graphs(pub)).toHaveLength(0);
 
@@ -181,18 +199,6 @@ describe("expiry: an unused prediction is released and no longer promotable", ()
 });
 
 describe("the promotable listing: the producer asks instead of remembering", () => {
-  function get(port: number, path: string): Promise<Record<string, unknown>> {
-    return new Promise((resolve, reject) => {
-      http.get({ host: "127.0.0.1", port, path }, (res) => {
-        let b = "";
-        res.setEncoding("utf-8");
-        res.on("data", (c: string) => { b += c; });
-        res.on("end", () => { try { resolve(JSON.parse(b)); } catch (e) { reject(e); } });
-      }).on("error", reject);
-    });
-  }
-  const listOf = (j: Record<string, unknown>) => j.staged as { category: string; visual: string; expiresInMs: number }[];
-
   it("lists a staged, unexpired, unpromoted prediction with its remaining time", async () => {
     const s = await startServer({ stagingTtlMs: 60_000, stagingSweepMs: 10_000 });
     s.ingest(stage("v1"));
@@ -218,7 +224,7 @@ describe("the promotable listing: the producer asks instead of remembering", () 
     await sleep(20);
     expect(listOf(await get(s.boundPort(), "/api/staged"))).toHaveLength(2);
 
-    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" } as WireMessage);
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public", emittedAt: Date.now() } as WireMessage);
     await sleep(20);
     const list = listOf(await get(s.boundPort(), "/api/staged"));
     expect(list.map((e) => e.visual)).toEqual(["v2"]);
@@ -234,7 +240,7 @@ describe("the promotable listing: the producer asks instead of remembering", () 
     // Asking did not extend its life: a promote after the ttl is still refused.
     const pub = await connect(s.boundPort(), "/pub");
     await sleep(20);
-    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" } as WireMessage);
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public", emittedAt: Date.now() } as WireMessage);
     await sleep(30);
     expect(graphs(pub)).toHaveLength(0);
     pub.close();
@@ -262,5 +268,146 @@ describe("the promotable listing: the producer asks instead of remembering", () 
     expect(b.map((e) => e.visual)).toEqual(a.map((e) => e.visual));
     expect(b[0].expiresInMs).toBeLessThanOrEqual(a[0].expiresInMs);
     priv.close(); pub.close();
+  });
+});
+
+describe("restart: the gate decides by emission time from the log (staged-expiry-survives-restart)", () => {
+  /** Log lines as the append path writes them, with explicit stamps for the timeline. */
+  const stageLine = (visual: string, at: number, label = "adatfolyam"): string =>
+    JSON.stringify({ ...stage(visual, label), emittedAt: at });
+  const promoteLine = (visual: string, at: number): string =>
+    JSON.stringify({ kind: "promote", category: "előrejelzés", visual, zone: "public", emittedAt: at });
+
+  /** A fresh server rebuilding from a log file — the startup replay, not a live ingest. */
+  async function startOverFile(file: string, opts: Partial<ConstructorParameters<typeof WallServer>[0]> = {}): Promise<WallServer> {
+    const s = new WallServer({
+      port: 0, windows: windows(), registry, publicDir: "/tmp", redaction: REDACTION,
+      directorTickMs: 5, stagingTtlMs: 5_000, stagingSweepMs: 10_000, ...opts,
+    });
+    s.addSource(jsonlTailSource(file, 5));
+    await s.start();
+    server = s;
+    return s;
+  }
+
+  function buildLog(lines: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "wall-restart-"));
+    const file = join(dir, "wall-events.jsonl");
+    writeFileSync(file, lines.join("\n") + "\n");
+    return file;
+  }
+
+  it("(a) a staged delta older than the window is not promotable after the rebuild", async () => {
+    const now = Date.now();
+    const s = await startOverFile(buildLog([stageLine("v1", now - 60_000)]));
+    const pub = await connect(s.boundPort(), "/pub");
+    await sleep(30);
+    // Registered at the ORIGINAL stamp: the rebuild granted no fresh window.
+    expect(listOf(await get(s.boundPort(), "/api/staged"))).toHaveLength(0);
+    // A promote now (honestly stamped) finds it past its window: nothing publishes.
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public", emittedAt: Date.now() } as WireMessage);
+    await sleep(30);
+    expect(graphs(pub)).toHaveLength(0);
+    expect(pub.raw).not.toContain("adatfolyam");
+    pub.close();
+  });
+
+  it("(b) a log whose promote was stamped after the window publishes nothing on rebuild", async () => {
+    const now = Date.now();
+    // Live, this promote was refused: the prediction had expired when it was issued.
+    const s = await startOverFile(buildLog([stageLine("v1", now - 60_000), promoteLine("v1", now - 30_000)]));
+    const pub = await connect(s.boundPort(), "/pub");
+    await sleep(30);
+    expect(graphs(pub)).toHaveLength(0);
+    expect(pub.raw).not.toContain("adatfolyam");
+    // A late join reads the same public state: nothing was ever lifted.
+    const pub2 = await connect(s.boundPort(), "/pub");
+    await sleep(30);
+    expect(graphs(pub2)).toHaveLength(0);
+    pub.close(); pub2.close();
+  });
+
+  it("(c) a promote stamped inside the window rebuilds the promoted visual into the public replay", async () => {
+    const now = Date.now();
+    const s = await startOverFile(buildLog([stageLine("v1", now - 1_000, "kapacitás"), promoteLine("v1", now - 500)]));
+    await sleep(30);
+    const pub = await connect(s.boundPort(), "/pub");
+    await sleep(30);
+    const g = graphs(pub) as Array<{ graph: { nodes: Array<{ label: string }> } }>;
+    expect(g.length).toBeGreaterThan(0);
+    // The same prepared content, lifted again — as the live wall showed before the restart.
+    expect(g.at(-1)!.graph.nodes[0].label).toBe("kapacitás");
+    pub.close();
+  });
+
+  it("(d) an unstamped promote in the replayed log publishes nothing", async () => {
+    const now = Date.now();
+    const unstamped = JSON.stringify({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" });
+    const s = await startOverFile(buildLog([stageLine("v1", now - 1_000), unstamped]));
+    const pub = await connect(s.boundPort(), "/pub");
+    await sleep(30);
+    expect(graphs(pub)).toHaveLength(0);
+    expect(pub.raw).not.toContain("adatfolyam");
+    pub.close();
+  });
+
+  it("an unstamped staged delta is shown privately but is not promotable", async () => {
+    const s = await startServer({ stagingTtlMs: 60_000, stagingSweepMs: 10_000 });
+    const priv = await connect(s.boundPort(), "/priv");
+    await sleep(20);
+    const unstamped = { ...stage("v1", "titok terv") } as Record<string, unknown>;
+    delete unstamped.emittedAt;
+    s.ingest(unstamped as WireMessage);
+    await sleep(30);
+    // Shown privately…
+    expect(graphs(priv).length).toBeGreaterThan(0);
+    // …but the registry has nothing to promote.
+    expect(listOf(await get(s.boundPort(), "/api/staged"))).toHaveLength(0);
+    const pub = await connect(s.boundPort(), "/pub");
+    await sleep(20);
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public", emittedAt: Date.now() } as WireMessage);
+    await sleep(30);
+    expect(graphs(pub)).toHaveLength(0);
+    priv.close(); pub.close();
+  });
+
+  it("an unstamped live promote publishes nothing", async () => {
+    const s = await startServer({ stagingTtlMs: 60_000, stagingSweepMs: 10_000 });
+    const pub = await connect(s.boundPort(), "/pub");
+    await sleep(20);
+    s.ingest(stage("v1"));
+    await sleep(20);
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public" } as WireMessage);
+    await sleep(30);
+    expect(graphs(pub)).toHaveLength(0);
+    pub.close();
+  });
+
+  it("a promote stamped in the future is refused — a stamp that cannot be honest", async () => {
+    const s = await startServer({ stagingTtlMs: 60_000, stagingSweepMs: 10_000 });
+    const pub = await connect(s.boundPort(), "/pub");
+    await sleep(20);
+    s.ingest(stage("v1"));
+    await sleep(20);
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public", emittedAt: Date.now() + 60_000 } as WireMessage);
+    await sleep(30);
+    expect(graphs(pub)).toHaveLength(0);
+    pub.close();
+  });
+
+  it("a promote older than its staged prediction is refused, and the prediction stays listed", async () => {
+    const s = await startServer({ stagingTtlMs: 60_000, stagingSweepMs: 10_000 });
+    const pub = await connect(s.boundPort(), "/pub");
+    await sleep(20);
+    s.ingest(stage("v1"));
+    await sleep(20);
+    // Ordered logs cannot produce this: the promote names a prediction that did not
+    // exist yet, so it was not written by the append path.
+    s.ingest({ kind: "promote", category: "előrejelzés", visual: "v1", zone: "public", emittedAt: Date.now() - 30_000 } as WireMessage);
+    await sleep(30);
+    expect(graphs(pub)).toHaveLength(0);
+    // Refused, not retired: the live prediction is untouched.
+    expect(listOf(await get(s.boundPort(), "/api/staged")).map((e) => e.visual)).toEqual(["v1"]);
+    pub.close();
   });
 });

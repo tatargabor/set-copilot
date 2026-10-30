@@ -136,14 +136,17 @@ export interface CopilotPromptConfig {
    * A project command `stop` runs AFTER the transcript is archived and the derived
    * artifacts are written — the seam that lets a project hand its transcript on
    * (out of the gitignored runtime dir, into its own inputs) without forking the
-   * meeting-copilot skill. Absent by default; absent means today's handover exactly.
+   * meeting-copilot skill. Absent by default; absent means the built-in target: the raw
+   * `.jsonl`, `.md` and `-stitched.jsonl` are copied into `docs/inputs/copilot/` of the git work
+   * tree (recording-handover). A no-op command (`"true"`) opts a project out of any copy.
    *
    * It cannot fail the handover: a non-zero exit, a missing executable or a timeout is
    * reported and the archived path still returned, on the same reasoning `stitchOnStop`
    * follows — the `renameSync` is the invariant, everything after it is convenience.
    *
    * The paths arrive as environment variables (`SET_COPILOT_TRANSCRIPT`,
-   * `…_TRANSCRIPT_MD`, `…_TRANSCRIPT_JSONL`, `SET_COPILOT_DIR`) rather than as
+   * `…_TRANSCRIPT_MD`, `…_TRANSCRIPT_JSONL`, `SET_COPILOT_DIR`, plus `SET_COPILOT_KIND` and
+   * `SET_COPILOT_RECORDED_AT`; `SET_COPILOT_BACKFILL=1` from `backfill`) rather than as
    * placeholders: the values are file paths, and substituting them into a shell string
    * is a quoting bug waiting for the first space. `COPILOT_HANDOVER_SLUG` is passed
    * through when set, because the meeting's topic is the session's knowledge, not the
@@ -151,10 +154,22 @@ export interface CopilotPromptConfig {
    */
   handoverCommand?: string;
   /**
-   * The project's own hand-off for a DICTATION stop (`stop --print`), run after the
-   * transcript was printed and archived. Same contract as `handoverCommand` — same
-   * environment, same "cannot fail the handover" posture — with one difference that is
-   * the whole reason it is a separate key rather than a reuse of that one:
+   * Whether the BUILT-IN hand-over target (`docs/inputs/copilot/`) may copy a recording into
+   * this work tree when the kind's command key is not configured (default-handover-on-public).
+   * `"auto"` (the default) stands the target down when the work tree has a git remote on a
+   * known public host (github.com, gitlab.com, codeberg.org, …, matched equal-or-subdomain)
+   * unless the machine-local `repo-visibility.json` marks this work tree `private` — the
+   * offline answer to "this GitHub repo is actually internal". `"on"` forces the copy,
+   * `"off"` forces the stand-down. A configured `handoverCommand` /
+   * `dictationHandoverCommand` is NEVER gated: writing one already was the decision.
+   */
+  defaultHandover: "on" | "off" | "auto";
+  /**
+   * The project's own hand-off for a DICTATION (`stop --print`, or any stop that archives a
+   * `dictation*` file), run after the transcript was printed, archived and stitched. Same
+   * contract as `handoverCommand` — same environment (`SET_COPILOT_KIND=dictation`), same "cannot
+   * fail the handover" posture; absent means the built-in target, as there — with one difference
+   * that is the whole reason it is a separate key rather than a reuse of that one:
    *
    * **The child's stdout is NOT inherited here.** On the dictation path stdout carries the
    * user's spoken message to the model, so a project script printing "saved to docs/inputs/…"
@@ -310,7 +325,7 @@ export interface DetectionConfig {
  * working in Portuguese must be able to replace it without touching `src/`.
  */
 export interface TranscriptConfig {
-  /** Channel → display name in the readable transcript ("mic" → "Gábor") */
+  /** Channel → display name in the readable transcript ("mic" → "Host") */
   speakers: Record<string, string>;
   /** Produce the readable + structured artifacts at stop (default true) */
   stitchOnStop: boolean;
@@ -322,6 +337,11 @@ export interface TranscriptConfig {
   completeWords: string[];
   /** A gap at least this long between two fragments is a word boundary (heuristic only) */
   pauseGapMs: number;
+}
+
+export interface ProjectsConfig {
+  /** Directories `set-copilot project scan` sweeps for git repositories (depth-limited, `~` allowed) */
+  scanRoots: string[];
 }
 
 export interface CopilotConfig {
@@ -359,6 +379,8 @@ export interface CopilotConfig {
   wall: WallConfig;
   /** Post-processing of a finished transcript (the stitch) */
   transcript: TranscriptConfig;
+  /** Project discovery for the registry/launcher (`projects.scanRoots`) */
+  projects: ProjectsConfig;
   /** Absolute path of the project root the config was loaded from */
   projectRoot: string;
 }
@@ -887,6 +909,7 @@ export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     drawing: { enabled: true, conventions: DEFAULT_DRAWING_CONVENTIONS },
     narration: { enabled: true, verbosity: "normal", maxLines: 1 },
     fastLane: DEFAULT_FAST_LANE,
+    defaultHandover: "auto",
     mirror: {
       enabled: false,
       category: "tükör",
@@ -905,6 +928,9 @@ export const DEFAULTS: Omit<CopilotConfig, "sonioxApiKey" | "projectRoot"> = {
     completeWords: DEFAULT_COMPLETE_WORDS,
     pauseGapMs: 2500,
   },
+  projects: {
+    scanRoots: ["~/code", "~/src", "~/projects", "~/dev"],
+  },
 };
 
 const ENGAGEMENTS: Engagement[] = ["silent", "reactive", "participant"];
@@ -919,6 +945,14 @@ type RawKnowledge = Omit<Partial<KnowledgeConfig>, "keywords"> & {
 type RawConfig = Omit<Partial<CopilotConfig>, "knowledge"> & { knowledge?: RawKnowledge };
 
 type RawAudio = Partial<CopilotConfig["audio"]>;
+
+/**
+ * The keys that describe a MACHINE (its audio chain) or the PERSON at it (the mic speaker
+ * label), as `section.key` paths. They resolve from the user config first, the diagnostics warn
+ * when a tracked project config carries one, and `doctor --fix` moves them — one list, so the
+ * three cannot disagree. `audio.*` stands for every key of the `audio` section.
+ */
+export const MACHINE_LOCAL_KEYS = ["audio.*", "transcript.speakers.mic"] as const;
 
 /**
  * Merge the `audio` section per key, treating an empty value in the higher-priority
@@ -1007,6 +1041,19 @@ function validHandoverCommand(raw: unknown, key = "handoverCommand"): string | u
   return undefined;
 }
 
+/**
+ * `copilot.defaultHandover`, or the default. An unusable value warns and falls back to
+ * `"auto"` rather than throwing, like `validHandoverCommand`: the key only decides whether a
+ * copy is made, and a typo must not be able to take the stop down with it.
+ */
+function validDefaultHandover(raw: unknown): "on" | "off" | "auto" {
+  if (raw === "on" || raw === "off" || raw === "auto") return raw;
+  if (raw !== undefined && raw !== null) {
+    console.warn(`[set-copilot] Ignoring malformed copilot.defaultHandover: ${JSON.stringify(raw)} (expected "on", "off" or "auto")`);
+  }
+  return "auto";
+}
+
 function validFillerPhrases(raw: unknown[]): string[] {
   const good: string[] = [];
   for (const p of raw) {
@@ -1061,7 +1108,8 @@ function normalizeAlerts(raw: unknown): AlertCategory[] | undefined {
  * Load the effective config for a project.
  *
  * Resolution order (later wins): built-in defaults → user config → project config
- * → env overrides. Secrets (SONIOX_API_KEY) come from env / .env only (project
+ * → env overrides — except the per-machine keys (`MACHINE_LOCAL_KEYS`: every `audio` key and
+ * `transcript.speakers.mic`), where the user config wins over the project config. Secrets (SONIOX_API_KEY) come from env / .env only (project
  * .env first, then the user-level one), never the committed config.
  */
 export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
@@ -1090,10 +1138,24 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
   // input delivering noise — and every dictation in that project came back empty
   // while the same setup worked everywhere else. Nobody writes `micSource: ""` to
   // mean "use the default"; they write it because the key was scaffolded empty.
-  const audio = mergeAudio(userCfg.audio, projCfg.audio);
+  //
+  // And the MACHINE wins here (machine-local-audio-and-speaker): every `audio` key describes
+  // the local audio chain, so a project value applies only on a machine that declares none.
+  // Committed in the project layer, these keys conflicted in git between machines and
+  // silently overrode every other clone. The empty-is-unset rule protects the project value
+  // from a scaffolded empty machine value, exactly as it protected the machine value before.
+  const audio = mergeAudio(projCfg.audio, userCfg.audio);
   const detect = { ...userCfg.detect, ...projCfg.detect };
   const wall = { ...userCfg.wall, ...projCfg.wall };
   const transcript = { ...userCfg.transcript, ...projCfg.transcript };
+  // `transcript.speakers.mic` names the PERSON at this machine's microphone — per machine, like
+  // `audio`. The rest of `speakers` (`system`: how a project's meetings label the other side)
+  // stays project-owned, so only `mic` is lifted from the machine layer.
+  const machineMic = userCfg.transcript?.speakers?.mic;
+  if (typeof machineMic === "string" && machineMic.trim()) {
+    transcript.speakers = { ...(transcript.speakers ?? {}), mic: machineMic };
+  }
+  const projects = { ...userCfg.projects, ...projCfg.projects };
   // Resolve redaction patterns fail-SAFE: this is a safety seam feeding a public
   // narration box that ships enabled, so it must never resolve to "no redaction". An
   // empty list is the obvious case; the subtler one is a non-empty list whose entries
@@ -1139,8 +1201,8 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       // the project config pins a device. A committed `micSource` is
       // machine-specific by nature — a Linux `alsa_input.usb-…` name resolves to
       // nothing on macOS, where it yields a clean 0-byte capture and no error —
-      // and the project config outranks the user-level one, so a per-machine
-      // override has nowhere else to live. With `||`, MIC_SOURCE="" fell through
+      // and on a machine whose own config names no device, the project's pinned one
+      // still applies, so the env var is the escape that can say "none". With `||`, MIC_SOURCE="" fell through
       // to the very value it was set to escape. (An empty value in a config
       // FILE is different: `mergeAudio` reads it as "never filled in".)
       micSource: process.env.MIC_SOURCE ?? (audio.micSource || DEFAULTS.audio.micSource),
@@ -1261,6 +1323,7 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
       // it — losing the hand-off costs a manual copy, losing the stop costs the transcript.
       handoverCommand: validHandoverCommand(copilot.handoverCommand),
       dictationHandoverCommand: validHandoverCommand(copilot.dictationHandoverCommand, "dictationHandoverCommand"),
+      defaultHandover: validDefaultHandover(copilot.defaultHandover),
       names: resolvedNames,
     },
     detect: {
@@ -1349,6 +1412,14 @@ export function loadConfig(projectRoot: string = process.cwd()): CopilotConfig {
         typeof transcript.pauseGapMs === "number" && transcript.pauseGapMs > 0
           ? Math.floor(transcript.pauseGapMs)
           : DEFAULTS.transcript.pauseGapMs,
+    },
+    projects: {
+      // An explicit empty list is honoured as "no filesystem scan, history only" —
+      // a missing or malformed key falls back to the defaults, like `detect.*`.
+      scanRoots:
+        Array.isArray(projects.scanRoots) && projects.scanRoots.every((r) => typeof r === "string")
+          ? projects.scanRoots
+          : DEFAULTS.projects.scanRoots,
     },
     projectRoot: root,
   };

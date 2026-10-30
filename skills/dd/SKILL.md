@@ -21,9 +21,11 @@ SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-co
 The output is plain text: the dictated words, already reassembled into sentences. There is nothing to parse and nothing to join.
 
 ⚠ **Lines prefixed `[set-copilot]` are the tooling talking, not the speaker** — `Stopped
-capture (pid …)`, and, where the project configured `copilot.dictationHandoverCommand`, a
-`handover:` line reporting where the transcript was filed. They arrive on stderr and are
-deliberately kept off stdout so they cannot splice a sentence into what the user said.
-Ignore them; everything else is the message.
+capture (pid …)`, the `Readable:` / `Structured:` paths, and where the dictation was saved:
+either `handover:` lines from the project's `copilot.dictationHandoverCommand`, or — when the
+project configured none — `Saved to the repo: docs/inputs/copilot/…` and a `To commit:` line
+(the copy is never committed for you), or a `Not saved to the repo (…)` line, which means the
+recording was **kept back** on purpose (a public-host remote stands the built-in target down) —
+report it as kept, do not retry. Ignore them; everything else is the message.
 
 Treat that text as the user's message — act on it. Do NOT echo it back. Respond in the language the user dictated in. If no text was captured, say: "Dictation stopped, no text captured."

@@ -18,7 +18,7 @@ const file = (path: string, data: Record<string, unknown>) => ({ path, data });
 
 describe("diagnoseConfig — keywords", () => {
   it("reports declared and effective counts when a flat string list normalizes to zero", () => {
-    // The real 2026-07-28 set-promo value: 15 bare strings, none with topic/stems.
+    // The real 2026-07-28 consumer-p value: 15 bare strings, none with topic/stems.
     const keywords = [
       "raketa", "promo", "kampány", "ügyfél", "árazás", "határidő", "szállítás",
       "raktár", "számla", "ajánlat", "szerződés", "partner", "termék", "kedvezmény", "logisztika",
@@ -323,5 +323,52 @@ describe("known-key set (D2 guard)", () => {
     const known = knownConfigKeys();
     const missing = [...read].filter((k) => !known.has(k)).sort();
     expect(missing).toEqual([]);
+  });
+});
+
+describe("diagnoseConfig — per-machine keys in a tracked project config", () => {
+  const machine = (findings: { message: string }[]) => findings.filter((f) => f.message.includes("gépenkénti beállítás"));
+
+  it("warns on a tracked project config carrying the mic speaker label, naming --fix", () => {
+    const findings = machine(diagnoseConfig(
+      [file(USER, {}), file(PROJ, { transcript: { speakers: { mic: "Alice", system: "Others" } } })],
+      { projectConfigTracked: true },
+    ));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain('transcript.speakers.mic="Alice"');
+    expect(findings[0].message).not.toContain("system");
+    expect((findings[0] as { fix?: string }).fix).toContain("set-copilot doctor --fix");
+  });
+
+  it("is silent for an untracked project config", () => {
+    expect(machine(diagnoseConfig(
+      [file(USER, {}), file(PROJ, { audio: { sampleRate: 48000 } })],
+      { projectConfigTracked: false },
+    ))).toHaveLength(0);
+  });
+
+  it("does not repeat the device names the device finding already names", () => {
+    const findings = diagnoseConfig(
+      [file(USER, {}), file(PROJ, { audio: { micSource: "usb-mic", sampleRate: 48000 } })],
+      { projectConfigTracked: true },
+    );
+    expect(machine(findings)).toHaveLength(1);
+    expect(machine(findings)[0].message).toContain("audio.sampleRate=48000");
+    expect(machine(findings)[0].message).not.toContain("micSource");
+  });
+
+  it("ignores empty placeholders and a user-only install", () => {
+    expect(machine(diagnoseConfig(
+      [file(USER, {}), file(PROJ, { audio: { micSource: "", toneStart: "" } })], { projectConfigTracked: true },
+    ))).toHaveLength(0);
+    expect(machine(diagnoseConfig([file(USER, { audio: { sampleRate: 1 } })], { projectConfigTracked: true }))).toHaveLength(0);
+  });
+
+  it("names the project value the machine overrides here", () => {
+    const findings = machine(diagnoseConfig(
+      [file(USER, { audio: { sampleRate: 16000 } }), file(PROJ, { audio: { sampleRate: 48000 } })],
+      { projectConfigTracked: true },
+    ));
+    expect(findings[0].message).toContain("audio.sampleRate=48000 (ezen a gépen hatástalan — a gép configja: 16000)");
   });
 });

@@ -284,6 +284,13 @@ export interface Promote {
   visual: string;
   /** Target zone for the lift. Default `public`. */
   zone?: Zone;
+  /**
+   * When the promote entered the log (staged-expiry-survives-restart), written by the
+   * append path like a display event's: the gate judges a promote by when it was issued,
+   * so a wall rebuilt from the log repeats the live decision. A promote without one is
+   * refused — a line that cannot show its time publishes nothing, live or replayed.
+   */
+  emittedAt?: number;
 }
 
 /**

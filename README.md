@@ -154,7 +154,7 @@ Every field is optional. Dictation works with an empty config; the copilot needs
     "bin": "whisper-cli",           // whisper.cpp binary (brew install whisper-cpp)
     "model": ""                     // path to a ggml model; empty → ~/.config/set-copilot/models/ggml-small.en.bin
   },
-  "audio": { "sampleRate": 16000 },  // micSource/monitorSource belong in the USER config — see below
+  // no "audio" here: every audio key, and transcript.speakers.mic, is per machine — USER config, see below
 
   "knowledge": {
     "adapter": "markdown",          // built-in, or a path to your own adapter module
@@ -188,6 +188,41 @@ Every field is optional. Dictation works with an empty config; the copilot needs
 
 Secrets never go in this file — `SONIOX_API_KEY` comes from `.env` / the environment.
 
+### Where recordings are saved
+
+When a stop hands over a recording and the project configured no hand-off command for its kind
+(`copilot.handoverCommand` for a meeting, `copilot.dictationHandoverCommand` for a dictation), the
+built-in target copies it into `docs/inputs/copilot/` — raw `.jsonl`, readable `.md` and stitched
+`-stitched.jsonl`, content-deduplicated, never staged or committed.
+
+On a repository whose git remote sits on a **public host** (github.com, gitlab.com, codeberg.org,
+bitbucket.org, sr.ht, framagit.org, gitea.com), the built-in target stands down instead — dictated
+text is the most private artefact the tooling produces, and the default should not copy it into a
+tree a `git push` publishes. The recording stays in the runtime dir and `stop` says so. Decide
+with `copilot.defaultHandover`:
+
+```jsonc
+{
+  "copilot": {
+    "defaultHandover": "auto"  // "auto" (the rule above) | "on" (always copy) | "off" (never copy)
+  }
+}
+```
+
+`"auto"` can't ask the hosting API (a stop never touches the network), so a **private repo on a
+public host** needs one local mark — `repo-visibility.json` beside the user config
+(`~/.config/set-copilot/`), keyed by the work tree's canonical path:
+
+```jsonc
+{
+  "/home/me/code/internal-but-on-github": "private"
+}
+```
+
+Absent or corrupt file = no marks; only `"private"` is read. A configured hand-off command is
+never gated — writing one already was the decision. Back-fill counts kept-back recordings as
+deliberate (its `--check` stays silent about them); `backfill --dry-run` lists them.
+
 ### The config migrates itself
 
 Every command except `init` and `help` starts with a config preflight:
@@ -198,6 +233,8 @@ Every command except `init` and `help` starts with a config preflight:
 An up-to-date install writes nothing and leaves no backup. Add `set-copilot.config.json.bak` to your `.gitignore`.
 
 Resolution order, later wins: built-in defaults → `~/.config/set-copilot/set-copilot.config.json` → the project's `set-copilot.config.json` → environment variables (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, `SET_COPILOT_LANGUAGE`). Sections merge key by key, so a project can override `knowledge.sources` without restating your user-level `keywords`. The API key is read from the environment, then the project `.env`, then the user-level one.
+
+**One exception: the per-machine keys** — every `audio` key and `transcript.speakers.mic` (the name printed for *your* microphone). For these the user-level config wins over the project's; a project value applies only on a machine that declares none. They describe this machine and the person at it, and committed to the repo they conflict in git between machines. `doctor` warns when a tracked project config carries one; `set-copilot doctor --fix` moves them into the machine's config (never overwriting a value the machine already declares) and prints every move.
 
 `micSource` / `monitorSource` are device names. List them with `npx set-copilot sources`; **empty means the system default**, which is the right answer more often than a pinned name.
 
@@ -211,13 +248,11 @@ Resolution order, later wins: built-in defaults → `~/.config/set-copilot/set-c
 ```
 
 ```jsonc
-// <repo>/set-copilot.config.json                   ← shared, no device names
-{ "language": "hu", "audio": { "sampleRate": 16000 } }
+// <repo>/set-copilot.config.json                   ← shared, nothing per machine
+{ "language": "hu", "transcript": { "speakers": { "system": "Others on the call" } } }
 ```
 
-The project config outranks the user-level one, so a committed device name wins on **every** clone — and on a machine that has no such device, the capture starts, reports no error, and streams zero bytes. `doctor` warns when it finds one, because nothing else will.
-
-Per-machine `audio` keys survive alongside project-level ones (the section merges key by key), so declaring `sampleRate` in the repo does not discard the machine's microphone.
+A committed device name reaches **every** clone, and on a machine that declares no device of its own it applies — on a machine that has no such device, the capture starts, reports no error, and streams zero bytes. `doctor` warns when it finds one, because nothing else will; `doctor --fix` moves it.
 
 If you cannot edit either file — CI, a one-off run, a device you're testing — the environment still wins, and **an empty value is meaningful**:
 

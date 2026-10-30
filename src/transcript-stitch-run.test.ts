@@ -92,9 +92,9 @@ describe("artifactPaths", () => {
 
 describe("parseSpeakerMap", () => {
   it("parses pairs and skips malformed entries rather than failing", () => {
-    expect(parseSpeakerMap("mic=Gábor,system=Robi,,junk,=x,y=")).toEqual({
-      mic: "Gábor",
-      system: "Robi",
+    expect(parseSpeakerMap("mic=Host,system=Partner,,junk,=x,y=")).toEqual({
+      mic: "Host",
+      system: "Partner",
     });
   });
 });

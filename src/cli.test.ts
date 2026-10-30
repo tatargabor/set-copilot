@@ -12,9 +12,9 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { registerStopHook, unregisterStopHook } from "./cli.js";
+import { registerHook, registerStopHook, unregisterStopHook } from "./cli.js";
 
 let dir: string;
 let settings: string;
@@ -119,5 +119,30 @@ describe("unregisterStopHook", () => {
 
   it("does nothing when there is no settings.json at all", () => {
     expect(unregisterStopHook(join(dir, "absent.json"), "wall-mirror.sh")).toBe(false);
+  });
+});
+
+describe("registerHook — the SessionStart recordings check", () => {
+  const CHECK = 'bash "$CLAUDE_PROJECT_DIR/.claude/hooks/recordings-check.sh"';
+
+  it("registers once; a re-run (even with a differently written command) is a no-op", () => {
+    expect(registerHook(settings, "SessionStart", CHECK, "recordings-check.sh")).toBe(true);
+    expect(registerHook(settings, "SessionStart", CHECK, "recordings-check.sh")).toBe(false);
+    expect(registerHook(settings, "SessionStart", 'bash "/abs/.claude/hooks/recordings-check.sh"', "recordings-check.sh")).toBe(false);
+    const groups = read().hooks.SessionStart;
+    expect(groups.flatMap((g: { hooks: unknown[] }) => g.hooks)).toEqual([{ type: "command", command: CHECK }]);
+  });
+
+  it("leaves the Stop hooks alone", () => {
+    registerStopHook(settings, CMD);
+    registerHook(settings, "SessionStart", CHECK, "recordings-check.sh");
+    expect(read().hooks.Stop[0].hooks).toEqual([{ type: "command", command: CMD }]);
+  });
+
+  it("leaves a malformed settings.json byte-identical", () => {
+    writeFileSync(settings, "{ not json");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(registerHook(settings, "SessionStart", CHECK, "recordings-check.sh")).toBe(false);
+    expect(readFileSync(settings, "utf-8")).toBe("{ not json");
   });
 });

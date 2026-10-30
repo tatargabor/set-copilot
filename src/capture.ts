@@ -165,6 +165,10 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
     topicMatcher,
     detect: cfg.detect,
     fastLane: cfg.copilot.fastLane,
+    // The capturing machine's own labels, stamped into the recording (speaker-label-
+    // recorded-at-capture): attribution travels with the file, not with the machine
+    // that later stitches it.
+    speakerNames: cfg.transcript.speakers,
   });
 
   const useWhisper = cfg.sttBackend === "whisper";

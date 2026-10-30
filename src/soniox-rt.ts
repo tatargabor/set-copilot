@@ -400,7 +400,7 @@ export class SonioxChunkClient extends EventEmitter {
       if (text.trim()) {
         const event: TranscriptEvent = {
           speaker: this.speaker,
-          text: text.trim(),
+          text: chunkEventText(text),
           isFinal: true,
           timestampMs: Date.now() - this.startTime,
         };
@@ -539,4 +539,17 @@ export function addWavHeader(pcmData: Buffer, sampleRate: number): Buffer {
   header.writeUInt32LE(dataSize, 40);
 
   return Buffer.concat([header, pcmData]);
+}
+
+/**
+ * The text of a chunked backend's event (`SonioxChunkClient`, `WhisperLocalClient`): the chunk,
+ * trimmed, with ONE leading space. A chunk is transcribed on its own and ends at a word, so its
+ * start is a word boundary — and the leading space is the only way a consumer of the stream
+ * learns that. The real-time client's tokens carry it from Soniox; without it here, the next
+ * chunk glued onto the previous one: the fast lane read `…Copilot` + `rajzold` as one word
+ * (fast-lane-opener-boundary waits for an observed boundary after an opener), and the writer
+ * marked every chunk resumption `midWord`, so the stitch joined two words into one.
+ */
+export function chunkEventText(text: string): string {
+  return ` ${text.trim()}`;
 }

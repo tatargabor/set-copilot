@@ -22,6 +22,8 @@ Tests cover the pure logic only (config resolution, keyword matching, source glo
 
 Spec-driven changes live in `openspec/changes/`; the applied source of truth is `openspec/specs/`. Drive this work through the **`/opsx:*` skills** (`/opsx:propose`, `/opsx:apply`, `/opsx:archive`, `/opsx:continue`, `/opsx:status`), **not** the raw `openspec` CLI by hand — the skills enforce the workflow (context-file reads, status/artifact ordering, sync-then-archive). The bare CLI is fine only for quick read-only inspection.
 
+**The cycle is propose → `/opsx:review` → apply → verify → archive.** `/opsx:review` runs two agents blind and in parallel — `adversarial-code-reviewer` (refutes the plan against the real code) and `rules-conformance-auditor` (PASS/FAIL/N-A per mandatory rule) — and merges them into `openspec/changes/<name>/review-findings.md`. No apply while a CRITICAL there is OPEN; see `.claude/rules/spec-adversarial-review.md`.
+
 **Commit at each step.** An `/opsx:apply` (implementation) and an `/opsx:archive` (spec sync + move) are each a commit-worthy unit — commit after each rather than batching many changes into one. Doing it after the fact is fine when a run got ahead of its commits, but the default is one commit per apply and one per archive.
 
 Two archive-time invariants, each learned from a real abort:
@@ -72,8 +74,10 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
 
   `stop` runs it on the **archived** file, after the rename — the `renameSync` stays the sole
   source of truth for "handed over exactly once", and a stitch failure is reported, never fatal.
-  The `--print` (dictation) path produces nothing derived — no `.md`, no `-stitched.jsonl` —
-  because there the text is the user's **message**, not a document. But it *is* stitched
+  The `--print` (dictation) path *prints* nothing derived — its stdout is the user's **message**,
+  not a document. Since `recording-handover` (2026-10-07) it does write the `.md` and
+  `-stitched.jsonl` beside the archive afterwards (reported on stderr), because a dictation that is
+  persisted must be findable by a text search like any other recording. But it *is* stitched
   (`dictation-stitched-output`): the distinction that matters is artifacts vs. text, and
   conflating the two once left the worse half of the problem in place. `dd/SKILL.md` used to
   say "concatenate the `text` fields", which asks a consumer to supply a separator it cannot
@@ -164,6 +168,13 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   through — each rule closes what the other cannot. Measure with
   `npx tsx scripts/fast-lane-replay.ts <transcript.jsonl> [--legacy]` (a *line*-level replay:
   a consistent ruler for comparing rules, not the token stream the live engine saw).
+  **An opener needs a boundary that was actually seen after it** (`fast-lane-opener-boundary`):
+  Hungarian attaches suffixes directly to the word and Soniox delivers the suffix as its own token
+  (`" Copilot"`, `"ot"`), so with end-of-buffer counted as a boundary „Meeting Copilotot",
+  „Copilotokat" and „Set Copilotos" each opened a command in one meeting (2026-10-07). The opener is
+  held until the next token's leading space or punctuation confirms it; a closer still takes effect
+  the moment it is said (waiting would cost the latency the lane exists for). The chunked backends
+  emit each chunk with a leading space (`chunkEventText`) so a chunk boundary counts as seen.
   The command's words also remain in
   the ordinary transcript line (the transcript is a record; editing it would be a lie), so
   the policy tells the copilot to act on the *event*, never on the line — otherwise one
@@ -175,7 +186,7 @@ Claude Code session  ←  set-copilot poll (long-poll)  ←┘
   follower and wrapped by the `mirror-policy` CLI subcommand; `mirror-format` is the pure
   block/fence/chunk layer. See "The chat→wall mirror is a follower, not a hook" below —
   including why the original field diagnosis of it was wrong.
-- **`src/config.ts`** — resolution order (later wins): defaults → `~/.config/set-copilot/set-copilot.config.json` → project `set-copilot.config.json` → env (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, …). Nested sections merge key by key — **all** of them, `audio` included; it was the one omission, and it silently discarded a machine's microphone whenever a project declared `sampleRate`. `SONIOX_API_KEY` comes only from env / project `.env` / user `.env` — never the committed config.
+- **`src/config.ts`** — resolution order (later wins): defaults → `~/.config/set-copilot/set-copilot.config.json` → project `set-copilot.config.json` → env (`SET_COPILOT_DIR`, `MIC_SOURCE`, `SONIOX_MODE`, …). Nested sections merge key by key — **all** of them, `audio` included; it was the one omission, and it silently discarded a machine's microphone whenever a project declared `sampleRate`. **Exception: the per-machine keys** (`MACHINE_LOCAL_KEYS` — every `audio` key and `transcript.speakers.mic`) resolve from the user config first (`machine-local-audio-and-speaker`): committed, they conflicted in git between machines and silently overrode every clone. `doctor` warns on a tracked project config carrying one; `doctor --fix` (pure `moveMachineLocalKeys`, deliberately not an auto-migration) moves them; project-mode `init` no longer writes an `audio` section. `SONIOX_API_KEY` comes only from env / project `.env` / user `.env` — never the committed config.
 - **`src/config-migrate.ts` / `config-preflight.ts`** — config schema versioning, run by `cli.ts` before every command except `init` (which creates the files) and `help`. Same split as `transcript-build` / `transcript-stitch-run`: the migrations are pure and unit-tested, only the preflight touches disk.
 
   It exists because an upgrade can change what a key MEANS, and the resulting failure is silent — nobody edits a config they believe is correct, so the engine has to come and get it. Two behaviours were chosen deliberately, and both cut against the repo's usual posture:
@@ -217,7 +228,7 @@ Consequences worth keeping straight:
 **Public-zone redaction** (`redaction.ts`) runs server-side in the shared `ingest` funnel, before any broadcast or accumulation — a producer-side filter fails open, and the JSONL tailer bypasses the CLI, so this is the only place that catches every producer. It is the highest-stakes code in the project: a mistake puts internal data on a public wall in front of a live audience, so the whole design is *fail-closed* — when in doubt, withhold, don't scrub. The shape it has was forced by four adversarial verifiers reproducing leaks through an earlier field-list version:
 
 - **Recursive, not a field list.** The payload is open (`GraphNode`/`ChartDatum` carry `[k: string]: unknown`), so the redactor walks every string leaf at any depth under any key. A list can never be complete; a walk is closed to future keys too.
-- **A matching URL (`image.src`/`webpage.url`) withholds the whole event**, never scrubs — a token in a URL can't be removed while leaving the link usable.
+- **A matching source (`image.src`, `webpage.url`, a graph node's `image` in any shape) withholds the whole event**, never scrubs — a token in a URL can't be removed while leaving the link usable. A graph is drawn incrementally, so a withheld delta also holds that visual off the public wall until a `reset` of it reaches the public zone; otherwise later clean deltas would build a public graph around the hole.
 - **Per-delta zone in accumulation.** A visual's deltas accumulate into separate private/public slices; a public join replays from the public slice, which never received the private deltas. This is what closed the replay-laundering leak — do not collapse it back to one zone per visual.
 - **The `show` command is zoned** to where its visual lives, because a `visual` id is free producer text and can itself be sensitive.
 - **Bounded evaluation (ReDoS).** Two structural limits at config-load — no repeated group (`)` followed by `*`/`+`/`{`, which kills the exponential class outright) and at most 2 unbounded quantifiers (which caps polynomial backtracking at quadratic) — plus a per-leaf length cap that bounds that quadratic. Rejecting *classes* structurally, not guessing *which* patterns are dangerous: three adversarial rounds proved the guess-the-danger approach is walkable. Patterns are config-only (never a producer or the transcript), so this bounds an operator footgun; re2 is the localized swap for a hard linear guarantee.
@@ -323,6 +334,8 @@ Two rules are load-bearing and were each fixed after a real failure; don't regre
 Three rules the installer follows, each from that measurement: it **declares** which mode it used (silence about it produces the same failure in the opposite direction — "why is my fix not taking effect?"), it never creates or keeps a **dangling** link (the skill then vanishes from the list with no error at any layer), and it **archives** an existing real directory to `<name>.bak-<timestamp>` rather than deleting it, with the backup's `SKILL.md` renamed so the archive cannot shadow the install. And note a same-named skill in `~/.claude/skills/` **shadows** the project's `.claude/skills/` one, so patching a project copy of a shipped skill is silently inert.
 
 A project that needs something the shared skill does not do should reach for a config seam, not a fork: `copilot.handoverCommand` exists because a forked `meeting-copilot` was the only way a project could hand its own transcript on, and a fork of a skill that already drifts silently is that failure twice.
+
+**Every recording is handed on, and back-fill finds the ones that were not** (`recording-handover`, 2026-10-07 — a content-hash survey found 15 dictations in one project and 14 meetings in another with no copy in their repos). One seam, `runRecordingHandover`, for both kinds and for back-fill: the command for the recording's kind (`handoverCommand` / `dictationHandoverCommand`, kind taken from the *file name*, because the SessionEnd `stop` archives an open dictation on the meeting path), with `SET_COPILOT_KIND`; with no command, the built-in target copies raw + `.md` + `-stitched.jsonl` into `docs/inputs/copilot/<date>-<kind>-part<N>-<sha8>.*` (content-deduplicated by SHA-256 over the work tree, `.set/` excluded; the hash in the name keeps two machines' `part1`s from colliding; never committed; a no-op command `true` opts out). A meeting-only command never receives dictations — a script predating `SET_COPILOT_KIND` cannot tell them apart. A successful command hand-off is a `handover` step in the recovery ledger (engine-owned, not claimable), because a command may keep the recording in a shape no hash can recognise. `set-copilot backfill [--dry-run|--check]` scans `.set/copilot/` and hands over what is unsaved through the same seam — copying, never moving, so `stop`'s `renameSync` stays the only archive step; `--check` runs from the `recordings-check.sh` SessionStart hook with a read-only preflight and always exits 0.
 
 `transcript-recover` and `set-repair` are two halves of recovery, split because their **costs** differ. `set-repair` is mechanical, cheap, safe to run often: orphaned `capture.pid`, a transcript nothing ever handed over (a real project held a 539-line one — an entire meeting — found by accident), a stale `wall.pid`, an archive with no stitched artifacts. It never repairs by a new mechanism — an unconsumed transcript is handed over by `stop`, reusing the one `renameSync` — and reports anything destructive rather than running it. `transcript-recover` is a *content* pass costing a model read per transcript, and it ends by handing off in the other direction. `doctor` probes the audio chain; `set-repair` inspects runtime state; they do not overlap.
 

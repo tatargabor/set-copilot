@@ -293,7 +293,7 @@ export function renderDrawingContract(categories: Category[], conventions: strin
     "npx set-copilot wall-staged",
     "```",
     "",
-    "**Public zone & internal content.** Anything `public` or `both` can reach a wall a live audience sees. Before it does, the server runs public-zone redaction over the whole payload. To keep an internal detail off the public wall, either use `zone:\"private\"` — with one wall that means *prepared, not shown*: no client displays it until an explicit promote lifts it — or mark the sensitive span **`[belső]`**; the server scrubs from the marker to the end of that string, or withholds the event if the marker lands in an `image.src`/`webpage.url`. Redaction is a backstop, not a license: when in doubt, mark it `[belső]` or leave it out. A redaction failure withholds the event from the public zone, never leaks it.",
+    "**Public zone & internal content.** Anything `public` or `both` can reach a wall a live audience sees. Before it does, the server runs public-zone redaction over the whole payload. To keep an internal detail off the public wall, either use `zone:\"private\"` — with one wall that means *prepared, not shown*: no client displays it until an explicit promote lifts it — or mark the sensitive span **`[belső]`**; the server scrubs from the marker to the end of that string, or withholds the event if the marker lands in a fetched source — an `image.src`, a `webpage.url`, or a graph node's `image` (and then the rest of that graph stays off the public wall until you `reset` it). Redaction is a backstop, not a license: when in doubt, mark it `[belső]` or leave it out. A redaction failure withholds the event from the public zone, never leaks it.",
     "",
   );
 

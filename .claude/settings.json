@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "hooks": {
     "SessionStart": [],
     "UserPromptSubmit": [
@@ -33,6 +34,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set-hook-question-relay",
+            "timeout": 3600
+          }
+        ]
       }
     ],
     "PostToolUse": [],
@@ -47,6 +58,16 @@
             "type": "command",
             "command": "set-hook-stop",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "set-hook-waveboard",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "set-hook-wait-detect",
+            "timeout": 60
           }
         ]
       }

@@ -233,3 +233,68 @@ describe("the show command is zoned (D4 / 3.2)", () => {
     priv.close();
   });
 });
+
+describe("a graph node image is a fetched source (node-image-redaction-withholds)", () => {
+  const leaking = (op: "reset" | "add", visual: string) => ({
+    category: "architektúra", zone: "both" as const, visual, priority: "immediate" as const,
+    graph: { op, nodes: [{ id: "clean-node", label: "CLEAN-label" }, { id: "fig", image: "docs/SECRET-acme/q3.png" }] },
+  });
+
+  it("withholds the whole delta live and from a late public join; private gets both nodes, marked withheld", async () => {
+    const s = await startServer();
+    const port = s.boundPort();
+    const pubLive = await connect(port, "/pub");
+    await sleep(20);
+
+    s.ingest(leaking("reset", "v1"));
+    await sleep(30);
+
+    // Neither node reaches public — not the clean one, and no scrubbed (broken) path either.
+    expect(pubLive.raw).not.toContain("clean-node");
+    expect(pubLive.raw).not.toContain("SECRET-acme");
+    expect(pubLive.raw).not.toContain("[…]");
+
+    const pubLate = await connect(port, "/pub");
+    const privLate = await connect(port, "/priv");
+    await sleep(30);
+    expect(pubLate.raw).not.toContain("clean-node");
+    expect(privLate.raw).toContain("clean-node");
+    expect(privLate.raw).toContain("docs/SECRET-acme/q3.png");
+    // The replayed private marker says what the public wall got: nothing, not a scrubbed copy.
+    const replayed = privLate.msgs.find((m) => "graph" in m && (m as { visual?: string }).visual === "v1") as { redaction?: string } | undefined;
+    expect(replayed?.redaction).toBe("withheld");
+
+    pubLive.close();
+    pubLate.close();
+    privLate.close();
+  });
+
+  it("holds the visual off the public wall until a reset reaches it again", async () => {
+    const s = await startServer();
+    const port = s.boundPort();
+    const pub = await connect(port, "/pub");
+    const priv = await connect(port, "/priv");
+    await sleep(20);
+
+    s.ingest(leaking("reset", "v2"));
+    s.ingest({ category: "architektúra", zone: "both", visual: "v2", graph: { op: "add", nodes: [{ id: "later", label: "LATER-add" }] } });
+    await sleep(30);
+    expect(pub.raw).not.toContain("LATER-add"); // no hole built around the withheld delta
+    expect(priv.raw).toContain("LATER-add");
+
+    const pubLate = await connect(port, "/pub");
+    await sleep(30);
+    expect(pubLate.raw).not.toContain("LATER-add");
+
+    // A clean reset of the same visual reaches public and lifts the hold.
+    s.ingest({ category: "architektúra", zone: "both", visual: "v2", priority: "immediate", graph: { op: "reset", nodes: [{ id: "fresh", label: "FRESH-reset" }] } });
+    s.ingest({ category: "architektúra", zone: "both", visual: "v2", graph: { op: "add", nodes: [{ id: "after", label: "AFTER-reset" }] } });
+    await sleep(30);
+    expect(pub.raw).toContain("FRESH-reset");
+    expect(pub.raw).toContain("AFTER-reset");
+
+    pub.close();
+    priv.close();
+    pubLate.close();
+  });
+});

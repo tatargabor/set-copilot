@@ -14,7 +14,7 @@ Voice input into Claude Code. You speak into the microphone; the text arrives as
 
 ### `/dictate start [minutes]`
 
-Arguments: optional `minutes` — recording limit. Default: **10**. Example: `/dictate start 3`.
+Arguments: optional `minutes` — recording limit. Default: **30**. Example: `/dictate start 3`.
 
 Run ONE Bash call with `run_in_background: true` (capture plays the rising tone by itself when the mic is live, and self-stops at the limit — no separate timer or beep step):
 
@@ -56,4 +56,4 @@ SET_COPILOT_DIR="$PWD/.set/copilot/${CLAUDE_CODE_SESSION_ID:-shared}" npx set-co
 - `set-copilot` installed (`npx set-copilot init` was run in this project).
 - `SONIOX_API_KEY` in `.env`.
 - Linux: `parec` (PipeWire/PulseAudio). macOS: `sox` (`brew install sox`).
-- First-time setup: `npx set-copilot sources` → set `audio.micSource`, then verify with `npx set-copilot doctor`.
+- First-time setup: `npx set-copilot sources` → set `audio.micSource` in the machine's own config (`~/.config/set-copilot/set-copilot.config.json`, never the project's), then verify with `npx set-copilot doctor`.

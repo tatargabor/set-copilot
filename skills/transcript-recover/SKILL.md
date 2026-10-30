@@ -24,7 +24,7 @@ Find candidate transcripts. Three places, and the third is the one that gets mis
 1. **Per-session runtime dirs**: `.set/copilot/*/` under the project.
 2. **The global runtime dir** if this project ever ran without `SET_COPILOT_DIR` (`/tmp/set-copilot`).
 3. **Hand-filed recordings.** A recording saved by a human is usually *not* named
-   `transcript*` — a real one was `2026-07-14-csakany-robi-copilot-raw-part1.jsonl`. The
+   `transcript*` — a real one was `2026-07-14-<meeting>-copilot-raw-part1.jsonl`. The
    directory scan only knows the capture's own naming convention, so a file like that needs an
    explicit glob: `--input 'recordings/*.jsonl'`.
 

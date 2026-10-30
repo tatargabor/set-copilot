@@ -3,41 +3,12 @@
 ## Purpose
 Mirror the copilot's substantive chat contributions onto a wall text box, so an audience watching
 the wall sees what the operator reads in chat — without eroding the chat-primary / wall-secondary
-separation. Mirroring is opt-in per session and off by default, is enforced structurally by a
-`Stop` hook rather than by prompt discipline, reuses the existing `text` render, and passes through
-the same server-side `ingest` redaction as any other event.
+separation. Mirroring is opt-in per session and off by default, is delivered structurally by the
+continuous transcript follower specified in `mirror-follower` rather than by prompt discipline (it
+replaced a `Stop` hook on 2026-07-29), reuses the existing `text` render, and passes through the
+same server-side `ingest` redaction as any other event.
 
 ## Requirements
-### Requirement: Mirroring is enforced by a Stop hook, not agent discipline
-
-Mirroring SHALL be enforced by a `Stop` hook that runs at the end of every turn and emits the
-copilot's last message to the wall — NOT by a prompt mandate asking the copilot to emit the
-mirror itself. A field meeting proved a prompt-only mandate falls behind (the chat carried far
-more than the wall), so the enforcement SHALL be structural.
-
-The hook SHALL be self-gating: it does nothing unless BOTH a wall is running for the session
-(`<runtimeDir>/wall.pid` exists) AND mirroring was opted in for it (`<runtimeDir>/wall-mirror.enabled`
-marker exists). It SHALL strip fenced code blocks, skip short filler (below a length floor), cap
-overly long messages, and de-duplicate consecutive identical emissions, so acknowledgements and
-repeats do not reach the wall. `set-copilot init` SHALL install the hook.
-
-#### Scenario: The hook mirrors the last message when opted in
-
-- **WHEN** a turn ends in a session that has a running wall and the opt-in marker
-- **THEN** the hook SHALL emit the turn's last assistant message to the wall as a mirror event,
-  after stripping code blocks and skipping it entirely if it is only short filler
-
-#### Scenario: No marker, no mirroring
-
-- **WHEN** a turn ends in a session without the `wall-mirror.enabled` marker (the default)
-- **THEN** the hook SHALL do nothing — the copilot does not emit the mirror itself either, so
-  nothing reaches the wall
-
-#### Scenario: The same message is not mirrored twice
-
-- **WHEN** the hook would emit a message identical to the one it last emitted for this session
-- **THEN** it SHALL skip it, so a re-run or overlap does not double the line on the wall
-
 ### Requirement: Opt-in chat mirroring, off by default
 
 The system SHALL mirror the copilot's substantive chat contributions to a wall text box
@@ -47,6 +18,16 @@ the wall unless an operator opts in.
 
 Enabling SHALL be available at session start (a start-time option in the spirit of the
 existing `wall` switch), so an operator opts in for the whole session up front.
+
+Enabling SHALL verify its own precondition: because the mirror is self-gating and therefore silent
+when its delivery mechanism is absent, the enable path SHALL confirm that the mechanism is actually
+in place before it records the opt-in, and SHALL fail loudly with the command that establishes it
+when it is not. An opt-in that can never fire SHALL NOT be recorded as success. This closes the
+measured field failure of 2026-07-28, where a marker-based opt-in in a project without the
+mechanism produced a wall that stayed empty with no error anywhere. With the follower as the
+mechanism, the precondition is that the **follower is running for this runtime dir** — a check that
+is strictly more direct than the previous one, which could only confirm that a hook was
+*registered*, never that it fired.
 
 #### Scenario: Disabled by default
 
@@ -58,6 +39,12 @@ existing `wall` switch), so an operator opts in for the whole session up front.
 - **WHEN** the meeting copilot is started with the chat-mirroring option enabled
 - **THEN** for the rest of that session the copilot's substantive chat lines SHALL also be
   emitted to the configured wall text box
+
+#### Scenario: Enabling without a working delivery mechanism fails loudly
+
+- **WHEN** the chat-mirroring option is used and the follower is not running for the session
+- **THEN** enabling SHALL report the missing follower and the command that starts it, and
+  SHALL NOT report mirroring as enabled
 
 ### Requirement: Mirrored content reuses an existing text box and the redaction funnel
 
@@ -86,6 +73,27 @@ counts as substantive, and into which box the mirror is routed, SHALL be governe
 skill mechanics and the project's copilot config — not hard-coded in the engine, consistent
 with "everything project-specific is config, not code."
 
+Filler classification SHALL be expressible as a **policy**, not only as a length threshold: a
+project SHALL be able to name the progress and acknowledgement phrases it never wants on the
+wall ("working on it", "waiting", "listening quietly", and their equivalents in the project's
+language), in addition to a minimum length. Defaults SHALL be provided for the project's shipped
+languages, in the same manner as the other language-dependent detection seams, and a
+user-supplied malformed entry SHALL be dropped with a warning rather than breaking mirroring.
+
+The length budget and the code-block handling SHALL likewise be config, with defaults that preserve
+a readable wall. The budget SHALL govern **how a message is divided into events, not how much of it
+survives**: a message longer than the budget SHALL be delivered as consecutive events on block
+boundaries (specified in `mirror-follower`), so length control never discards content. Measured on
+2026-07-29: a 2143-character nine-item report was reduced to 641 characters — one item of nine — by
+a cap doing the discarding.
+
+What the policy actually does SHALL be reported to the copilot from the **resolved** configuration,
+not restated by hand in the skill or the drawing contract. A restated claim rots: on 2026-07-29 the
+skill still taught that the mirror strips code blocks, months after the default became `keep`, so
+the copilot sent an ASCII table **unfenced** to survive a stripping that no longer happened — and
+the wall rendered it in a proportional font, unreadable, when a fenced block would have rendered as
+monospace.
+
 #### Scenario: Filler is not mirrored
 
 - **WHEN** the copilot has no substantive line to contribute (it would otherwise stay silent)
@@ -95,3 +103,34 @@ with "everything project-specific is config, not code."
 
 - **WHEN** an operator wants mirrored chat to land in a different existing text box
 - **THEN** that routing SHALL be expressible in config without an engine change
+
+#### Scenario: A configured filler phrase is suppressed even when long enough
+
+- **WHEN** a message consists of a progress or acknowledgement phrase the project listed as
+  filler, and it exceeds the minimum length
+- **THEN** it SHALL NOT be mirrored — the phrase policy SHALL apply independently of length
+
+#### Scenario: A malformed policy entry does not break mirroring
+
+- **WHEN** the configured filler policy contains an entry that cannot be used
+- **THEN** that entry SHALL be dropped with a warning and mirroring SHALL continue with the
+  remaining policy
+
+#### Scenario: A long message reaches the wall whole
+
+- **WHEN** a message exceeds the length budget
+- **THEN** it SHALL be delivered as consecutive events on block boundaries rather than truncated —
+  no partial table and no unterminated fence SHALL reach the wall, and no content SHALL be dropped
+  merely for being late in the message
+
+#### Scenario: The copilot is told the code-block behaviour that is actually configured
+
+- **WHEN** the copilot reads the mirror contract in a project that keeps code blocks
+- **THEN** the contract SHALL say they are kept, derived from the resolved policy, so the copilot
+  fences tabular and monospace content instead of working around a stripping that does not happen
+
+#### Scenario: A code block survives to the wall by default
+
+- **WHEN** a mirrored message contains a fenced code block and the project has not configured
+  code-block handling
+- **THEN** the block SHALL reach the wall and render as a code block

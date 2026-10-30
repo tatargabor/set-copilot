@@ -90,7 +90,7 @@ printed the file verbatim. Replaced with real lines.
       is the one task left open in this change.
       Covered as far as it can be without a live mic, and with real rather than synthetic data:
       the new renderer was run over **15 real archived dictations** from the operator's own
-      `set-promo` sessions (268 lines, 6 `cont`, 3 `midWord`). All three mid-word boundaries heal
+      `consumer-p` sessions (268 lines, 6 `cont`, 3 `midWord`). All three mid-word boundaries heal
       correctly — `"…incsenek speci" + "fikálva…"` → `specifikálva`, `"…ően a mi ökosz" +
       "isztémánkból…"` → `ökoszisztémánkból`. On the same files the naive space-join would have
       split those 3 words and the naive no-separator join would have glued 3 other word pairs; the

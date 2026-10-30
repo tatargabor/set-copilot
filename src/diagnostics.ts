@@ -91,6 +91,24 @@ export interface ConfigDiagnosisContext {
   envRuntimeDir?: string;
   /** Does this project actually use a wall? Only then is a missing `wall` section worth a line. */
   hasWall?: boolean;
+  /** Is the PROJECT config tracked by git? Only then do per-machine keys in it conflict between machines. */
+  projectConfigTracked?: boolean;
+}
+
+/**
+ * The per-machine keys (`MACHINE_LOCAL_KEYS`) a config document sets to a non-empty value,
+ * as `[path, value]` pairs. Shared by the diagnostic and by `doctor --fix`'s report.
+ */
+export function machineLocalKeysIn(data: Record<string, unknown> | undefined): [string, unknown][] {
+  const out: [string, unknown][] = [];
+  const declared = (v: unknown) => v !== undefined && v !== null && !(typeof v === "string" && v.trim() === "");
+  const audio = data?.audio;
+  if (audio && typeof audio === "object" && !Array.isArray(audio)) {
+    for (const [k, v] of Object.entries(audio)) if (declared(v)) out.push([`audio.${k}`, v]);
+  }
+  const speakers = (data?.transcript as { speakers?: Record<string, unknown> } | undefined)?.speakers;
+  if (speakers && typeof speakers === "object" && declared(speakers.mic)) out.push(["transcript.speakers.mic", speakers.mic]);
+  return out;
 }
 
 /** Count the entries a `knowledge.keywords` value DECLARES, before normalization. */
@@ -210,7 +228,34 @@ export function diagnoseConfig(files: RawConfigFile[], ctx: ConfigDiagnosisConte
       findings.push({
         level: "warn",
         message: `${projectFile.path}: ${pinned.map((k) => `audio.${k}="${projectAudio![k] as string}"`).join(", ")} — eszköznév a projekt configban, ami gépenként más`,
-        fix: `tedd át a gép saját configjába (${userConfigDir()}/${CONFIG_FILENAME}) és töröld innen — a projekt config felülírja a gépit, és egy másik gépen ez a név némán 0 bájtot ad`,
+        fix: `tedd át a gép saját configjába (${userConfigDir()}/${CONFIG_FILENAME}) és töröld innen (\`set-copilot doctor --fix\` megteszi) — ahol a gép nem ad meg eszközt, ott ez érvényes, és egy másik gépen ez a név némán 0 bájtot ad`,
+      });
+    }
+  }
+
+  // 6. Per-machine keys in a TRACKED project config (machine-local-audio-and-speaker). They
+  //    resolve from the machine first now, so on this machine they are mostly dead — but in a
+  //    committed file each machine's value conflicts in git with the next machine's, and on a
+  //    machine that declares none the committed value (another person's name, another
+  //    machine's sample rate) still applies. Device names are finding 5's; not repeated here.
+  if (files.length > 1 && ctx.projectConfigTracked) {
+    const projectFile = files[files.length - 1];
+    const keys = machineLocalKeysIn(projectFile.data)
+      .filter(([k]) => k !== "audio.micSource" && k !== "audio.monitorSource");
+    // Where the machine already declares a DIFFERENT value, the project's is ignored on this
+    // machine — say so, or the flipped precedence would be silent exactly where it bites.
+    const machine = new Map(files.length > 1 ? machineLocalKeysIn(files[0].data) : []);
+    const show = ([k, v]: [string, unknown]) => {
+      const mine = machine.get(k);
+      const ignored = mine !== undefined && JSON.stringify(mine) !== JSON.stringify(v)
+        ? ` (ezen a gépen hatástalan — a gép configja: ${JSON.stringify(mine)})` : "";
+      return `${k}=${JSON.stringify(v)}${ignored}`;
+    };
+    if (keys.length) {
+      findings.push({
+        level: "warn",
+        message: `${projectFile.path}: ${keys.map(show).join(", ")} — gépenkénti beállítás a git-követett projekt configban`,
+        fix: `set-copilot doctor --fix — átteszi a gép configjába (${userConfigDir()}/${CONFIG_FILENAME}), a gépen már megadott értéket nem írja felül`,
       });
     }
   }

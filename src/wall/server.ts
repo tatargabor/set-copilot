@@ -126,8 +126,13 @@ interface TailEntry {
 interface ZoneAccum {
   nodes: Map<string, GraphNode>;
   edges: GraphEdge[];
-  /** A contributing delta was scrubbed — drives the private-view redaction marker on replay. */
-  redacted: boolean;
+  /**
+   * The most severe redaction a contributing delta suffered on its way to the public
+   * zone — drives the private-view marker on replay. `withheld` outranks `redacted`: a
+   * replay must not tell the operator the audience saw a scrubbed copy of a delta the
+   * public wall never received.
+   */
+  marker?: "redacted" | "withheld";
   /** At least one delta fed this slice (an empty slice is not replayed). */
   present: boolean;
   /** The visual's human name (wall-presentation tabs), as it reached this zone. */
@@ -141,21 +146,21 @@ interface AccumulatedGraph {
 }
 
 function emptyAccum(): ZoneAccum {
-  return { nodes: new Map(), edges: [], redacted: false, present: false };
+  return { nodes: new Map(), edges: [], present: false };
 }
 
 /** Fold one delta into a zone slice. `reset` starts the slice fresh (topic boundary). */
-function applyDelta(acc: ZoneAccum, delta: GraphDelta, redacted: boolean): void {
+function applyDelta(acc: ZoneAccum, delta: GraphDelta, marker?: "redacted" | "withheld"): void {
   if (delta.op === "reset") {
     acc.nodes = new Map();
     acc.edges = [];
-    acc.redacted = false;
+    acc.marker = undefined;
     acc.present = false;
   }
   for (const n of delta.nodes ?? []) if (n && typeof n.id === "string") acc.nodes.set(n.id, n);
   for (const e of delta.edges ?? []) acc.edges.push(e);
   acc.present = true;
-  if (redacted) acc.redacted = true;
+  if (marker === "withheld" || (marker === "redacted" && acc.marker !== "withheld")) acc.marker = marker;
 }
 
 export interface WallServerOptions {
@@ -271,6 +276,14 @@ export class WallServer {
    * so an ordinary private graph is neither expirable nor promotable-by-accident.
    */
   private readonly staged = new Map<string, number>();
+  /**
+   * Visuals held off the public zone (public-redaction, node-image-redaction-withholds
+   * D1): `${category}\0${visual}` of every graph whose delta was withheld from public.
+   * A graph is drawn incrementally, so letting later clean deltas through would build a
+   * public graph around the hole — or add a new topic onto the old one after a withheld
+   * `reset`. Cleared only by a `reset` of that visual that reaches the public zone.
+   */
+  private readonly publicHold = new Set<string>();
 
   // ---- resumable delivery (wall-stream-recovery) ----
   //
@@ -550,15 +563,37 @@ export class WallServer {
       console.warn(`[set-copilot] wall: refusing promote — nothing staged for "${p.category}"/"${p.visual}"`);
       return;
     }
+    // Judge the promote at its OWN emission time (staged-expiry-survives-restart): the
+    // log carries when it was issued, so a rebuild repeats the live decision instead of
+    // re-running history at "now". A promote without a usable stamp cannot show when it
+    // happened and publishes nothing — live or replayed alike.
+    if (p.emittedAt === undefined) {
+      console.warn(`[set-copilot] wall: refusing promote — no emission time on "${p.visual}"`);
+      return;
+    }
+    // A stamp that cannot be honest is refused like a missing one: the log is ordered and
+    // the append path stamps at write, so a promote later than the processing clock — or
+    // earlier than the prediction it names — was not written by the append path. Publish
+    // nothing; the registry stays untouched.
+    if (p.emittedAt > Date.now()) {
+      console.warn(`[set-copilot] wall: refusing promote — "${p.visual}" carries a future emission time`);
+      return;
+    }
     // Expiry is decided by the CLOCK, not by whether the sweep timer has fired yet. The
     // gate used to be plain map presence, which left a window as wide as the sweep
     // interval (5 s by default) in which a prediction past its ttl could still be
     // published — the exact "an unspoken guess reaches the wall late and out of context"
     // failure the ttl exists to prevent. Found by the promotable-listing tests: the
     // listing filtered by the clock while the gate did not, so the two disagreed.
+    // The clock read here is the promote's own emission time against the staged delta's,
+    // so a rebuilt wall decides exactly as the live one did.
     const stagedAt = this.staged.get(key);
     const ttl = this.opts.stagingTtlMs ?? 120_000;
-    if (stagedAt === undefined || (ttl > 0 && Date.now() - stagedAt >= ttl)) {
+    if (stagedAt !== undefined && p.emittedAt < stagedAt) {
+      console.warn(`[set-copilot] wall: refusing promote — "${p.visual}" predates its staged prediction`);
+      return;
+    }
+    if (stagedAt === undefined || (ttl > 0 && p.emittedAt - stagedAt >= ttl)) {
       console.warn(`[set-copilot] wall: refusing promote — "${p.visual}" is not a live staged prediction (expired or never staged)`);
       if (stagedAt !== undefined) {
         // Past its ttl but not yet swept: retire it here so the sweep's private marker
@@ -731,6 +766,13 @@ export class WallServer {
       this.promote(p.promote);
       return;
     }
+    // The staging gate decides by the log's own emission time (staged-expiry-survives-
+    // restart), so read the stamp from the RAW line: normalizeEvent's field allowlist
+    // drops emittedAt, and the reassignment below would lose it. A line without a usable
+    // stamp cannot show when it happened — the registration below fails closed on it,
+    // replayed or live alike.
+    const rawStamp = (msg as { emittedAt?: unknown }).emittedAt;
+    const emittedAt = typeof rawStamp === "number" && Number.isFinite(rawStamp) ? rawStamp : undefined;
     const norm = normalizeEvent(msg, { projectRoot: this.opts.projectRoot });
     if (!norm.ok) {
       console.warn(`[set-copilot] wall: dropping invalid event (${norm.reason})`);
@@ -748,7 +790,7 @@ export class WallServer {
     // funnel, before any broadcast or accumulation (public-redaction: "Redaction runs
     // in the shared ingest funnel, before broadcast"). The JSONL tailer feeds this
     // same method, so a tailer-ingested event is redacted on identical terms.
-    const variants = splitForZones(msg, this.redactor);
+    const variants = this.holdBackWithheldVisual(msg, splitForZones(msg, this.redactor));
 
     this.accumulate(variants);
     this.broadcastEvent(variants);
@@ -758,7 +800,19 @@ export class WallServer {
     // model already keeps it off every public client, and it reaches the public wall only
     // through an explicit promote.
     if (msg.staged && msg.graph && msg.visual && reachesPrivate(msg.zone)) {
-      this.staged.set(this.stageKey(msg.category, msg.visual), Date.now());
+      const key = this.stageKey(msg.category, msg.visual);
+      if (emittedAt !== undefined) {
+        // The window runs from the delta's own emission time, so a wall rebuilt from the
+        // log re-registers at the ORIGINAL stamp instead of granting a fresh window
+        // (staged-expiry-survives-restart). Live this equals "now" to within the tail
+        // interval, exactly as before.
+        this.staged.set(key, emittedAt);
+      } else {
+        // No stamp, no promotability: the delta is still shown privately (it accumulated
+        // above), but a prediction that cannot be dated is never lifted — a restart can
+        // grant nothing, and neither can a line that bypassed the append path.
+        this.staged.delete(key);
+      }
     }
 
     // A graph reset (new visual) offers a candidate to the director; an immediate
@@ -773,6 +827,29 @@ export class WallServer {
         offerCandidate(canvas, msg.visual, now);
       }
     }
+  }
+
+  /**
+   * Apply the per-visual public hold to a graph event's variants, BEFORE accumulation
+   * and broadcast, so a live public client and a later public replay see the same thing.
+   * A withheld delta starts the hold; while it holds, every later delta of the visual is
+   * withheld from public too (the private copy marked `withheld`); a `reset` of the
+   * visual that itself reaches public ends it. Non-graph events pass through untouched.
+   */
+  private holdBackWithheldVisual(ev: DisplayEvent, variants: EventVariants): EventVariants {
+    if (!ev.graph || !ev.visual || !reachesPublic(ev.zone)) return variants;
+    const key = this.stageKey(ev.category, ev.visual);
+    if (variants.public === null) {
+      this.publicHold.add(key); // withheld by redaction: hold the visual from here on
+      return variants;
+    }
+    if (!this.publicHold.has(key)) return variants;
+    if (ev.graph.op === "reset") {
+      this.publicHold.delete(key); // a clean reset reaches public: a fresh start, no hole
+      return variants;
+    }
+    const priv = reachesPrivate(ev.zone) ? { ...variants.private, redaction: "withheld" as const } : variants.private;
+    return { private: priv, public: null, redacted: true };
   }
 
   /**
@@ -792,11 +869,11 @@ export class WallServer {
       let g = byVisual.get(priv.visual);
       if (!g) byVisual.set(priv.visual, (g = { private: emptyAccum(), public: emptyAccum() }));
       if (reachesPrivate(priv.zone)) {
-        applyDelta(g.private, priv.graph, variants.redacted);
+        applyDelta(g.private, priv.graph, priv.redaction);
         if (priv.title) g.private.title = priv.title;
       }
       if (pub?.graph && reachesPublic(pub.zone)) {
-        applyDelta(g.public, pub.graph, false);
+        applyDelta(g.public, pub.graph);
         if (pub.title) g.public.title = pub.title; // the scrubbed copy, never the original
       }
       return; // graphs replay through the accumulated-visual path, not `latest`
@@ -1043,7 +1120,7 @@ export class WallServer {
         graph: { op: "add", nodes: [...acc.nodes.values()], edges: acc.edges },
       };
       if (acc.title) ev.title = acc.title;
-      if (!isPub && acc.redacted) ev.redaction = "redacted"; // private-view marker
+      if (!isPub && acc.marker) ev.redaction = acc.marker; // private-view marker
       if (reaches(ev)) {
         client.res.write(`data: ${JSON.stringify(ev)}\n\n`);
         client.res.write(`data: ${JSON.stringify({ kind: "show", cat, id: shown, zone } satisfies ShowCommand)}\n\n`);
@@ -1265,10 +1342,13 @@ export class WallServer {
       }
     }
     const speaker = typeof o.speaker === "string" ? o.speaker : "";
+    // The recording's own label wins (speaker-label-recorded-at-capture): the serving
+    // machine's map answers a different microphone.
+    const recorded = typeof o.speakerName === "string" && o.speakerName.trim() ? o.speakerName.trim() : undefined;
     return {
       ts: typeof o.ts === "number" ? o.ts : 0,
       speaker,
-      label: tp.speakers[speaker] ?? speaker,
+      label: recorded ?? tp.speakers[speaker] ?? speaker,
       text,
       cont: o.cont === true,
       midWord: o.midWord === true,
