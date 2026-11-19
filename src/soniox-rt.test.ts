@@ -48,6 +48,41 @@ function client() {
   return { c, got };
 }
 
+describe("soniox refusals (2026-11-19, balance exhausted)", () => {
+  const refusal = (code: number, type: string) =>
+    JSON.stringify({ tokens: [], error_code: code, error_type: type, error_message: `${type} message` });
+
+  it("stops on a 402 instead of reconnecting, and names the cause", () => {
+    const { c } = client();
+    const fatal: Error[] = [];
+    c.on("fatal", (e: Error) => fatal.push(e));
+    const reconnecting: string[] = [];
+    c.on("reconnecting", (_a: number, r: string) => reconnecting.push(r));
+    c.connect();
+    sockets[0]!.open();
+    sockets[0]!.emit("message", refusal(402, "organization_balance_exhausted"));
+    sockets[0]!.emit("close", 1000, Buffer.from(""));
+    vi.advanceTimersByTime(10_000);
+    expect(sockets).toHaveLength(1);
+    expect(reconnecting).toEqual([]);
+    expect(fatal).toHaveLength(1);
+    expect(fatal[0]!.message).toContain("402 organization_balance_exhausted");
+  });
+
+  it("keeps reconnecting on a retryable error, with the code on the line", () => {
+    const { c } = client();
+    const reasons: string[] = [];
+    c.on("reconnecting", (_a: number, r: string) => reasons.push(r));
+    c.connect();
+    sockets[0]!.open();
+    sockets[0]!.emit("message", refusal(503, "service_unavailable"));
+    sockets[0]!.emit("close", 1000, Buffer.from(""));
+    vi.advanceTimersByTime(500);
+    expect(sockets).toHaveLength(2);
+    expect(reasons[0]).toContain("error=503 service_unavailable");
+  });
+});
+
 describe("soniox reconnect timeline", () => {
   it("puts a reconnected stream's tokens after the reconnect, not back at zero", () => {
     const { c, got } = client();

@@ -58,6 +58,17 @@ const RECONNECT_BUFFER_BYTES = 32_000 * 15; // ~15 seconds
  *   - socket half-open → ping/pong: a socket that misses a pong is dead, force-reconnect
  * A half-open socket reports OPEN forever, so the close handler alone cannot see it.
  */
+/**
+ * Soniox error codes no reconnect can fix: a malformed request (400), a bad or revoked key
+ * (401), an exhausted balance (402), a forbidden model or account (403). Measured
+ * 2026-11-19: a 402 looped as one reconnect per second, on both channels, until stopped
+ * by hand. Rate limits (429) and server errors (5xx) stay retryable.
+ */
+export function isFatalSonioxError(code: unknown): boolean {
+  const n = Number(code);
+  return n === 400 || n === 401 || n === 402 || n === 403;
+}
+
 export class SonioxRtClient extends EventEmitter {
   private ws: WebSocket | null = null;
   private apiKey: string;
@@ -87,6 +98,8 @@ export class SonioxRtClient extends EventEmitter {
   private connectStartedAt = 0;
   /** The last error the CURRENT socket raised, carried onto the reconnecting line. */
   private socketError: { code: string; message: string } | null = null;
+  /** A Soniox refusal that a reconnect cannot fix; set, the close handler stops instead. */
+  private fatal: { code: string; message: string } | null = null;
 
   constructor(opts: SonioxRtOptions, speaker: "mic" | "system") {
     super();
@@ -148,8 +161,16 @@ export class SonioxRtClient extends EventEmitter {
       if (ws !== this.ws) return; // a replaced socket's late tokens belong to no timeline
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.error) {
-          this.emit("error", new Error(`Soniox RT error: ${msg.error}`));
+        // Soniox reports a refusal as `error_code` / `error_type` / `error_message` and then
+        // closes the socket with a clean 1000. Checking only `msg.error` (as this did until
+        // 2026-11-19) missed it: an exhausted balance (402) showed up as an endless
+        // `socket closed (code=1000), error=none seen` reconnect loop and a silent transcript.
+        if (msg.error_code != null || msg.error_message || msg.error) {
+          const code = [msg.error_code, msg.error_type].filter((x) => x != null && x !== "").join(" ");
+          const message = String(msg.error_message || msg.error || "");
+          this.socketError = { code, message };
+          if (isFatalSonioxError(msg.error_code)) this.fatal = this.socketError;
+          this.emit("error", new Error(`Soniox RT error: ${[code, message].filter(Boolean).join(" — ")}`));
           return;
         }
         if (msg.tokens) {
@@ -197,6 +218,17 @@ export class SonioxRtClient extends EventEmitter {
       if (ws !== this.ws) return; // superseded: its replacement owns the reconnect
       this.stopHeartbeat();
       if (this.closing) {
+        this.emit("closed", code, reason.toString());
+        return;
+      }
+      // A refusal no retry can fix (no balance, bad key, bad config): reconnecting only
+      // hammers the API once a second and hides the cause. Stop and say why.
+      if (this.fatal) {
+        this.closing = true;
+        this.pending = [];
+        this.pendingBytes = 0;
+        const f = this.fatal;
+        this.emit("fatal", new Error(`Soniox refused the stream: ${[f.code, f.message].filter(Boolean).join(" — ")}`));
         this.emit("closed", code, reason.toString());
         return;
       }
