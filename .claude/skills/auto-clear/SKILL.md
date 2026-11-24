@@ -32,18 +32,30 @@ that is the one rule the machinery will not bend.
 
 Run and report; each answer changes what you do next:
 
+Hooks and the watcher come by one of two routes, and either one is enough:
+- **copy route:** `init` copied the files into `.claude/hooks/`, and the project's settings call them;
+- **package route:** no copy at all. A plugin's `hooks/hooks.json` calls
+  `set-claude-handoff hook … --from-plugin` (written by `set-claude-handoff plugin-files`), or the
+  project's settings call `set-claude-handoff hook …` without `--from-plugin`. The watcher runs as
+  `set-claude-handoff watch --dir <tree>`, which runs the package's own `templates/watch-auto-clear.sh`.
+
 ```bash
-test -f .claude/hooks/clear-gate.mjs && echo gate-installed || echo gate-missing
-grep -c "clear-gate\|handoff-reinject" .claude/settings.json   # hook wiring (0 = not wired)
-command -v set-claude-handoff                                  # the package binary (plugin wiring)
+command -v set-claude-handoff                                  # the package binary (package route)
+test -f .claude/hooks/clear-gate.mjs && echo gate-copy || echo no-gate-copy   # copy route only
+grep -cE 'handoff-reinject-clear|hook reinject' \
+  .claude/settings.json .claude/settings.local.json 2>/dev/null  # project wiring, either route
+grep -E '"enabledPlugins"' -A8 .claude/settings.json ~/.claude/settings.json 2>/dev/null | grep -i true
+grep -l 'hook reinject --from-plugin' \
+  ~/.claude/plugins/cache/*/*/*/hooks/hooks.json 2>/dev/null    # plugins that wire it (enabled ones count)
 ls -l .set/handoff/.watcher-alive 2>/dev/null                  # a watcher's heartbeat (≤ 10 min = live)
 ls .set/handoff/.no-autoclear 2>/dev/null                      # PROJECT switch: present = OFF
-pgrep -af "watch-auto-clear.sh" | grep "$(pwd -P)" || true     # is a watcher armed for THIS tree
+pgrep -af "watch-auto-clear.sh" | grep -- "--dir $(pwd -P)" || true   # a watcher for THIS tree, either route
 ```
 
-A plugin may wire the hooks instead of `.claude/settings.json`: its `hooks.json` lines call
-`set-claude-handoff hook …` (written by `set-claude-handoff plugin-files`). Then `gate-missing` and a 0
-count are expected, and the binary plus the heartbeat are the evidence; say which wiring you found.
+Read the answers by route. `no-gate-copy` with a 0 settings count is **not** "not wired" when an
+enabled plugin carries the `--from-plugin` line, or the settings call the package: then the binary,
+that line and a fresh heartbeat are the evidence. Say which route you found. "Not wired" is the
+verdict only when neither route shows the reload hook.
 
 Also read `.claude/handoff.profile.md` — an `## Auto-clear` section there (threshold,
 background-work policy, auto-continue prompt, persistence) is the project's tuning; without
@@ -69,7 +81,9 @@ it you use the defaults and SAY so.
      session then stops only on a line starting `NEED INPUT:` or `ALL DONE:`, and writes its own
      handoff at the limit. Off: `touch .set/handoff/.no-keepgoing` (or `.no-keepgoing-<session8>`).
      Its decisions are in `.set/handoff/keep-going.log`.
-3. **Watcher**: if none is running for this tree, start one under tmux (or the fleet owner):
+3. **Watcher**: if none is running for this tree, start one under tmux (or the fleet owner).
+   On the package route replace `bash $PWD/.claude/hooks/watch-auto-clear.sh` with
+   `set-claude-handoff watch`; the flags are the same:
    ```bash
    tmux new-session -d -s auto-clear-watcher \
      "bash $PWD/.claude/hooks/watch-auto-clear.sh --dir $PWD \
@@ -77,29 +91,32 @@ it you use the defaults and SAY so.
       --background-work-blocks <from profile, default false> \
       --auto-continue '<from profile, or: default>'"
    ```
-   No `--started-after` here: the filter then defaults to the tree's recorded wiring time
-   (`.set/handoff/.reload-wired-at` — ONE ISO-8601 UTC-with-Z line, never rewritten), so a
-   watcher restart does not exclude sessions that already had the hook. `init --auto-clear`
-   writes it only when a `.claude/settings*.json` already wires the reload hook, and its value
-   is that file's mtime — at or after the real wiring edit, so it errs late (safe). Where no
-   settings file wires it yet, init writes NOTHING and says so (`not yet …`): merge the hook
-   first, then re-run `init --auto-clear` (or write the stamp by hand:
-   `date -u +%Y-%m-%dT%H:%M:%SZ > .set/handoff/.reload-wired-at`). Pass `--started-after <iso>`
-   explicitly only when no stamp exists — and then every session started before that moment is
-   excluded, this arming session included.
+   No `--started-after` here: the start filter is OFF by default (since 2026-11-24). Measured on
+   Claude Code 2.1.331 (task 1.1 of started-after-self-exclusion): a running session picks up a
+   reload hook added to project settings mid-run, and its `/clear` reloads, so a session that
+   started before the wiring can still reload. On an older runtime that snapshots hooks at
+   start, opt in: `--started-after wired` uses the tree's recorded wiring time
+   (`.set/handoff/.reload-wired-at`, one ISO-8601 UTC-with-Z line, never rewritten), and
+   `--started-after <iso>` uses an explicit moment. In both cases every session started before
+   that moment is excluded, this arming session included. `init --auto-clear` writes the stamp
+   only when a `.claude/settings*.json` already wires the reload hook, with that file's mtime as
+   its value. Otherwise it writes nothing and says so (`not yet …`).
    For reboot survival, install a `systemd --user` unit running the same
    command with `Restart=on-failure` and say you did.
 4. **VERIFY** — an armed state without evidence is not armed:
    `tail -1 .set/handoff/auto-clear.log` must show `watcher started … auto-continue=…`;
    run the gate once by hand (`node .claude/hooks/clear-gate.mjs --session <any live id> …
-   --json`) and show the 5-gate verdict. Report: threshold, which writer paths exist
+   --json`; on the package route the gate is
+   `"$(dirname "$(readlink -f "$(command -v set-claude-handoff)")")/../templates/clear-gate.mjs"`)
+   and show the 5-gate verdict. Report: threshold, which writer paths exist
    (tmux / fleet owner), auto-continue on/off, both switch states.
-   Then say whether THIS session is covered: `test -f .set/handoff/.excluded-<session8>` (the id8
+   Only with a start filter on: say whether THIS session is covered: `test -f .set/handoff/.excluded-<session8>` (the id8
    from the statusline or the newest `~/.claude/sessions/<pid>.json`). Present ⇒ this session
    started before the filter: name it in this turn and give the resume command from the file's
    line 1 (`claude --resume <id>` — same session id, new process, current hooks), then let the
-   user resume it. The resume path is not measured yet — task 1.1 of started-after-self-exclusion;
-   verify the resumed session reloads after a `/clear` before relying on it. Do not expect a clear
+   user resume it. The resume path is measured (task 1.1 of started-after-self-exclusion, 2026-11-24,
+   Claude Code 2.1.331): the resumed process gets a new runtime record after the stamp, and its
+   `/clear` reloads the handoff. Do not expect a clear
    or a nudge to reach the excluded session: it is never typed into.
 
 ### macOS
@@ -144,7 +161,19 @@ this:
   size path, and FIRE names `trigger=warm-idle`. A marker older than the last work is NOT cleared for
   idle, because the work done since would be lost.
 - **Never with an Escape:** a pane showing a running turn logs `warm-idle waits`.
-- **Past 54 min:** nothing is typed, the size nudge included, and `warm-idle missed` is logged once.
+- **Past 54 min:** nothing is typed, the size nudge included, and `warm-idle missed` is logged once,
+  but only while the runtime's idle compaction is on. With `"idleCompaction": false` in any settings
+  scope (user < project < project-local < managed; the narrowest scope that sets it wins), nothing
+  compacts at ~54 min, so there is no upper bound: any idle time of `--idle-minutes` or more is due.
+
+- **After a warm-idle clear the session was waiting for you, not working:** the auto-continue then
+  opens with `WAITING FOR THE USER` and asks the fresh session only to say, on a `NEED INPUT:` line,
+  what it was waiting for. No work is started. `--idle-continue '<text>'` overrides that prompt.
+- **Cost and payback are logged:** every clear writes a `cost` line with the handoff turn's cache
+  writes, cache reads and output, in input-token equivalents (1-hour cache write 2×, 5-minute 1.25×,
+  read 0.1×, output 5×). Once the fresh session has made 20 requests, a `payback` line follows:
+  context before → after, saved versus cost, and the net. A clear that ran after the 1-hour cache
+  had gone cold shows up there as a large cache write.
 
 Off: `--idle-minutes 0` (or `--idle-floor 0`). A tree that sets `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`
 passes the same number as `--idle-floor`.

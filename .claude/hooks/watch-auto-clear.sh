@@ -14,12 +14,13 @@
 #     2026-11-23: one consumer log grew to 47 MB, one session's verdict 879× in 3000 lines);
 #   - --dry-run evaluates and logs without ever sending keys;
 #   - --started-after drops sessions started before a moment (e.g. before the clear-reload
-#     hook was wired into settings — clearing a session that cannot reload is the one really
-#     dangerous combination). Without the flag the moment defaults to the tree's recorded
-#     wiring time (.reload-wired-at, written once by init --auto-clear) — measured 2026-11-23,
-#     the old "--started-after now" default excluded the arming session itself: one tree's only
-#     working session was skipped 2858 times, all 6 of its compactions in the window
-#     unprotected. The first skip of a session is announced in .excluded-<session8> (reason +
+#     hook was wired into settings). OFF by default since 2026-11-24: measured on Claude Code
+#     2.1.331, a running session picks up a reload hook added to project settings mid-run and its
+#     /clear reloads (started-after-self-exclusion task 1.1), so "started before the wiring"
+#     no longer means "cannot reload", and the filter only excluded sessions that could. Opt in
+#     with an explicit moment, or `--started-after wired` for the tree's recorded wiring time
+#     (.reload-wired-at, written once by init --auto-clear), on an older runtime that snapshots
+#     hooks at start. The first skip of a session is announced in .excluded-<session8> (reason +
 #     the claude --resume way out) and logged once, never typed into;
 #   - a session with no writer path is skipped with a logged reason: no tmux pane hosts it
 #     AND no fleet agent (ownerd roster, matched by pid) holds it;
@@ -65,10 +66,10 @@
 #     [--auto-continue PROMPT] [--continue-delay SEC] [--autopilot]
 #     [--compact-on-background true|false] [--compact-threshold N] [--log-max-kb KB]
 #
-#   --started-after ISO   drop sessions whose process started before this moment. Default when
-#                 omitted: the tree's wiring stamp (.set/handoff/.reload-wired-at — the session's
-#                 own tree first, then --dir; written once by init --auto-clear). No stamp
-#                 anywhere = no filter. An explicit value always wins.
+#   --started-after ISO|wired   drop sessions whose process started before this moment. Omitted:
+#                 no filter (the default since 2026-11-24, see above). `wired` = the tree's wiring
+#                 stamp (.set/handoff/.reload-wired-at — the session's own tree first, then --dir);
+#                 no stamp anywhere = no filter for that session.
 #
 #   --background-work-blocks   default false since 2026-11-23: background tasks and subagents survive
 #                 /clear on 2.1.330 (docs/investigations/2026-11-23-background-survival-rerun.md).
@@ -113,10 +114,15 @@ set -u
 
 ARM_NUDGE="true"; NUDGE_RATIO=""; IDLE_MINUTES=""; IDLE_FLOOR=""
 WARM_MISSED=" "   # sessions whose missed warm window was logged (a string set: macOS bash 3.2 has no -A)
-DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="false"; AFTER=""; AFTER_GIVEN=0; WIRED_MS=""; GATE=""; DRY=0; LOG_MAX_KB=""
+DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="false"; AFTER=""; AFTER_GIVEN=0; STAMP_MODE=0; WIRED_MS=""; GATE=""; DRY=0; LOG_MAX_KB=""
 CONTINUE_PROMPT=""; CONTINUE_DELAY=20; AUTOPILOT=0; COMPACT_BG="false"; COMPACT_THRESHOLD=""
 COMPACT_CONTINUE="Continue after an automatic /compact (compact-on-background): your background agents are still running and will notify you. Re-read your own handoff file in full, then continue its CURRENT next step - a later UPDATE section supersedes earlier next steps, and a step marked done is never redone. Write a fresh handoff before the context fills again."
 DEFAULT_CONTINUE="Autopilot continue after an automatic /clear (auto-continue): read the reloaded handoff file in full - it is THIS session's own thread. Continue with its CURRENT next step - a later UPDATE section supersedes the original next-steps list, and a step marked done is never redone. A project-level goal or plan file is context, not a work queue: never take over a step or lane another session owns. Stop and wait only at a decision that the thread's recorded human direction does not already answer - ask it on its own line starting with NEED INPUT: so the keep-going hook lets the stop through."
+# After a WARM-IDLE clear the session was not working: its turn had ended and it was waiting for
+# the user. Continuing "the next step" there would start work nobody asked for, so the prompt opens
+# with a marker the user sees in the pane, and the session only says what it was waiting for.
+# (Owner request 2026-11-24.) --idle-continue overrides it; `default` selects this text.
+DEFAULT_IDLE_CONTINUE="WAITING FOR THE USER - this session was cleared after an idle wait (warm-idle): its last turn had ended and it was waiting for the user, not working. Read the reloaded handoff file in full - it is THIS session's own thread. Do NOT start or continue any work. Reply with one short message: on its own first line starting with NEED INPUT:, say what you were waiting for (the open question or decision from the handoff), then stop."
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2;;
@@ -124,9 +130,10 @@ while [ $# -gt 0 ]; do
     --threshold) THRESHOLD="$2"; shift 2;;
     --freshness) FRESHNESS="$2"; shift 2;;
     --background-work-blocks) BG="$2"; shift 2;;
-    --started-after) AFTER="$2"; AFTER_GIVEN=1; shift 2;;
+    --started-after) if [ "$2" = "wired" ]; then STAMP_MODE=1; else AFTER="$2"; AFTER_GIVEN=1; fi; shift 2;;
     --gate) GATE="$2"; shift 2;;
     --auto-continue) CONTINUE_PROMPT="$2"; shift 2;;
+    --idle-continue) IDLE_CONTINUE_PROMPT="$2"; shift 2;;
     --continue-delay) CONTINUE_DELAY="$2"; shift 2;;
     --autopilot) AUTOPILOT=1; shift;;
     --compact-on-background) COMPACT_BG="$2"; shift 2;;
@@ -147,6 +154,7 @@ GATE="${GATE:-$DIR/.claude/hooks/clear-gate.mjs}"
 PRESENCE="$(dirname "$GATE")/presence.mjs"
 [ -f "$PRESENCE" ] || { echo "presence check not found: $PRESENCE — re-run init --auto-clear (typing without it is how the 10:03:50Z collision happened)" >&2; exit 2; }
 TURN="$(dirname "$GATE")/turn-state.mjs"
+COST="$(dirname "$GATE")/handoff-cost.mjs"
 [ -f "$TURN" ] || { echo "turn-state check not found: $TURN — re-run init --auto-clear (typing without it is how the 21:24:39Z queue happened)" >&2; exit 2; }
 # Beside the gate: unchanged for the per-repo copy, and the package's own modules when the package runs
 # the watcher (`set-claude-handoff watch`, no per-repo copy).
@@ -155,6 +163,7 @@ LEDGER="$AP_DIR/ledger.mjs"
 DRIFT="$AP_DIR/drift-guard.mjs"
 # `--auto-continue default` selects the package's continue prompt without hand-writing one.
 [ "$CONTINUE_PROMPT" = "default" ] && CONTINUE_PROMPT="$DEFAULT_CONTINUE"
+{ [ -z "${IDLE_CONTINUE_PROMPT:-}" ] || [ "$IDLE_CONTINUE_PROMPT" = "default" ]; } && IDLE_CONTINUE_PROMPT="$DEFAULT_IDLE_CONTINUE"
 if [ "$AUTOPILOT" = "1" ]; then
   [ -f "$DRIFT" ] || { echo "--autopilot: drift guard not found: $DRIFT — run init --autopilot" >&2; exit 2; }
   [ -n "$CONTINUE_PROMPT" ] || CONTINUE_PROMPT="$DEFAULT_CONTINUE"
@@ -203,7 +212,8 @@ verdict_shape() { printf '%s' "$1" | sed -e 's/[0-9][0-9]*/N/g' -e 's/\(N\)\(\.N
 # The per-pass "no" line is written only when THIS session's shape changed, or NO_HEARTBEAT_S
 # passed since its last written line (a heartbeat, so a tail still shows the session is watched).
 # The memory is per watcher: two watchers on one tree each keep their own and each log their own
-# line. Every other line (FIRE, NUDGE, request, warm-idle, skip) is never deduped. rc 0 = write it.
+# line. The "no writer path" nudge/skip lines use the same rule under their own key. Every other
+# line (FIRE, NUDGE, request, warm-idle, other skips) is never deduped. rc 0 = write it.
 NO_HEARTBEAT_S=1800
 no_log_due() { # $1 = sid, $2 = shape
   local f now last seen
@@ -247,15 +257,44 @@ log_rotate() {
 }
 log_rotate
 
+# The fleet owner client is probed ONCE, loudly. Measured 2026-11-24: 36 of 41 watcher units ran
+# without set-core's lib on PYTHONPATH, so the per-pass lookup's import failed into `except: pass`,
+# and every fleet-hosted session read "no fleet agent holds it" for ever. Only the 5 units that had
+# PYTHONPATH could ever clear an agent. Absence is announced, never silent.
+FLEET_OK=1; FLEET_NOTE=""
+FLEET_ERR=$(python3 -c "import set_orch.fleet.owner_client" 2>&1 >/dev/null) || FLEET_OK=0
+# Not importable as is: find set-core the way its own tools do (set-fleet-ask, set-fleet-roster).
+# Its bin/ scripts sit on PATH as symlinks into the checkout, whose lib/ holds set_orch. Resolving
+# it here, not in the unit, keeps the watcher working on any machine and any install path. A
+# PYTHONPATH line written into a unit is one machine's layout.
+if [ "$FLEET_OK" != "1" ]; then
+  for fleet_bin in set-agent-owner set-fleet-ask set-fleet-roster; do
+    fleet_path=$(command -v "$fleet_bin" 2>/dev/null) || continue
+    fleet_root=$(node -e 'const fs=require("node:fs"),p=require("node:path");process.stdout.write(p.resolve(p.dirname(fs.realpathSync(process.argv[1])),".."))' "$fleet_path" 2>/dev/null) || continue
+    [ -d "$fleet_root/lib/set_orch" ] || continue
+    if PYTHONPATH="$fleet_root/lib:$fleet_root/modules/web${PYTHONPATH:+:$PYTHONPATH}" python3 -c "import set_orch.fleet.owner_client" >/dev/null 2>&1; then
+      export PYTHONPATH="$fleet_root/lib:$fleet_root/modules/web${PYTHONPATH:+:$PYTHONPATH}"
+      FLEET_OK=1
+      log "fleet: owner client found via $fleet_bin ($fleet_root/lib), added to PYTHONPATH for this watcher"
+      break
+    fi
+  done
+fi
+FLEET_ERR=$(printf '%s\n' "$FLEET_ERR" | tail -1)   # a pipe here would report tail's status, not python's
 if ! command -v tmux >/dev/null; then
-  if python3 -c "import set_orch.fleet.owner_client" >/dev/null 2>&1; then
+  if [ "$FLEET_OK" = "1" ]; then
     log "tmux not available — the writer path is the fleet owner only"
   else
     echo "tmux not available and the fleet owner client is not importable — no writer path" >&2
     exit 2
   fi
 fi
+if [ "$FLEET_OK" != "1" ]; then
+  FLEET_NOTE="; the fleet owner client is NOT importable, so a fleet agent cannot be found"
+  log "warn  fleet: the owner client is not importable by $(command -v python3) (${FLEET_ERR:-unknown error}) — sessions hosted by the fleet can never be nudged or cleared, only tmux panes can; put set-core's lib on PYTHONPATH in this watcher's environment"
+fi
 [ -f "$LEDGER" ] || log "note  autopilot ledger not installed — typed text is not provenance-logged"
+[ -f "$COST" ] || log "note  handoff-cost.mjs not installed next to the gate — no cost/payback lines; re-run init --auto-clear"
 
 # Every worktree of DIR is a legitimate session cwd — and each tree gates from ITS OWN
 # .set/handoff (9.1). The main tree is first; worktree enumeration failing (plain dir, no
@@ -280,12 +319,12 @@ ms_to_iso() { # $1 = epoch ms → ISO-8601 Z, or a spoken fallback
   node -e 'const t = Number(process.argv[1]); process.stdout.write(Number.isFinite(t) && t > 0 ? new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z") : "an unknown moment")' "${1:-}" 2>/dev/null
 }
 
-# The filter's default moment is the wiring, not the arming: without it, every watcher restart
-# measured its own start and re-excluded sessions that already had the hook (measured
+# `--started-after wired`: the moment is the wiring, not the arming. Without it, every watcher
+# restart measured its own start and re-excluded sessions that already had the hook (measured
 # 2026-11-23: one tree's only working session, skipped 2858 times, silent). A corrupt stamp
-# refuses to start, like a corrupt --started-after — a silently OFF filter is how a session that
-# cannot reload gets cleared.
-if [ "$AFTER_GIVEN" != "1" ]; then
+# refuses to start, like a corrupt --started-after — a silently OFF filter that was asked for is
+# how a session that cannot reload gets cleared.
+if [ "$STAMP_MODE" = "1" ]; then
   WIRED_MS=$(wired_ms_of "$DIR")
   if [ -z "$WIRED_MS" ] && [ -f "$DIR/.set/handoff/.reload-wired-at" ]; then
     echo "wiring stamp is not a parseable date: $DIR/.set/handoff/.reload-wired-at" >&2
@@ -340,13 +379,14 @@ excluded_record() { # $1 = tree, $2 = sid, $3 = startedAt ms, $4 = effective fil
 # branch, so the unremoved record would suppress every threshold warning for ever — the session
 # that did the right thing gets less advice than before it resumed. Removing it logs once: the
 # file is gone, so its absence is the once-guard.
-included_cleanup() { # $1 = tree, $2 = sid → rc 0 always
+included_cleanup() { # $1 = tree, $2 = sid, $3 = effective filter ms ("" = filter off) → rc 0 always
   local s8 f
   s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
   f="$1/.set/handoff/.excluded-$s8"
   [ -e "$f" ] || return 0
   rm -f "$f" 2>/dev/null
-  log "included  $2  started after the filter — .excluded-$s8 removed"
+  if [ -n "${3:-}" ]; then log "included  $2  started after the filter — .excluded-$s8 removed"
+  else log "included  $2  no start filter — .excluded-$s8 removed"; fi
 }
 
 # Provenance: logged BEFORE typing (specs: intent-ledger). $1 tree, $2 kind, $3 text, $4 session, $5 pid
@@ -499,16 +539,62 @@ disk_ok() { # $1 = tree; prints the short reason on failure
 
 # The continue prompt NAMES the thread's handoff: if the SessionStart injection is lost, the
 # successor still knows which file is its own (2026-09-25: it had to grep the log to find it).
-continue_text() { # $1 = tree, $2 = cleared sid
-  local s8 m nev
+continue_text() { # $1 = tree, $2 = cleared sid; reads $trigger of the FIRE that cleared it
+  local s8 m nev prompt="$CONTINUE_PROMPT"
+  [ "${trigger:-}" = "$WARM_IDLE_TRIGGER" ] && prompt="$IDLE_CONTINUE_PROMPT"
   s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
   m="$1/.set/handoff/.written-$s8"
   nev=$(awk '{print $2; exit}' "$m" 2>/dev/null)
   if [ -n "$nev" ] && [ -f "$1/.set/handoff/$nev" ]; then
-    printf '%s (Handoff file of the cleared session %s: %s)' "$CONTINUE_PROMPT" "$s8" "$1/.set/handoff/$nev"
+    printf '%s (Handoff file of the cleared session %s: %s)' "$prompt" "$s8" "$1/.set/handoff/$nev"
   else
-    printf '%s (No .written-%s marker names a handoff for the cleared session — find its thread in .set/handoff/auto-clear.log before acting.)' "$CONTINUE_PROMPT" "$s8"
+    printf '%s (No .written-%s marker names a handoff for the cleared session — find its thread in .set/handoff/auto-clear.log before acting.)' "$prompt" "$s8"
   fi
+}
+
+# What the handoff cost, and later what the clear saved (handoff-cost.mjs; owner request 2026-11-24:
+# "can we measure what a handoff costs — is it worth it?"). Logged once per clear, never typed.
+WARM_IDLE_TRIGGER="warm-idle"
+PAYBACK_REQUESTS=20
+PAYBACK_MAX_S=86400
+cost_log() { # $1 = tree, $2 = cleared sid, $3 = its transcript, $4 = pid
+  [ -f "$COST" ] || return 0
+  local s8 m mtime j eq
+  s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
+  m="$1/.set/handoff/.written-$s8"
+  [ -f "$m" ] && [ -f "$3" ] || { log "cost  $2  not measured: no marker or transcript to read"; return 0; }
+  mtime=$(node -e 'process.stdout.write(String(Math.round(require("node:fs").statSync(process.argv[1]).mtimeMs)))' "$m" 2>/dev/null)
+  j=$(node "$COST" cost "$3" "$mtime" 2>/dev/null)
+  eq=$(printf '%s' "$j" | jq -r '.equiv // empty' 2>/dev/null)
+  [ -n "$eq" ] || { log "cost  $2  not measured: $(printf '%s' "$j" | jq -r '.error // "no usage records"' 2>/dev/null)"; return 0; }
+  log "cost  $2  handoff turn: $(printf '%s' "$j" | jq -r '"\(.requests) requests, cache write \(.cacheWrite), cache read \(.cacheRead), output \(.output)"') ≈ $eq input-token equivalents; context before $(printf '%s' "$j" | jq -r '.contextBefore // "unknown"') (trigger=${trigger:-?})"
+  printf '%s %s %s %s\n' "$4" "$(printf '%s' "$j" | jq -r '.contextBefore // 0')" "$eq" "$(date +%s)" > "$1/.set/handoff/.cost-$s8" 2>/dev/null
+}
+payback_check() { # every pass: a recorded clear whose fresh session has made PAYBACK_REQUESTS requests
+  local t f s8 pid ctx eq at now fresh slug tr j
+  [ -f "$COST" ] || return 0
+  now=$(date +%s)
+  while IFS= read -r t; do
+    for f in "$t"/.set/handoff/.cost-*; do
+      [ -f "$f" ] || continue
+      s8=${f##*/.cost-}
+      read -r pid ctx eq at < "$f" 2>/dev/null
+      case "$at" in ''|*[!0-9]*) rm -f "$f"; continue;; esac
+      fresh=$(jq -r '.sessionId // empty' "$HOME/.claude/sessions/$pid.json" 2>/dev/null)
+      if [ -z "$fresh" ] || [ $((now - at)) -gt "$PAYBACK_MAX_S" ]; then
+        log "payback  $s8  not measured: the fresh session ended or did not reach $PAYBACK_REQUESTS requests within 24 h (handoff cost ≈ $eq)"
+        rm -f "$f"; continue
+      fi
+      slug=$(jq -r '.cwd // empty' "$HOME/.claude/sessions/$pid.json" 2>/dev/null | sed 's/\//-/g')
+      tr="$HOME/.claude/projects/$slug/$fresh.jsonl"
+      [ -f "$tr" ] || continue
+      j=$(node "$COST" payback "$tr" "$ctx" "$PAYBACK_REQUESTS" 2>/dev/null)
+      [ "$(printf '%s' "$j" | jq -r '.savedEquiv // empty' 2>/dev/null)" ] || continue
+      log "payback  $s8  after $PAYBACK_REQUESTS requests of $fresh: context $ctx → avg $(printf '%s' "$j" | jq -r '.avgContext'), saved ≈ $(printf '%s' "$j" | jq -r '.savedEquiv') vs handoff cost ≈ $eq → net $(( $(printf '%s' "$j" | jq -r '.savedEquiv') - eq )) input-token equivalents"
+      rm -f "$f"
+    done
+  done <<< "$WORKTREES"
+  return 0
 }
 
 # The fleet-owner writer (9.2): roster lookup by pid.
@@ -714,7 +800,13 @@ nudge_session() { # $1 = tree, $2 = sid, $3 = pid, $4 = verdict
     pres=$(presence_tmux "$pane"); turn=$(turn_tmux "$pane")
   else
     label="$(fleet_label_for_pid "$3")"
-    [ -n "$label" ] || { log "nudge $2  due at $tokens but no tmux pane hosts pid ${3:-?} and no fleet agent holds it — no writer path"; return 0; }
+    if [ -z "$label" ]; then
+      # Deduped like the "no" line (own key, same shape + heartbeat rule): measured 2026-11-24, an
+      # unreachable 400k+ seat logged this every pass, 14 lines in 15 minutes, with nothing new.
+      no_log_due "${2}nowriter" "$(verdict_shape "nudge $3")" \
+        && log "nudge $2  due at $tokens but no tmux pane hosts pid ${3:-?} and no fleet agent holds it — no writer path${FLEET_NOTE} (logged on change or every 30 min)"
+      return 0
+    fi
     pres=$(presence_owner "$label"); turn=$(turn_owner "$label")
   fi
   safe_to_type "$pres" || { log "nudge $2  due at $tokens but presence=$pres — a human may be typing; not this pass"; return 0; }
@@ -743,7 +835,7 @@ is_descendant() {
 }
 
 if [ "$AFTER_GIVEN" = "1" ]; then AFTER_LABEL="$AFTER"
-elif [ -n "$WIRED_MS" ]; then AFTER_LABEL="wired $(ms_to_iso "$WIRED_MS") (default)"
+elif [ "$STAMP_MODE" = "1" ]; then AFTER_LABEL="wired${WIRED_MS:+ $(ms_to_iso "$WIRED_MS")}"
 else AFTER_LABEL="any"; fi
 log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=$AFTER_LABEL dry-run=$DRY auto-continue=$([ -n "$CONTINUE_PROMPT" ] && echo on || echo off) autopilot=$([ "$AUTOPILOT" = "1" ] && echo on || echo off) compact-on-background=$([ "$COMPACT_BG" = "true" ] && echo "on (≥ ${COMPACT_THRESHOLD:-default})" || echo off) arm-nudge=$([ "$ARM_NUDGE" = "true" ] && echo "on (ratio ${NUDGE_RATIO:-default})" || echo off) warm-idle=$([ "${IDLE_MINUTES:-48}" = "0" ] || [ "${IDLE_FLOOR:-200000}" = "0" ] && echo off || echo "on (${IDLE_MINUTES:-48} min, floor ${IDLE_FLOOR:-200000})")"
 # Heartbeat, every pass, in every watched tree that has a handoff dir (the main tree always). keep-going
@@ -761,6 +853,7 @@ heartbeat() {
 while :; do
   log_rotate
   heartbeat
+  payback_check
   for rec in "$HOME"/.claude/sessions/*.json; do
     [ -f "$rec" ] || continue
     sid=$(jq -r '.sessionId // empty' "$rec" 2>/dev/null) || continue
@@ -768,15 +861,17 @@ while :; do
     tree=$(tree_of "$cwd")
     [ -n "$tree" ] || continue
     [ -n "$sid" ] || continue
-    # The start filter: an explicit --started-after wins; otherwise the session's own tree's
-    # wiring stamp (worktrees each have their own .set/handoff), falling back to --dir's. No
-    # stamp anywhere = no filter for this session.
-    EFF_AFTER="$WIRED_MS"
-    if [ "$AFTER_GIVEN" != "1" ]; then
+    # The start filter, OFF unless asked: an explicit --started-after moment, or with `wired` the
+    # session's own tree's wiring stamp (worktrees each have their own .set/handoff), falling back
+    # to --dir's. No stamp anywhere = no filter for this session. With the filter off, a stale
+    # .excluded record from an earlier filtered run is removed below (included_cleanup).
+    EFF_AFTER=""
+    if [ "$AFTER_GIVEN" = "1" ]; then
+      EFF_AFTER="$AFTER_MS"
+    elif [ "$STAMP_MODE" = "1" ]; then
+      EFF_AFTER="$WIRED_MS"
       wired_here=$(wired_ms_of "$tree")
       [ -n "$wired_here" ] && EFF_AFTER="$wired_here"
-    else
-      EFF_AFTER="$AFTER_MS"
     fi
     if [ -n "$EFF_AFTER" ]; then
       started=$(jq -r '.startedAt // 0' "$rec" 2>/dev/null)
@@ -785,7 +880,7 @@ while :; do
         continue
       fi
     fi
-    included_cleanup "$tree" "$sid"
+    included_cleanup "$tree" "$sid" "$EFF_AFTER"
     slug=$(printf '%s' "$cwd" | sed 's/\//-/g')
     transcript="$HOME/.claude/projects/$slug/$sid.jsonl"
     gate_args=(--session "$sid" --transcript "$transcript" --dir "$tree/.set/handoff" --json --background-work-blocks "$BG")
@@ -866,6 +961,7 @@ while :; do
           if [ "$CMD" = "/compact" ]; then
             compact_continue owner "$label" "$(compact_disarm "$tree" "$sid")"
           else
+            cost_log "$tree" "$sid" "$transcript" "$pane_pid"
             continue_owner "$label" "$pane_pid" "$sid" "$tree"
           fi
         else
@@ -874,7 +970,8 @@ while :; do
         fi
         continue
       fi
-      log "skip  $sid  ELIGIBLE but no tmux pane hosts pid ${pane_pid:-?} and no fleet agent holds it — no writer path"
+      no_log_due "${sid}nowriter" "$(verdict_shape "skip $pane_pid")" \
+        && log "skip  $sid  ELIGIBLE but no tmux pane hosts pid ${pane_pid:-?} and no fleet agent holds it — no writer path${FLEET_NOTE} (logged on change or every 30 min)"
       continue
     fi
     state=$(presence_tmux "$pane")
@@ -918,6 +1015,7 @@ while :; do
     if [ "$CMD" = "/compact" ]; then
       compact_continue tmux "$pane" "$(compact_disarm "$tree" "$sid")"
     else
+      cost_log "$tree" "$sid" "$transcript" "$pane_pid"
       continue_tmux "$pane" "$pane_pid" "$sid" "$tree"
     fi
   done
