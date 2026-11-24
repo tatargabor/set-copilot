@@ -48,6 +48,41 @@ function client() {
   return { c, got };
 }
 
+describe("soniox refusals (2026-11-19, balance exhausted)", () => {
+  const refusal = (code: number, type: string) =>
+    JSON.stringify({ tokens: [], error_code: code, error_type: type, error_message: `${type} message` });
+
+  it("stops on a 402 instead of reconnecting, and names the cause", () => {
+    const { c } = client();
+    const fatal: Error[] = [];
+    c.on("fatal", (e: Error) => fatal.push(e));
+    const reconnecting: string[] = [];
+    c.on("reconnecting", (_a: number, r: string) => reconnecting.push(r));
+    c.connect();
+    sockets[0]!.open();
+    sockets[0]!.emit("message", refusal(402, "organization_balance_exhausted"));
+    sockets[0]!.emit("close", 1000, Buffer.from(""));
+    vi.advanceTimersByTime(10_000);
+    expect(sockets).toHaveLength(1);
+    expect(reconnecting).toEqual([]);
+    expect(fatal).toHaveLength(1);
+    expect(fatal[0]!.message).toContain("402 organization_balance_exhausted");
+  });
+
+  it("keeps reconnecting on a retryable error, with the code on the line", () => {
+    const { c } = client();
+    const reasons: string[] = [];
+    c.on("reconnecting", (_a: number, r: string) => reasons.push(r));
+    c.connect();
+    sockets[0]!.open();
+    sockets[0]!.emit("message", refusal(503, "service_unavailable"));
+    sockets[0]!.emit("close", 1000, Buffer.from(""));
+    vi.advanceTimersByTime(500);
+    expect(sockets).toHaveLength(2);
+    expect(reasons[0]).toContain("error=503 service_unavailable");
+  });
+});
+
 describe("soniox reconnect timeline", () => {
   it("puts a reconnected stream's tokens after the reconnect, not back at zero", () => {
     const { c, got } = client();
@@ -88,6 +123,56 @@ describe("soniox reconnect timeline", () => {
     sockets[0]!.emit("close", 1006, Buffer.from("")); // late close of the old socket
     vi.advanceTimersByTime(10_000);
     expect(sockets).toHaveLength(2);
+  });
+
+  it("carries the error's code and the socket's age on the reconnecting line (SYS-1311)", () => {
+    const { c } = client();
+    const drops: string[] = [];
+    c.on("reconnecting", (_attempt: number, reason: string) => drops.push(reason));
+    c.connect();
+    sockets[0]!.open();
+    vi.advanceTimersByTime(8_321);
+    sockets[0]!.emit("error", Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+    sockets[0]!.emit("close", 1006, Buffer.from(""));
+    expect(drops[0]).toContain("error=ECONNRESET socket hang up");
+    expect(drops[0]).toContain("connected-for=8321ms");
+  });
+
+  it("names the storm's own signature: an error with neither code nor message (SYS-1311)", () => {
+    const { c } = client();
+    const drops: string[] = [];
+    c.on("reconnecting", (_attempt: number, reason: string) => drops.push(reason));
+    c.connect();
+    sockets[0]!.open();
+    sockets[0]!.emit("error", new Error(""));
+    sockets[0]!.emit("close", 1006, Buffer.from(""));
+    expect(drops[0]).toContain("error=<no code, no message>");
+  });
+
+  it("ages a socket that never opened by its handshake, and drops with no error at all", () => {
+    const { c } = client();
+    const drops: string[] = [];
+    c.on("reconnecting", (_attempt: number, reason: string) => drops.push(reason));
+    c.connect();
+    vi.advanceTimersByTime(400); // still CONNECTING when it dies
+    sockets[0]!.emit("close", 1006, Buffer.from(""));
+    expect(drops[0]).toContain("error=none seen");
+    expect(drops[0]).toContain("connected-for=400ms");
+  });
+
+  it("does not carry a superseded socket's error onto the replacement's drop", () => {
+    const { c } = client();
+    const drops: string[] = [];
+    c.on("reconnecting", (_attempt: number, reason: string) => drops.push(reason));
+    c.connect();
+    sockets[0]!.emit("error", Object.assign(new Error("stale"), { code: "ESTALE" }));
+    sockets[0]!.emit("close", 1006, Buffer.from(""));
+    vi.advanceTimersByTime(500);
+    sockets[1]!.open();
+    vi.advanceTimersByTime(2_000);
+    sockets[1]!.emit("close", 1006, Buffer.from("")); // no error of its own
+    expect(drops[0]).toContain("ESTALE");
+    expect(drops[1]).toContain("error=none seen");
   });
 
   it("never stamps a token later than now", () => {

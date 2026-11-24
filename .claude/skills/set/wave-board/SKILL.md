@@ -1,14 +1,20 @@
 ---
 name: set:wave-board
-description: Live execution status of a multi-step job that runs in waves — a cleanup across ten projects, a migration done one group at a time, any job with more steps than one session holds. Use it to create the job's board (a tracked job file plus a private claude.ai Artifact page), to report a finished step, and to push the board when the Stop hook asks for it. Trigger words - wave board, hullámtábla, waves, process roadmap, "where is the job", multi-project cleanup, rollout status, `set-wave-board`, a Stop-hook reminder that names a wave board.
+description: Live execution status of a multi-step job that runs in waves — a cleanup across ten projects, a migration done one group at a time, any job with more steps than one session holds. Use it to create the job's board (a tracked job file plus a private claude.ai Artifact page), to report a finished step, and to push the board to its Artifact when the user asks for it (the Stop hook is off by default). Trigger words - wave board, hullámtábla, waves, process roadmap, "where is the job", multi-project cleanup, rollout status, `set-wave-board`, a Stop-hook reminder that names a wave board.
 ---
 
 # Wave board — `set-wave-board`
 
 A **process roadmap**, not a product roadmap: which wave a job is in, which item is done, in
 progress or blocked, and what is left. One job is one tracked file,
-`docs/waveboard/<job>.json`, in the repository that runs the job, and one private Artifact page
-that shows it live.
+`docs/waveboard/<job>.json`, in the repository that runs the job. That file is the board's
+default target: a team portal can build its pages from it. An optional private Artifact page shows
+it live, but it is pushed **on request only** (see below).
+
+> **Pushes go on request (owner, 2026-11-12).** `set-hook-waveboard` is OFF unless a machine sets
+> `SET_WAVEBOARD_PUSH=on`. Without it, no sync runs on Stop and no push or review is asked for,
+> because each one costs a whole continuation. Keep the job file current with `set`, commit it,
+> and push to the Artifact only when the user asks.
 
 ## When to use it
 
@@ -19,8 +25,9 @@ A three-step task done in one sitting does not need one; a todo list is enough t
 ## How the status stays true — three layers
 
 1. **The job file** — waves, items, and for each item the **evidence** that proves it.
-2. **`sync`**, run by the `set-hook-waveboard` Stop hook on every stop, whether or not you
-   remembered — it derives status from evidence.
+2. **`sync`**: it derives status from evidence. Run it by hand (`set-wave-board sync`) when
+   you want the derived status. On a machine that opted in (`SET_WAVEBOARD_PUSH=on`), the
+   `set-hook-waveboard` Stop hook also runs it on every stop.
 3. **Your own report**, `set-wave-board set <job> <item> <status>` — the **fast lane**. Report
    every finished step with it, straight away. But evidence and the hook are the guarantee:
    where evidence speaks it overrides your report (a `done` with unchecked task boxes comes
@@ -45,7 +52,7 @@ project not registered on this machine is reported as `UNRESOLVED` and left alon
 ## Creating a board
 
 ```bash
-set-wave-board init <job> --title "<what the job is>"
+set-wave-board init <job> --title "<what the job is>" --assignees "<name>,<name>"
 set-wave-board add <job> --wave w0 --wave-title "<wave title>" --item <id> --title "<item>" \
     --evidence '{"type":"openspec-tasks","path":"openspec/changes/<x>/tasks.md"}'
 # … one add per item; waves appear in the order first used
@@ -59,7 +66,10 @@ Then publish the page with the **Artifact** tool:
   state as its first frame; `set-wave-board page` prints the bare template's path)
 - `capabilities: {"db": {}}`, `icon: "board"`, a one-sentence `description`
 - it is **private by default — keep it that way**. Never share it publicly; a job's items name
-  the projects and work they cover.
+  the projects and work they cover. Share it only with the team's editors (below).
+- **publish it from the owner account.** `init --artifact-url`, `link` and `share` say which
+  account that is and whether this session is signed in as it. An artifact cannot change owner
+  later, so a board published from the wrong account is the one thing worth stopping for.
 
 Record the URL, push once, and commit the job file:
 
@@ -68,8 +78,140 @@ set-wave-board link <job> <artifact-url>
 set-wave-board sync            # prints: PUSH <job> <url> <payload-path>
 ```
 
+`link` also prints a `SHARE` line: the board URL and every editor who must get **edit access**.
+Sharing is a person's act on claude.ai (open the board → Share → invite with edit access) — no
+tool can do it — so pass the line on to the user. `set-wave-board share` prints it again for
+every board in the repository, published or not.
+
 Do the push (below), then `git add docs/waveboard/<job>.json` and commit it with an explicit
 pathspec. The `.set/waveboard/` files are machine-local and ignored on their own.
+
+## Who can write a board — the editor list
+
+Every editor on the team must be able to push every board. The list of who that is lives on
+each machine, never in a repository, because it holds addresses:
+
+```json
+// ~/.config/set-core/waveboard-editors.json   (or the path in SET_WAVEBOARD_EDITORS)
+{"owner_account": "<the account that publishes boards>", "editors": ["<email>", "..."]}
+```
+
+Never copy an address from it into a job file, a note, a commit or a log.
+
+## The combined board — the team's boards on one shared page
+
+The team reads Artifacts, not the fleet or the CLI, so every board in the team's scope also
+lands on ONE shared page: a second Artifact whose database holds collection `boards`, one
+document per board (`<project>--<job>`). The editor list on each machine carries it:
+
+```
+"combined_url": "<the combined board's URL>",
+"projects": ["<registry name or fnmatch pattern>", "..."]
+```
+
+- **Scope is mandatory.** Only repositories whose registry name matches `projects` go there —
+  the page is shared, and a machine holds more projects than the team's. Without `projects`
+  nothing is pushed to it.
+- With both set, `sync` also prints `PUSH-COMBINED <job> <url> boards/<doc> <payload>`, and the
+  Stop hook's block carries that push next to the board's own. Same procedure, with
+  `collection=boards`, `doc_id=<doc>`, and `set-wave-board pushed <job> --combined --version N`.
+- Publishing it once: `set-wave-board combined-page --bare -o <file>`, publish the file with the
+  Artifact tool (`capabilities: {"db": {}}`) from the owner account, then
+  `set-wave-board combined-link <url>` on **every** machine of the team, and share the page with
+  the editors (the printed SHARE line).
+- `set-wave-board overview` follows the same scope; `--all` lists every registered project.
+
+## Dependencies between boards
+
+Boards stay one file per job, but an item may wait on another board's item — in this
+repository or in another registered project:
+
+```bash
+set-wave-board add <job> --wave w1 --item migrate --title "…" --depends-on tooling:build/cli
+set-wave-board depend <job> <item> [project:]job/item ...
+set-wave-board undepend <job> <item> [project:]job/item ...
+```
+
+- A dependency says when an item may **start**; evidence says when it is **done**. They are
+  different fields — do not express a prerequisite as evidence.
+- It is met only when the other item is `done`. `skipped`, a project not registered here, a
+  missing board or item: all unmet, with the reason shown.
+- While it is unmet, `set <job> <item> doing|done` is refused and names what it waits on.
+  `--force` exists for when the prerequisite is in place in fact; say why in `--note`.
+- `sync` puts `waiting_on` and `blocks` into the pushed payload, so **both** boards show the
+  link, and the waiting board is pushed again when the other item finishes.
+- `set-wave-board overview` lists every registered project's boards and every edge, met or not.
+  The fleet's wave list shows the same as "waits on N" / "blocks N".
+
+## Assignees — the same structure on every board
+
+Every board carries **who owns an item**, never which machine touched it (a hostname told its
+readers nothing, so items no longer record one):
+
+- `assignees` on the board: the names the page offers, set with `init --assignees` or
+  `set-wave-board assignees <job> "András,Dana"`. Use the names the people use for each other.
+- `assignee` on an item: the default owner, set with `add --assignee` or
+  `set-wave-board assign <job> <item> <name>` (`-` clears).
+- **On the page, a viewer picks the assignee** from a select on each row. The choice goes to the
+  `board/assignees` document (one field per item id), which your `board/state` push never
+  touches, and it shows over the job file's default.
+
+Before you report on a board or plan who does what, read the page's choices:
+`ArtifactData action: "get"`, `collection: "board"`, `doc_id: "assignees"`. To make a choice part of
+the tracked file, `assign` it and push as usual.
+
+## Decisions and blockers — what an item waits on
+
+A status says how far an item got; it does not say **who it waits on**. Record that as a wait,
+so the page can list every open question at the top, grouped by person:
+
+```bash
+set-wave-board wait <job> <item> --decision "Free hour or package price?" --who Dana --ref G3
+set-wave-board wait <job> <item> --blocker "Run DB migration 0019" --who Dana --ref G9
+set-wave-board unwait <job> <item> --ref G3        # answered / done; --all clears every wait
+```
+
+- **Decision** = a person has to choose. **Blocker** = work or access someone else has to provide.
+  Keep them apart: the successor handles them differently (a decision is asked, a blocker is chased).
+- `--who` names whom it waits on, usually one of the board's assignees; an outside person
+  (a client) is allowed and simply gets a group of their own.
+- `--ref` is a stable id. Use the same id as the question list it comes from (a README table, a
+  mail), so both point at one thing; the same ref replaces the earlier wait in place.
+- A wait does **not** change the status. Set `blocked` yourself when the item cannot move at all;
+  a decision often hangs on an item that is otherwise in progress, or already done (the variants
+  are delivered, the choice between them is not). The page shows waits on every item except
+  skipped ones.
+- `--options "Igen,Nem"` (or `"E,C,D"`) puts answer buttons on the page; every wait also takes a
+  free-text answer ("Other" / „Egyéb"). A blocker usually gets one button, e.g. `--options "Kész"`.
+- `answer <job> <item> --ref G3 "…"` records an answer you heard elsewhere (chat, mail).
+- When you report on a board, read its waits first: they are the "what is needed from whom" list.
+
+## What viewers set on the page — read it back, then act
+
+A viewer can change an item's **status** (the pill is a select), its **assignee**, and **answer a
+wait**. Each goes to the page's own document, never to `board/state`:
+
+| document | holds |
+|---|---|
+| `board/statuses` | `{item: {status, at}}` |
+| `board/answers` | `{"<item>\|<ref or #index>": {answer, at}}` |
+| `board/assignees` | `{item: name}` |
+
+Before you report on a board or plan from it, fetch the first two and import them:
+
+```bash
+# ArtifactData get, url = the board, collection "board", doc_id "statuses" and "answers",
+# out_dir = .set/waveboard/<job>.page   (writes .set/waveboard/<job>.page/board/<doc>.json)
+set-wave-board import <job> --dir .set/waveboard/<job>.page
+```
+
+`import` applies a status picked after the item last changed (a manual `set`; evidence still
+wins) and stores newer answers on their waits, printing `STATUS` and `ANSWER` lines. Then **act on
+each answer**: do what it decides, write it where the decision belongs (the README table, the
+brief), and `unwait` the wait. Push as usual. An answer you cannot act on (unclear, contradicts
+another) goes back to the person as a question, not into a guess.
+
+`set-wave-board lang <job> hu` switches the page's own labels to Hungarian.
 
 ## The push procedure
 
@@ -83,31 +225,61 @@ The page reads collection `board`, document `state`. Only you can write it — n
    the same url / `board` / `state`, then redo step 1 with the version it returned.
 3. `set-wave-board pushed <job> --version <the version the set returned>`.
 
-The Stop hook asks for this by itself when a payload differs from the last push: it blocks the
-stop once, with the exact call filled in. It stays quiet for 30 minutes per job after that
-(`SET_WAVEBOARD_NAG_SECONDS`), on its own continuation, in a linked worktree
-(`SET_WAVEBOARD_PUSH=worktree` lifts that), and entirely with `SET_WAVEBOARD_PUSH=off`.
+**Do it when the user asks.** On a machine that opted in (`SET_WAVEBOARD_PUSH=on`) the Stop hook
+asks for it too, but **in batches, not after every `set`** — every push
+costs a continuation, and a push per step burned the team's token budget (owner, 2026-11-08).
+`sync` classes each pending push, and the hook decides per job:
+
+| class | what changed since the last push | the hook |
+|---|---|---|
+| `first` | nothing recorded on this machine yet | asks at once |
+| `milestone` | a wave finished, or an item turned `blocked` | asks at once |
+| `progress` | statuses, titles or dependencies, no milestone | asks only when the last push is ≥ 1 hour old (`SET_WAVEBOARD_DEBOUNCE_SECONDS`) |
+| `notes` | only notes, `updated`/`by` stamps, evidence definitions | never asks; rides with the next push |
+
+A board and its combined-board document are asked for in **one** block — push both in that one
+go. After a block it stays quiet for 30 minutes per job (`SET_WAVEBOARD_NAG_SECONDS`), on its
+own continuation, in a linked worktree (`SET_WAVEBOARD_PUSH=worktree` lifts that), and entirely
+unless `SET_WAVEBOARD_PUSH` is `on` (the default is off).
+
+**On an opted-in machine only:** before a handoff and at the end of a session, run
+`set-wave-board pending` and push what it lists. The hook cannot tell the last Stop of a session
+from any other, so batched progress and notes would otherwise wait for the next session. On any
+other machine, commit the job file and stop there.
 
 ## Cross-machine notes
 
 - The job file travels through git; evidence is re-evaluated on each machine against that
   machine's clone and registry. Pull before trusting a board you did not just sync.
 - The **Artifact belongs to whoever published it**. Another person can push only if they were
-  given edit access; without it the write fails — say so in one line and carry on. The hook
-  backs off; `SET_WAVEBOARD_PUSH=off` silences it on that machine.
+  given edit access. If the write is refused for lack of access, **ask the owner account for
+  edit access** (claude.ai → Share), say so in one line and carry on. If the artifact belongs to
+  an account this machine cannot get access to, the machine should not opt in at all.
 - What was pushed is recorded **per machine** (`.set/waveboard/<job>.pushed.json`), so a second
   machine sees the job as pending until it pushes once. With `if_version` pinned, two machines
   cannot silently overwrite each other: a stale write is refused and redone after a `get`.
-- `by` on an item is the short hostname of the machine that changed it; set
-  `SET_WAVEBOARD_BY` for a different label.
+- Items carry no machine name. A legacy `by` field is dropped on the next write.
 
 ## Commands
 
 ```
-set-wave-board init <job> --title T [--artifact-url URL]
-set-wave-board add <job> --wave <id> [--wave-title T] --item <id> --title T [--evidence JSON]
-set-wave-board set <job> <item> <todo|doing|done|blocked|skipped> [--note N]
-set-wave-board link <job> <artifact-url>
+set-wave-board init <job> --title T [--artifact-url URL] [--assignees A,B]
+set-wave-board add <job> --wave <id> [--wave-title T] --item <id> --title T [--evidence JSON] [--assignee A]
+set-wave-board set <job> <item> <todo|doing|done|blocked|skipped> [--note N] [--force]
+set-wave-board assignees <job> A,B      # the names the page offers
+set-wave-board assign <job> <item> <name|->
+set-wave-board wait <job> <item> (--decision|--blocker) TEXT [--who NAME] [--ref ID] [--options A,B]
+set-wave-board unwait <job> <item> [--ref ID | --all]
+set-wave-board answer <job> <item> [--ref ID] TEXT
+set-wave-board import <job> --dir DIR   # what viewers set on the page
+set-wave-board lang <job> <en|hu>
+set-wave-board link <job> <artifact-url>   # prints the SHARE line
+set-wave-board share [<job>...]            # the SHARE line again, per board
+set-wave-board depend|undepend <job> <item> [project:]job/item ...
+set-wave-board overview [--all]            # the team's boards and edges (--all: every project)
+set-wave-board combined-page [-o FILE] [--bare]
+set-wave-board combined-link <url>
+set-wave-board pushed <job> --combined --version N
 set-wave-board sync [<job>...]          # PUSH lines on stdout
 set-wave-board pushed <job> --version N [--hash H]
 set-wave-board pending                  # PENDING lines, if_version=N when known

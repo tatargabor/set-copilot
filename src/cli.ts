@@ -28,6 +28,9 @@
  *   sources                  list audio input devices
  *   doctor [--mirror]        audio + env + setup health check (probes real signal);
  *                            --mirror checks only chat→wall readiness and exits non-zero
+ *   probe                    secret-free Soniox RT endpoint check: a DUMMY-key handshake
+ *                            against wss://stt-rt.soniox.com — the healthy reading is the
+ *                            in-band error_code 401; exit 1 on any other reading
  *   beep [--end]             play the OS chime (start: single, end: double)
  *   notify <title> [body]    OS desktop notification (--critical for alerts)
  *   path <name>              print a resolved runtime path (skills use this)
@@ -399,6 +402,13 @@ async function main(): Promise<void> {
     case "doctor": {
       const { runDoctor } = await import("./doctor.js");
       return runDoctor(loadConfig(), { mirrorOnly: args.includes("--mirror"), fix: args.includes("--fix") });
+    }
+    case "probe": {
+      // Reads no config and no secret by construction — that is the probe's whole point.
+      const { runSonioxProbe } = await import("./soniox-probe.js");
+      const result = await runSonioxProbe();
+      process.exitCode = result.ok ? 0 : 1;
+      return;
     }
     case "beep": return void beep(args.includes("--end") ? "end" : "start");
     case "notify": return void notify(args[0] ?? "", args[1] ?? "", args.includes("--critical"));
@@ -1546,6 +1556,10 @@ set-copilot — voice dictation + meeting copilot for Claude Code
                                    the machine's own config; prints every move
   set-copilot doctor --mirror      chat→wall mirror readiness only (no audio probe);
                                    exits non-zero when the Stop hook is not registered
+  set-copilot probe                secret-free Soniox RT endpoint check: a DUMMY-key
+                                   handshake against wss://stt-rt.soniox.com — healthy is
+                                   the in-band error_code 401; anything else (transport
+                                   error, bare close 1006, another code, silence) exits 1
   set-copilot beep [--end]         OS chime (start: single, --end: double)
   set-copilot notify <t> [b]       OS desktop notification (--critical)
   set-copilot path <name>          print a resolved runtime path

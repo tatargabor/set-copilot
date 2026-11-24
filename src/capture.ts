@@ -352,6 +352,16 @@ export async function runCapture(opts: CaptureOptions = {}): Promise<void> {
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
 
+  // A refusal Soniox will repeat on every retry (402 no balance, 401 bad key…) ends the
+  // capture with the cause on the log, instead of recording into a socket that never
+  // transcribes. The copilot's poll then sees `capture-dead` rather than silence.
+  const onFatal = (label: string) => (err: Error) => {
+    console.error(`[set-copilot] FATAL (${label}): ${err.message} — stopping the capture; a reconnect cannot fix this.`);
+    void shutdown();
+  };
+  micClient.on("fatal", onFatal("mic"));
+  if (sysClient) sysClient.on("fatal", onFatal("system"));
+
   if (opts.maxMinutes && opts.maxMinutes > 0) {
     setTimeout(() => {
       console.log(`[set-copilot] Max duration (${opts.maxMinutes} min) reached — stopping`);

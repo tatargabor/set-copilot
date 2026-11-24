@@ -37,7 +37,10 @@ const RECONNECT_BUFFER_BYTES = 32_000 * 15; // ~15 seconds
  *  - "transcript" (TranscriptEvent) — partial or final transcript tokens
  *  - "error" (Error) — connection or transcription errors
  *  - "connected" — WebSocket connected
- *  - "reconnecting" (attempt, reason) — the socket dropped; a new one is coming
+ *  - "reconnecting" (attempt, reason) — the socket dropped; a new one is coming. The
+ *    reason carries the drop diagnostics (SYS-1311): the error's code, if the socket
+ *    raised one, and how long the socket had been up when it died — so a storm of
+ *    message-less 1006s can still be attributed to a layer after the fact.
  *  - "reconnected" (downtimeMs, bufferedBytes) — speech resumed after a drop
  *  - "closed" — WebSocket closed for good (we are shutting down)
  *
@@ -55,6 +58,17 @@ const RECONNECT_BUFFER_BYTES = 32_000 * 15; // ~15 seconds
  *   - socket half-open → ping/pong: a socket that misses a pong is dead, force-reconnect
  * A half-open socket reports OPEN forever, so the close handler alone cannot see it.
  */
+/**
+ * Soniox error codes no reconnect can fix: a malformed request (400), a bad or revoked key
+ * (401), an exhausted balance (402), a forbidden model or account (403). Measured
+ * 2026-11-19: a 402 looped as one reconnect per second, on both channels, until stopped
+ * by hand. Rate limits (429) and server errors (5xx) stay retryable.
+ */
+export function isFatalSonioxError(code: unknown): boolean {
+  const n = Number(code);
+  return n === 400 || n === 401 || n === 402 || n === 403;
+}
+
 export class SonioxRtClient extends EventEmitter {
   private ws: WebSocket | null = null;
   private apiKey: string;
@@ -80,6 +94,12 @@ export class SonioxRtClient extends EventEmitter {
    * transcript that could not be put back in order from its timestamps.
    */
   private streamBaseMs = 0;
+  /** When the CURRENT socket attempt started — a drop's age includes its handshake. */
+  private connectStartedAt = 0;
+  /** The last error the CURRENT socket raised, carried onto the reconnecting line. */
+  private socketError: { code: string; message: string } | null = null;
+  /** A Soniox refusal that a reconnect cannot fix; set, the close handler stops instead. */
+  private fatal: { code: string; message: string } | null = null;
 
   constructor(opts: SonioxRtOptions, speaker: "mic" | "system") {
     super();
@@ -103,6 +123,10 @@ export class SonioxRtClient extends EventEmitter {
     }
     const ws = new WebSocket(url);
     this.ws = ws;
+    // Fresh attempt, fresh diagnostics: the previous socket's error must never be
+    // reported as the new one's cause.
+    this.connectStartedAt = Date.now();
+    this.socketError = null;
     if (this.startTime === 0) this.startTime = Date.now();
 
     ws.on("open", () => {
@@ -137,8 +161,16 @@ export class SonioxRtClient extends EventEmitter {
       if (ws !== this.ws) return; // a replaced socket's late tokens belong to no timeline
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.error) {
-          this.emit("error", new Error(`Soniox RT error: ${msg.error}`));
+        // Soniox reports a refusal as `error_code` / `error_type` / `error_message` and then
+        // closes the socket with a clean 1000. Checking only `msg.error` (as this did until
+        // 2026-11-19) missed it: an exhausted balance (402) showed up as an endless
+        // `socket closed (code=1000), error=none seen` reconnect loop and a silent transcript.
+        if (msg.error_code != null || msg.error_message || msg.error) {
+          const code = [msg.error_code, msg.error_type].filter((x) => x != null && x !== "").join(" ");
+          const message = String(msg.error_message || msg.error || "");
+          this.socketError = { code, message };
+          if (isFatalSonioxError(msg.error_code)) this.fatal = this.socketError;
+          this.emit("error", new Error(`Soniox RT error: ${[code, message].filter(Boolean).join(" — ")}`));
           return;
         }
         if (msg.tokens) {
@@ -172,6 +204,12 @@ export class SonioxRtClient extends EventEmitter {
     });
 
     ws.on("error", (err: Error) => {
+      // File the error on the socket it belongs to: a superseded socket's late error
+      // must not be reported as the live one's cause.
+      if (ws === this.ws) {
+        const e = err as NodeJS.ErrnoException;
+        this.socketError = { code: typeof e.code === "string" ? e.code : "", message: err.message };
+      }
       this.emit("error", err);
       // 'error' is always followed by 'close' — let the close handler do the reconnect.
     });
@@ -180,6 +218,17 @@ export class SonioxRtClient extends EventEmitter {
       if (ws !== this.ws) return; // superseded: its replacement owns the reconnect
       this.stopHeartbeat();
       if (this.closing) {
+        this.emit("closed", code, reason.toString());
+        return;
+      }
+      // A refusal no retry can fix (no balance, bad key, bad config): reconnecting only
+      // hammers the API once a second and hides the cause. Stop and say why.
+      if (this.fatal) {
+        this.closing = true;
+        this.pending = [];
+        this.pendingBytes = 0;
+        const f = this.fatal;
+        this.emit("fatal", new Error(`Soniox refused the stream: ${[f.code, f.message].filter(Boolean).join(" — ")}`));
         this.emit("closed", code, reason.toString());
         return;
       }
@@ -241,7 +290,17 @@ export class SonioxRtClient extends EventEmitter {
     if (this.downSince === 0) this.downSince = Date.now();
     const delay = RECONNECT_BACKOFF_MS[Math.min(this.attempt, RECONNECT_BACKOFF_MS.length - 1)]!;
     this.attempt++;
-    this.emit("reconnecting", this.attempt, reason);
+    // The two fields the 2026-10-28 1006 storm lacked (SYS-1311): every drop there
+    // printed a message-less `Mic error: ` + close 1006, and which layer killed the
+    // socket (TLS? edge?) was undecidable from the log. The error's code names the layer
+    // (ECONNRESET, ENOTFOUND, a ws protocol code…); the age separates a socket that
+    // never got through its handshake from one that was up and then died.
+    const err = this.socketError;
+    const errField = err
+      ? [err.code, err.message].filter(Boolean).join(" ") || "<no code, no message>"
+      : "none seen";
+    const age = this.connectStartedAt ? `${Date.now() - this.connectStartedAt}ms` : "?";
+    this.emit("reconnecting", this.attempt, `${reason}, error=${errField}, connected-for=${age}`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
