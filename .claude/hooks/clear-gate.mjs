@@ -95,7 +95,7 @@
  * Exit code is 0 whenever the evaluation itself ran (eligible or not); 2 on usage/setup error.
  * `--dry-run` is accepted for executor symmetry: the gate never triggers, dry or not.
  */
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from "node:fs"
+import { closeSync, existsSync, openSync, readFileSync, readSync, writeFileSync, readdirSync, statSync, unlinkSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
 
 const MARKER_PREFIX = ".written-"
@@ -195,10 +195,30 @@ export function readTokens({ tokensFile, tokensFiles, transcriptPath, freshnessS
   return { tokens: null, source: sawStale ? "statusline-stale" : "unknown", ageSec: null }
 }
 
+/**
+ * The transcript's last lines, read from its last `bytes` only (the first, partial line is dropped).
+ * Every reader here needs only the end of the file. Reading it whole was measured in a consumer's
+ * security review (2026-11-08): a 300 MB transcript cost 2 s and 1.5 GB per hook call, and a file over
+ * 512 MB cannot become one string at all, so the call crashed. Unreadable ⇒ null.
+ */
+export const TAIL_BYTES = 4 << 20
+export function tailLines(path, bytes = TAIL_BYTES) {
+  let fd
+  try {
+    const size = statSync(path).size
+    const start = Math.max(0, size - bytes)
+    fd = openSync(path, "r")
+    const buf = Buffer.alloc(size - start)
+    readSync(fd, buf, 0, buf.length, start)
+    const lines = buf.toString("utf8").trimEnd().split("\n")
+    return start > 0 ? lines.slice(1) : lines
+  } catch { return null } finally { if (fd != null) closeSync(fd) }
+}
+
 /** Last usage triple in the transcript — the formula context-guard has run in production. */
 export function tokensFromTranscript(path) {
   try {
-    const lines = readFileSync(path, "utf8").trimEnd().split("\n")
+    const lines = tailLines(path) ?? []
     for (let i = lines.length - 1; i >= 0; i--) {
       let e; try { e = JSON.parse(lines[i]) } catch { continue }
       const u = e?.message?.usage ?? e?.usage
@@ -240,7 +260,9 @@ export function transcriptIdle(path, window = 200) {
   if (!path || !existsSync(path)) return { idle: false, reason: "transcript missing" }
   let lines
   try {
-    lines = readFileSync(path, "utf8").trimEnd().split("\n").slice(-window)
+    lines = tailLines(path)
+    if (lines == null) throw new Error("unreadable")
+    lines = lines.slice(-window)
   } catch { return { idle: false, reason: "transcript unreadable" } }
   const pending = new Set()
   let last = null
@@ -273,7 +295,7 @@ export function transcriptIdle(path, window = 200) {
 export function lastAssistantAt(path, window = 400) {
   if (!path || !existsSync(path)) return null
   let lines
-  try { lines = readFileSync(path, "utf8").trimEnd().split("\n").slice(-window) } catch { return null }
+  lines = (tailLines(path) ?? []).slice(-window)
   for (let i = lines.length - 1; i >= 0; i--) {
     let e; try { e = JSON.parse(lines[i]) } catch { continue }
     if (e?.type !== "assistant") continue
